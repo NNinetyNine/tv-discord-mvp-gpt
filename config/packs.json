@@ -12,7 +12,7 @@
   {
     "id": "indices",
     "display": "Indices",
-    "assets": ["iwm", "spx", "ndq", "dji", "mdax", "hsi"]
+    "assets": ["iwm", "es1", "nq1", "ym1", "mdax", "dax", "hsi"]
   },
   {
     "id": "commodities",
@@ -22,6 +22,6 @@
   {
     "id": "etfs",
     "display": "ETFs",
-    "assets": ["xle", "ixn", "mchi", "ni225", "sxrt", "vxus", "xlc", "xlb", "xlre", "xlu", "xli", "xlp", "xly", "xlf", "ita", "shy", "igf", "gld", "vig"]
+    "assets": ["acwi", "cssx5eeur", "eem", "xle", "ixn", "mchi", "ni225", "sxrt", "vxus", "xlc", "xlb", "xlre", "xlu", "xli", "xlp", "xly", "xlf", "ita", "shy", "igf", "gld", "vig", "qqq", "urth", "voo", "vwra", "xlk", "xlv"]
   }
 ]
