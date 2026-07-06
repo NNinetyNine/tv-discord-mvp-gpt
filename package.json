@@ -1,0 +1,34 @@
+{
+  "name": "tv-discord-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MVP pipeline: TradingView chart -> validate -> Discord. Day 1: skeleton + seam.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "post-fixture": "tsx src/scripts/post-fixture.ts",
+    "login": "tsx src/scripts/login.ts",
+    "load-chart": "tsx src/scripts/load-chart.ts",
+    "inspect-buttons": "tsx src/scripts/inspect-buttons.ts",
+    "snapshot-spike": "tsx src/scripts/snapshot-spike.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "discord.js": "^14.26.4",
+    "dotenv": "^16.4.5",
+    "pino": "^9.5.0",
+    "playwright": "^1.61.1",
+    "sharp": "^0.35.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "pino-pretty": "^11.3.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.9"
+  }
+}

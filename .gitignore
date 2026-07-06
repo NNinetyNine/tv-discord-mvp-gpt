@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# secrets & env
+.env
+.env.*
+!.env.example
+
+# Playwright persistent session — contains TradingView login/session
+.pw-profile/
+
+# runtime state
+output/
+staging/
+session.json
+
+# logs
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# build artifacts
+dist/
+*.tsbuildinfo
