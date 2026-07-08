@@ -24,19 +24,19 @@ import type { Asset } from "../types.ts";
  * the runtime, so `npm run start` is untouched.
  *
  * Configuration:
- *   - session file and staging dir default to ./session.json and ./staging,
- *     resolved against process.cwd(). RUN THIS FROM THE PROJECT ROOT so repeated
- *     runs accumulate into the same session/staging (capture one asset, run
- *     again for the next, all within the active pack).
+ *   - session file, staging dir, and release archive default to ./session.json,
+ *     ./staging and ./archive, resolved against process.cwd(). RUN THIS FROM THE
+ *     PROJECT ROOT so repeated runs accumulate into the same session/staging
+ *     (capture one asset, run again for the next, all within the active pack).
  *   - IMAGE_OUTPUT_DIR (existing env var, read by the file-ingest source) still
  *     controls where branded custody copies land; this script does not touch it.
  *
- * This script only captures; it never publishes. It passes an inert
- * confirmPartial to satisfy buildApp's required field (never invoked here).
+ * This script only captures; it never publishes.
  */
 
 const SESSION_PATH = resolve(process.cwd(), "session.json");
 const STAGING_DIR = resolve(process.cwd(), "staging");
+const ARCHIVE_DIR = resolve(process.cwd(), "archive");
 
 const USAGE = [
   "Ingest one manually exported TradingView PNG into the active pack.",
@@ -81,62 +81,45 @@ function printProgress(app: App): void {
 /** Print the capture outcome. Returns the process exit code (0 only on staged). */
 function report(app: App, filePath: string, result: CaptureAttemptResult): number {
   if (result.ok) {
-    // outcome === "staged"
-    const replaced = result.replaced ? " (replaced an existing capture)" : "";
-    console.log(`✓ Staged ${label(app, result.asset.id)} into pack "${result.packId}"${replaced}`);
-    console.log(`  source:  ${filePath}`);
-    console.log(`  staged:  ${result.stagedPath}`);
+    console.log(`✓ Captured ${label(app, result.asset.id)} into pack "${result.packId}".`);
+    console.log(`  staged: ${result.stagedPath}`);
     printProgress(app);
     return 0;
   }
 
-  switch (result.outcome) {
-    case "unparseable_filename":
-      console.error(`✗ Could not parse a symbol from the filename: "${result.filename}"`);
-      console.error("  Expected a TradingView-style name like SYMBOL_YYYY-MM-DD_HH-MM-SS.png");
-      return 1;
-
+  switch (result.reason) {
     case "unknown_symbol":
-      // The reconciliation surface: show exactly the normalized symbol that
-      // failed to resolve, so a registry/normalizer mismatch is legible.
-      console.error(`✗ Symbol "${result.symbol}" is not in the registry.`);
-      console.error("  The exported filename's symbol did not match any registry `tradingView` token.");
-      console.error("  If this is a real, expected chart, the registry or normalizer may need reconciling.");
+      console.error(`✗ Unknown symbol "${result.symbol}" (from ${filePath}).`);
+      console.error(`  If this is a real asset, add it (or a tradingViewAlias) to config/registry.json.`);
       return 1;
-
-    case "no_active_pack":
-      console.error("✗ No active pack — the session is complete. Nothing to capture into.");
+    case "unparseable_filename":
+      console.error(`✗ Could not parse a symbol out of the filename: ${filePath}`);
+      console.error(`  Expected a TradingView export name like SYMBOL_YYYY-MM-DD_HH-mm-ss.png`);
       return 1;
-
-    case "not_in_active_pack":
-      console.error(
-        `✗ ${label(app, result.asset.id)} is not in the active pack "${result.activePackId}".`,
-      );
-      console.error("  Capture assets belonging to the active pack, or advance/publish to reach its pack.");
+    case "not_in_active_pack": {
+      const active = app.session.activePack();
+      const packName = active ? `${active.id} (${active.display})` : "—";
+      console.error(`✗ ${label(app, result.asset.id)} is not part of the ACTIVE pack ${packName}.`);
+      console.error(`  Capture the pending assets of the active pack first (see below), or advance packs.`);
       printProgress(app);
       return 1;
-
-    case "validation_failed": {
-      console.error(`✗ Validation failed for ${label(app, result.asset.id)}: ${result.reason}`);
-      const failed = Object.entries(result.checks)
-        .filter(([, passed]) => passed === false)
-        .map(([name]) => name);
-      if (failed.length > 0) console.error(`  failed checks: ${failed.join(", ")}`);
-      return 1;
     }
-
-    case "staging_failed":
-      console.error(`✗ Failed to stage ${label(app, result.asset.id)}: ${result.detail}`);
+    case "duplicate":
+      console.error(`✗ ${label(app, result.asset.id)} is already captured in the active pack.`);
+      console.error(`  (Re-ingesting the same asset replaces its staged image only if you re-run after a new export;`);
+      console.error(`   the session keeps one capture per asset.)`);
+      printProgress(app);
       return 1;
-
+    case "validation_failed":
+      console.error(`✗ Image failed validation: ${result.detail}`);
+      console.error(`  The file may be blank, truncated, or not a real chart export. Re-export and retry.`);
+      return 1;
     case "capture_failed":
-      console.error(`✗ Could not ingest the file: ${result.detail}`);
+      console.error(`✗ Could not read/copy the file: ${result.detail}`);
       return 1;
-
     default: {
-      // Exhaustiveness guard: if a new outcome is added, this surfaces it.
       const _exhaustive: never = result;
-      console.error(`✗ Unrecognized outcome: ${JSON.stringify(_exhaustive)}`);
+      console.error(`✗ Unrecognized result: ${JSON.stringify(_exhaustive)}`);
       return 1;
     }
   }
@@ -145,15 +128,15 @@ function report(app: App, filePath: string, result: CaptureAttemptResult): numbe
 async function main(): Promise<void> {
   const arg = process.argv[2];
 
-  // -h / --help: print usage and exit successfully (not an error).
-  if (arg === "-h" || arg === "--help") {
+  if (arg === "-h" || arg === "--help" || arg === undefined) {
     console.log(USAGE);
-    process.exitCode = 0;
+    process.exitCode = arg === undefined ? 2 : 0;
     return;
   }
 
-  if (!arg || arg.trim().length === 0) {
-    console.error("✗ No file path given.\n");
+  // Common operator mistake: pasting the usage line's literal "<path>".
+  if (arg.startsWith("<")) {
+    console.error(`✗ "${arg}" looks like a placeholder. Pass your real file path (no angle brackets).\n`);
     console.error(USAGE);
     process.exitCode = 2;
     return;
@@ -161,8 +144,7 @@ async function main(): Promise<void> {
 
   const filePath = resolve(process.cwd(), arg);
   if (!existsSync(filePath)) {
-    console.error(`✗ File not found: ${filePath}\n`);
-    console.error(USAGE);
+    console.error(`✗ File not found: ${filePath}`);
     process.exitCode = 2;
     return;
   }
@@ -170,9 +152,7 @@ async function main(): Promise<void> {
   const app = buildApp({
     sessionPath: SESSION_PATH,
     stagingDir: STAGING_DIR,
-    // This tool never publishes; confirmPartial is required by buildApp but
-    // is never invoked here.
-    confirmPartial: async () => false,
+    archiveDir: ARCHIVE_DIR,
   });
 
   const result = await app.captureFromFile(filePath);
@@ -180,7 +160,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((e: unknown) => {
-  // A genuine programming/configuration fault (e.g. config failed to load).
   console.error(`✗ Unexpected error: ${e instanceof Error ? e.message : String(e)}`);
   process.exitCode = 1;
 });

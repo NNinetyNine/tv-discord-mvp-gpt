@@ -30,15 +30,15 @@ import type { Asset } from "../types.ts";
  *   - packs not yet reached -> "not started" (captures only accumulate for the
  *     active pack, so a future pack has no progress to show — by design).
  *
- * Configuration: session file and staging dir default to ./session.json and
- * ./staging, resolved against process.cwd() — the same locations ingest-file.ts
- * and publish-pack.ts use. RUN FROM THE PROJECT ROOT so it reads the same
- * session the other tools wrote. It never publishes; the required confirmPartial
- * is inert and never invoked.
+ * Configuration: session file, staging dir, and release archive default to
+ * ./session.json, ./staging and ./archive, resolved against process.cwd() — the
+ * same locations ingest-file.ts and publish-pack.ts use. RUN FROM THE PROJECT
+ * ROOT so it reads the same session the other tools wrote. It never publishes.
  */
 
 const SESSION_PATH = resolve(process.cwd(), "session.json");
 const STAGING_DIR = resolve(process.cwd(), "staging");
+const ARCHIVE_DIR = resolve(process.cwd(), "archive");
 
 /** How many pending assets to name before summarizing the remainder. */
 const PENDING_PREVIEW = 10;
@@ -152,9 +152,7 @@ function main(): void {
   const app = buildApp({
     sessionPath: SESSION_PATH,
     stagingDir: STAGING_DIR,
-    // status never publishes; confirmPartial is required by buildApp but is
-    // never invoked here.
-    confirmPartial: async () => false,
+    archiveDir: ARCHIVE_DIR,
   });
 
   // The ordered pack list for the board. loadPacks() is the same list the

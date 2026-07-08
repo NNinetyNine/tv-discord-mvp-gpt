@@ -14,12 +14,14 @@ import { buildApp, type App } from "./app.ts";
 
 let sessionDir: string;
 let stagingDir: string;
+let archiveDir: string;
 let exportDir: string;
 let outDir: string;
 
 beforeEach(() => {
   sessionDir = mkdtempSync(join(tmpdir(), "visionx-app-session-"));
   stagingDir = mkdtempSync(join(tmpdir(), "visionx-app-staging-"));
+  archiveDir = mkdtempSync(join(tmpdir(), "visionx-app-archive-"));
   exportDir = mkdtempSync(join(tmpdir(), "visionx-app-export-"));
   outDir = mkdtempSync(join(tmpdir(), "visionx-app-out-"));
   // NOTE: IMAGE_OUTPUT_DIR is read by the file-ingest source (file-source.ts) for
@@ -29,6 +31,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(sessionDir, { recursive: true, force: true });
   rmSync(stagingDir, { recursive: true, force: true });
+  rmSync(archiveDir, { recursive: true, force: true });
   rmSync(exportDir, { recursive: true, force: true });
   rmSync(outDir, { recursive: true, force: true });
   delete process.env.IMAGE_OUTPUT_DIR;
@@ -39,11 +42,11 @@ afterEach(() => {
 // pass the intrinsic size check. Dimensions stay unenforced (null).
 const TEST_POLICY: ValidationPolicy = { minBytes: 1, blankStddevFloor: 4, expectedDimensions: null };
 
-function makeApp(confirmPartial: (plan: unknown) => Promise<boolean> = async () => true): App {
+function makeApp(): App {
   return buildApp({
     sessionPath: join(sessionDir, "session.json"),
     stagingDir,
-    confirmPartial,
+    archiveDir,
     validationPolicy: TEST_POLICY,
   });
 }
@@ -81,7 +84,7 @@ async function makeExportPng(filename: string): Promise<string> {
 }
 
 describe("buildApp — assembles against real config", () => {
-  it("exposes registry, resolver, session, staging, and the two services", () => {
+  it("exposes registry, resolver, session, staging, releases, and the two services", () => {
     const app = makeApp();
     expect(typeof app.captureFromFile).toBe("function");
     expect(typeof app.publishActivePack).toBe("function");
@@ -89,6 +92,10 @@ describe("buildApp — assembles against real config", () => {
     expect(app.registry.all().length).toBeGreaterThan(0); // real catalog loaded
     expect(app.session.activePack()).not.toBeNull(); // real packs.json -> active pack
     expect(app.session.activePack()!.assets.length).toBeGreaterThan(0);
+    // Release store assembled against the injected archive root: a fresh
+    // archive answers (empty), with no Discord involvement.
+    const activeId = app.session.activePack()!.id;
+    expect(app.releases.listReleases(activeId)).toEqual([]);
   });
 
   it("maps an active-pack asset to its full Asset via the catalog", () => {

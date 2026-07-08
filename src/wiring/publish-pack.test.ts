@@ -1,239 +1,353 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-import type { Pack } from "../packs/packs.ts";
-import type { PackSession } from "../packs/session.ts";
+import { publishActivePack, type PublishPackDeps, type PublisherSessionShape } from "./publish-pack.ts";
+import { createSession, type PackSession } from "../packs/session.ts";
 import { createPersistentSession } from "../packs/persistence.ts";
 import { createStagingStore, type StagingStore } from "./staging.ts";
-import { buildChannelResolver, type ChannelResolver } from "./channels.ts";
-import { publishActivePack, type PublishPackDeps } from "./publish-pack.ts";
+import { createReleaseStore, type ReleaseStore } from "../release/release-store.ts";
+import type { Pack } from "../packs/packs.ts";
 
-const packs: Pack[] = [
-  { id: "crypto", display: "Crypto", assets: ["btc", "eth", "sol"] },
+const PACKS: readonly Pack[] = [
+  { id: "crypto", display: "Crypto", assets: ["btc", "eth"] },
   { id: "stocks", display: "Stocks", assets: ["aapl"] },
 ];
 
-const okChannels: ChannelResolver = buildChannelResolver({
-  crypto: "chan-crypto",
-  stocks: "chan-stocks",
-});
-const blankCrypto: ChannelResolver = buildChannelResolver({ crypto: "", stocks: "chan-stocks" });
+let workDir: string;
+let staging: StagingStore;
+let releases: ReleaseStore;
+let session: PackSession;
 
+/** Deterministic increasing timestamps. */
+function makeNow(startMinute = 30): () => string {
+  let minute = startMinute;
+  return () => `2026-07-08T14:${String(minute++).padStart(2, "0")}:00.000Z`;
+}
+
+/** Fake publisher session factory: records posts, optional per-asset failure. */
 function fakePublisher(failOnPath?: string) {
-  const calls: Array<{ channelId: string; imagePath: string }> = [];
-  return {
-    calls,
-    publisher: {
-      async publish(channelId: string, imagePath: string): Promise<void> {
-        if (failOnPath && imagePath === failOnPath) throw new Error("discord boom");
-        calls.push({ channelId, imagePath });
-      },
+  const posts: Array<{ channelId: string; imagePath: string }> = [];
+  let closed = 0;
+  let msgCounter = 0;
+  const sessionShape: PublisherSessionShape = {
+    async post(channelId, imagePath) {
+      if (failOnPath !== undefined && imagePath.endsWith(failOnPath)) {
+        throw new Error("discord exploded");
+      }
+      posts.push({ channelId, imagePath });
+      return { messageId: `msg-${++msgCounter}` };
     },
+    async close() {
+      closed++;
+    },
+  };
+  return {
+    open: async () => sessionShape,
+    posts,
+    closedCount: () => closed,
   };
 }
 
-let stagingBase: string;
-let srcDir: string;
-let sessionPath: string;
-let staging: StagingStore;
+function stageAsset(packId: string, assetId: string): void {
+  const src = join(workDir, `src-${packId}-${assetId}.png`);
+  writeFileSync(src, `png:${assetId}`);
+  staging.stage(packId, assetId, src);
+}
+
+function captureAll(packId: "crypto" | "stocks"): void {
+  const pack = PACKS.find((p) => p.id === packId)!;
+  for (const assetId of pack.assets) {
+    const r = session.capture(assetId, `captured-${assetId}`);
+    if (!r.ok) throw new Error(`test setup: capture rejected for ${assetId}`);
+    stageAsset(packId, assetId);
+  }
+}
+
+function deps(overrides?: Partial<PublishPackDeps>): PublishPackDeps {
+  return {
+    session,
+    staging,
+    releases,
+    resolveChannel: () => "chan-1",
+    openPublisher: fakePublisher().open,
+    assetDisplay: (id) => id.toUpperCase(),
+    now: makeNow(),
+    ...overrides,
+  };
+}
+
+const GO = { supersedeInterrupted: false } as const;
 
 beforeEach(() => {
-  stagingBase = mkdtempSync(join(tmpdir(), "visionx-pub-staging-"));
-  srcDir = mkdtempSync(join(tmpdir(), "visionx-pub-src-"));
-  sessionPath = join(srcDir, "session.json");
-  staging = createStagingStore(stagingBase);
+  workDir = mkdtempSync(join(tmpdir(), "publish-pack-test-"));
+  mkdirSync(join(workDir, "staging"), { recursive: true });
+  staging = createStagingStore(join(workDir, "staging"));
+  releases = createReleaseStore(join(workDir, "archive"));
+  session = createSession(PACKS);
 });
+
 afterEach(() => {
-  rmSync(stagingBase, { recursive: true, force: true });
-  rmSync(srcDir, { recursive: true, force: true });
+  rmSync(workDir, { recursive: true, force: true });
 });
 
-function makeSource(name: string): string {
-  const p = join(srcDir, name);
-  writeFileSync(p, "PNGDATA", "utf8");
-  return p;
-}
-
-function captureAndStage(session: PackSession, packId: string, assetId: string, at: string): string {
-  const staged = staging.stage(packId, assetId, makeSource(`${assetId}.png`));
-  const r = session.capture(assetId, at);
-  if (!r.ok) throw new Error(`fixture capture failed: ${assetId}`);
-  return staged.path;
-}
-
-function deps(
-  session: PackSession,
-  publisher: PublishPackDeps["publisher"],
-  resolveChannel: ChannelResolver,
-  confirmPartial: PublishPackDeps["confirmPartial"],
-): PublishPackDeps {
-  return { session, staging, publisher, resolveChannel, confirmPartial };
-}
-
-const alwaysConfirm: PublishPackDeps["confirmPartial"] = async () => true;
-const neverConfirm: PublishPackDeps["confirmPartial"] = async () => false;
-
-describe("publishActivePack — full pack success", () => {
-  it("publishes all staged images in canonical order, advances, and clears", async () => {
-    const session = createPersistentSession({ packs, path: sessionPath });
-    const pBtc = captureAndStage(session, "crypto", "btc", "t1");
-    const pEth = captureAndStage(session, "crypto", "eth", "t2");
-    const pSol = captureAndStage(session, "crypto", "sol", "t3");
-
-    const fp = fakePublisher();
-    const r = await publishActivePack(deps(session, fp.publisher, okChannels, alwaysConfirm));
-
-    expect(r).toMatchObject({ ok: true, outcome: "published", packId: "crypto", advanced: true, wasPartial: false });
-    if (r.ok) {
-      expect(r.publishedAssetIds).toEqual(["btc", "eth", "sol"]);
-      expect(r.cleared).toBe(true);
-    }
-    expect(fp.calls.map((c) => c.imagePath)).toEqual([pBtc, pEth, pSol]);
-    expect(fp.calls.every((c) => c.channelId === "chan-crypto")).toBe(true);
-    expect(session.activePack()?.id).toBe("stocks");
-    expect(staging.list("crypto")).toEqual([]);
-  });
-});
-
-describe("publishActivePack — partial pack", () => {
-  it("publishes the captured subset after confirmation, then advances", async () => {
-    const session = createPersistentSession({ packs, path: sessionPath });
-    captureAndStage(session, "crypto", "btc", "t1");
-    captureAndStage(session, "crypto", "sol", "t3"); // eth missing -> partial
-
-    const fp = fakePublisher();
-    const r = await publishActivePack(deps(session, fp.publisher, okChannels, alwaysConfirm));
-
-    expect(r).toMatchObject({ ok: true, outcome: "published", wasPartial: true });
-    if (r.ok) expect(r.publishedAssetIds).toEqual(["btc", "sol"]);
-    expect(session.activePack()?.id).toBe("stocks");
-  });
-
-  it("declined partial publish does nothing (no publish, no advance, no clear)", async () => {
-    const session = createPersistentSession({ packs, path: sessionPath });
-    captureAndStage(session, "crypto", "btc", "t1"); // partial
-
-    const fp = fakePublisher();
-    const r = await publishActivePack(deps(session, fp.publisher, okChannels, neverConfirm));
-
-    expect(r).toMatchObject({ ok: false, outcome: "partial_declined", packId: "crypto" });
-    expect(fp.calls).toHaveLength(0);
-    expect(session.activePack()?.id).toBe("crypto");
-    expect(staging.has("crypto", "btc")).toBe(true);
-  });
-});
-
-describe("publishActivePack — fail-closed guards", () => {
+describe("gates", () => {
   it("no_active_pack when the session is complete", async () => {
-    const session = createPersistentSession({ packs: [{ id: "only", display: "Only", assets: ["btc"] }], path: sessionPath });
-    captureAndStage(session, "only", "btc", "t1");
-    await publishActivePack(deps(session, fakePublisher().publisher, buildChannelResolver({ only: "c" }), alwaysConfirm));
-    const r = await publishActivePack(deps(session, fakePublisher().publisher, buildChannelResolver({ only: "c" }), alwaysConfirm));
-    expect(r).toMatchObject({ ok: false, outcome: "no_active_pack" });
+    session.advance();
+    session.advance();
+    const r = await publishActivePack(deps(), GO);
+    expect(r).toEqual({ ok: false, outcome: "no_active_pack" });
   });
 
-  it("nothing_captured when no captures exist (publishPack is never called)", async () => {
-    const session = createPersistentSession({ packs, path: sessionPath });
+  it("pack_incomplete names the missing assets; nothing external happens", async () => {
+    session.capture("btc", "t");
+    stageAsset("crypto", "btc");
     const fp = fakePublisher();
-    const r = await publishActivePack(deps(session, fp.publisher, okChannels, alwaysConfirm));
-    expect(r).toMatchObject({ ok: false, outcome: "nothing_captured", packId: "crypto" });
-    expect(fp.calls).toHaveLength(0);
+    const r = await publishActivePack(deps({ openPublisher: fp.open }), GO);
+    expect(r).toEqual({
+      ok: false,
+      outcome: "pack_incomplete",
+      packId: "crypto",
+      captured: 1,
+      total: 2,
+      missingAssetIds: ["eth"],
+    });
+    expect(fp.posts).toHaveLength(0);
+    expect(releases.listReleases("crypto")).toHaveLength(0);
   });
 
-  it("missing_staged_images when a captured asset has no staged file", async () => {
-    const session = createPersistentSession({ packs, path: sessionPath });
-    session.capture("btc", "t1"); // captured in session but NOT staged
-    const fp = fakePublisher();
-    const r = await publishActivePack(deps(session, fp.publisher, okChannels, alwaysConfirm));
-
-    expect(r.ok).toBe(false);
-    if (!r.ok && r.outcome === "missing_staged_images") expect(r.missing).toEqual(["btc"]);
-    else throw new Error("expected missing_staged_images");
-    expect(fp.calls).toHaveLength(0);
-    expect(session.activePack()?.id).toBe("crypto");
+  it("missing_staged_images fails closed before any posting", async () => {
+    captureAll("crypto");
+    staging.unstage("crypto", "eth");
+    const r = await publishActivePack(deps(), GO);
+    expect(r).toMatchObject({ ok: false, outcome: "missing_staged_images", missing: ["eth"] });
+    expect(releases.listReleases("crypto")).toHaveLength(0);
   });
 
-  it("channel_unresolved (and does NOT prompt for confirmation) when channel id is blank", async () => {
-    const session = createPersistentSession({ packs, path: sessionPath });
-    captureAndStage(session, "crypto", "btc", "t1"); // partial, would normally prompt
-
-    let prompted = false;
-    const confirm: PublishPackDeps["confirmPartial"] = async () => {
-      prompted = true;
-      return true;
-    };
-    const fp = fakePublisher();
-    const r = await publishActivePack(deps(session, fp.publisher, blankCrypto, confirm));
-
+  it("channel_unresolved fails closed", async () => {
+    captureAll("crypto");
+    const r = await publishActivePack(deps({ resolveChannel: () => null }), GO);
     expect(r).toMatchObject({ ok: false, outcome: "channel_unresolved", packId: "crypto" });
-    expect(prompted).toBe(false); // resolved BEFORE confirmation
-    expect(fp.calls).toHaveLength(0);
-    expect(session.activePack()?.id).toBe("crypto");
+    expect(releases.listReleases("crypto")).toHaveLength(0);
+  });
+
+  it("publisher_connect_failed leaves ZERO durable state (open precedes create)", async () => {
+    captureAll("crypto");
+    const r = await publishActivePack(
+      deps({ openPublisher: async () => { throw new Error("bad token"); } }),
+      GO,
+    );
+    expect(r).toMatchObject({ ok: false, outcome: "publisher_connect_failed", detail: "bad token" });
+    expect(releases.listReleases("crypto")).toHaveLength(0);
+    expect(session.activePack()?.id).toBe("crypto"); // no advance
   });
 });
 
-describe("publishActivePack — publish failure", () => {
-  it("stops on first failure, does not advance, does not clear, reports progress", async () => {
-    const session = createPersistentSession({ packs, path: sessionPath });
-    const pBtc = captureAndStage(session, "crypto", "btc", "t1");
-    const pEth = captureAndStage(session, "crypto", "eth", "t2");
-    captureAndStage(session, "crypto", "sol", "t3");
-
-    const fp = fakePublisher(pEth); // fail when publishing eth
-    const r = await publishActivePack(deps(session, fp.publisher, okChannels, alwaysConfirm));
-
-    expect(r.ok).toBe(false);
-    if (!r.ok && r.outcome === "publish_failed") {
-      expect(r.publishedAssetIds).toEqual(["btc"]);
-      expect(r.failedAssetId).toBe("eth");
-      expect(r.advanced).toBe(false);
-      expect(r.cleared).toBe(false);
-    } else throw new Error("expected publish_failed");
-
-    expect(fp.calls.map((c) => c.imagePath)).toEqual([pBtc]); // sol never attempted
-    expect(session.activePack()?.id).toBe("crypto");
-    expect(staging.has("crypto", "btc")).toBe(true);
-    expect(staging.has("crypto", "sol")).toBe(true);
-  });
-});
-
-describe("publishActivePack — latest staged image per asset", () => {
-  it("publishes the most recent staged image after a recapture", async () => {
-    const session = createPersistentSession({ packs: [{ id: "crypto", display: "Crypto", assets: ["btc"] }], path: sessionPath });
-    captureAndStage(session, "crypto", "btc", "t1");
-    const newer = staging.stage("crypto", "btc", makeSource("btc-v2.png"));
-    session.capture("btc", "t2");
-
+describe("published (happy path)", () => {
+  it("archives first, posts in canonical order, records identities, advances, clears", async () => {
+    captureAll("crypto");
     const fp = fakePublisher();
-    const r = await publishActivePack(deps(session, fp.publisher, buildChannelResolver({ crypto: "c" }), alwaysConfirm));
+    const r = await publishActivePack(deps({ openPublisher: fp.open }), GO);
 
     expect(r.ok).toBe(true);
-    expect(fp.calls).toHaveLength(1);
-    expect(fp.calls[0]?.imagePath).toBe(newer.path);
+    if (!r.ok) return;
+    expect(r.publishedAssetIds).toEqual(["btc", "eth"]);
+    expect(r.advanced).toBe(true);
+    expect(r.cleared).toBe(true);
+
+    // Release record: published, message identities recorded, custody held.
+    const rec = releases.getRelease("crypto", r.releaseId);
+    expect(rec.state).toBe("published");
+    expect(rec.packDisplay).toBe("Crypto");
+    expect(rec.channelId).toBe("chan-1");
+    expect(rec.analyses.map((a) => [a.assetId, a.display, a.discordMessageId])).toEqual([
+      ["btc", "BTC", "msg-1"],
+      ["eth", "ETH", "msg-2"],
+    ]);
+    // Posted from staged paths, in canonical order.
+    expect(fp.posts.map((p) => p.channelId)).toEqual(["chan-1", "chan-1"]);
+    expect(fp.closedCount()).toBe(1);
+
+    // Workspace reset: session advanced to stocks; staging cleared.
+    expect(session.activePack()?.id).toBe("stocks");
+    expect(staging.list("crypto")).toEqual([]);
+    // Archive custody survives the staging clear.
+    expect(existsSync(join(workDir, "archive", "crypto", r.releaseId, "btc.png"))).toBe(true);
   });
 });
 
-describe("publishActivePack — publish/advance/persistence/restore regression", () => {
-  it("a fresh session restored from the same file resumes on the next pack", async () => {
-    const sessionA = createPersistentSession({ packs, path: sessionPath });
-    captureAndStage(sessionA, "crypto", "btc", "t1");
-    captureAndStage(sessionA, "crypto", "eth", "t2");
-    captureAndStage(sessionA, "crypto", "sol", "t3");
+describe("publish_interrupted (honest failure)", () => {
+  it("mid-post failure: earned identities recorded, no advance, staging kept, publisher closed", async () => {
+    captureAll("crypto");
+    const fp = fakePublisher("eth.png"); // btc posts, eth fails
+    const r = await publishActivePack(deps({ openPublisher: fp.open }), GO);
 
-    const r = await publishActivePack(deps(sessionA, fakePublisher().publisher, okChannels, alwaysConfirm));
-    expect(r).toMatchObject({ ok: true, outcome: "published", packId: "crypto", advanced: true });
-    expect(sessionA.activePack()?.id).toBe("stocks");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.outcome).toBe("publish_interrupted");
+    if (r.outcome !== "publish_interrupted") return;
+    expect(r.failedAssetId).toBe("eth");
+    expect(r.publishedAssetIds).toEqual(["btc"]);
 
-    const sessionB = createPersistentSession({ packs, path: sessionPath });
-    expect(sessionB.completedPackIds()).toEqual(["crypto"]);
-    expect(sessionB.activePack()?.id).toBe("stocks");
-    expect(sessionB.capturedAssets()).toEqual([]);
+    // The release tells the exact truth: btc posted (identity held), eth not.
+    const rec = releases.getRelease("crypto", r.releaseId);
+    expect(rec.state).toBe("publishing");
+    expect(rec.analyses.find((a) => a.assetId === "btc")?.discordMessageId).toBe("msg-1");
+    expect(rec.analyses.find((a) => a.assetId === "eth")?.discordMessageId).toBeNull();
 
-    captureAndStage(sessionB, "stocks", "aapl", "t4");
-    const r2 = await publishActivePack(deps(sessionB, fakePublisher().publisher, okChannels, alwaysConfirm));
-    expect(r2).toMatchObject({ ok: true, outcome: "published", packId: "stocks", advanced: true });
-    expect(sessionB.isComplete()).toBe(true);
+    // Workspace untouched; socket closed.
+    expect(session.activePack()?.id).toBe("crypto");
+    expect(staging.has("crypto", "btc")).toBe(true);
+    expect(fp.closedCount()).toBe(1);
+  });
+});
+
+describe("interrupted release: refuse / supersede", () => {
+  async function interruptCrypto(): Promise<string> {
+    captureAll("crypto");
+    const fp = fakePublisher("eth.png");
+    const r = await publishActivePack(deps({ openPublisher: fp.open, now: makeNow(10) }), GO);
+    if (r.ok || r.outcome !== "publish_interrupted") throw new Error("setup failed");
+    return r.releaseId;
+  }
+
+  it("a fresh publish is REFUSED while an unsuperseded interrupted release exists", async () => {
+    const stuckId = await interruptCrypto();
+    const fp = fakePublisher();
+    const r = await publishActivePack(deps({ openPublisher: fp.open, now: makeNow(20) }), GO);
+    expect(r).toMatchObject({
+      ok: false,
+      outcome: "interrupted_release_exists",
+      packId: "crypto",
+      releaseId: stuckId,
+      postedCount: 1,
+      totalCount: 2,
+    });
+    expect(fp.posts).toHaveLength(0);
+  });
+
+  it("supersedeInterrupted publishes fresh; the old record is untouched and retired from 'live'", async () => {
+    const stuckId = await interruptCrypto();
+    const fp = fakePublisher();
+    const r = await publishActivePack(
+      deps({ openPublisher: fp.open, now: makeNow(20) }),
+      { supersedeInterrupted: true },
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    // Old record: unchanged on disk, still publishing, identity preserved.
+    const old = releases.getRelease("crypto", stuckId);
+    expect(old.state).toBe("publishing");
+    expect(old.analyses.find((a) => a.assetId === "btc")?.discordMessageId).toBe("msg-1");
+
+    // New record published; supersession is DERIVED: the old interrupted record
+    // no longer blocks anything.
+    expect(releases.getRelease("crypto", r.releaseId).state).toBe("published");
+    expect(session.activePack()?.id).toBe("stocks");
+  });
+
+  it("an interrupted release superseded by a later published one no longer blocks (derived, not stored)", async () => {
+    // Build the archive state directly: old publishing record, newer published.
+    const src1 = join(workDir, "a.png");
+    writeFileSync(src1, "png");
+    releases.createRelease({
+      packId: "crypto", packDisplay: "Crypto", channelId: "c",
+      startedAt: "2026-07-08T09:00:00.000Z",
+      analyses: [{ assetId: "btc", display: "BTC", capturedAt: "t", sourceImagePath: src1 }],
+    });
+    const newer = releases.createRelease({
+      packId: "crypto", packDisplay: "Crypto", channelId: "c",
+      startedAt: "2026-07-08T11:00:00.000Z",
+      analyses: [{ assetId: "btc", display: "BTC", capturedAt: "t", sourceImagePath: src1 }],
+    });
+    releases.recordPost("crypto", newer.releaseId, "btc", "m", "t");
+    releases.markPublished("crypto", newer.releaseId, "t");
+
+    captureAll("crypto");
+    const fp = fakePublisher();
+    const r = await publishActivePack(deps({ openPublisher: fp.open, now: makeNow(50) }), GO);
+    expect(r.ok).toBe(true); // no refusal: the 09:00 interruption was superseded
+  });
+});
+
+describe("pack_incomplete — zero captured (nothing_captured is subsumed)", () => {
+  it("a pack with nothing captured is simply incomplete", async () => {
+    const r = await publishActivePack(deps(), GO);
+    expect(r).toMatchObject({
+      ok: false,
+      outcome: "pack_incomplete",
+      packId: "crypto",
+      captured: 0,
+      total: 2,
+      missingAssetIds: ["btc", "eth"],
+    });
+  });
+});
+
+describe("revision honesty — newest staged image publishes and is archived", () => {
+  it("after a re-stage, the release custody copy holds the newer bytes", async () => {
+    captureAll("crypto");
+    const newerSrc = join(workDir, "btc-v2.png");
+    writeFileSync(newerSrc, "png:btc-v2");
+    staging.stage("crypto", "btc", newerSrc);
+    session.capture("btc", "recaptured");
+
+    const r = await publishActivePack(deps(), GO);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(
+      readFileSync(join(workDir, "archive", "crypto", r.releaseId, "btc.png"), "utf8"),
+    ).toBe("png:btc-v2");
+  });
+});
+
+describe("publish + persistent session restore (regression)", () => {
+  it("a session restored from the same file resumes on the next pack after publish", async () => {
+    const sessionPath = join(workDir, "session.json");
+    const persistent = createPersistentSession({ packs: PACKS, path: sessionPath });
+    for (const assetId of ["btc", "eth"]) {
+      const src = join(workDir, `p-${assetId}.png`);
+      writeFileSync(src, `png:${assetId}`);
+      staging.stage("crypto", assetId, src);
+      const c = persistent.capture(assetId, `t-${assetId}`);
+      if (!c.ok) throw new Error(`test setup: capture rejected for ${assetId}`);
+    }
+
+    const r = await publishActivePack(deps({ session: persistent }), GO);
+    expect(r.ok).toBe(true);
+
+    const restored = createPersistentSession({ packs: PACKS, path: sessionPath });
+    expect(restored.completedPackIds()).toEqual(["crypto"]);
+    expect(restored.activePack()?.id).toBe("stocks");
+    expect(restored.capturedAssets()).toEqual([]);
+  });
+});
+
+describe("record-write failure after a successful post (truth-telling branch)", () => {
+  it("reports the live-but-unrecorded message in detail; release stays publishing", async () => {
+    captureAll("crypto");
+    const wrapped: ReleaseStore = {
+      ...releases,
+      recordPost(packId, releaseId, assetId, msgId, at) {
+        if (assetId === "eth") throw new Error("disk full");
+        return releases.recordPost(packId, releaseId, assetId, msgId, at);
+      },
+    };
+
+    const r = await publishActivePack(deps({ releases: wrapped }), GO);
+    expect(r.ok).toBe(false);
+    if (r.ok || r.outcome !== "publish_interrupted") throw new Error("expected publish_interrupted");
+    expect(r.failedAssetId).toBe("eth");
+    expect(r.publishedAssetIds).toEqual(["btc"]);
+    expect(r.detail).toContain("posted to Discord");
+    expect(r.detail).toContain("msg-2"); // the live message's identity is confessed
+
+    const rec = releases.getRelease("crypto", r.releaseId);
+    expect(rec.state).toBe("publishing");
+    expect(rec.analyses.find((a) => a.assetId === "btc")?.discordMessageId).toBe("msg-1");
+    // eth is LIVE on Discord but honestly unrecorded — the gap the detail names.
+    expect(rec.analyses.find((a) => a.assetId === "eth")?.discordMessageId).toBeNull();
   });
 });

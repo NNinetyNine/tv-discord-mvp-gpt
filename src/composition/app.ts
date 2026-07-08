@@ -5,7 +5,8 @@ import { createPersistentSession } from "../packs/persistence.ts";
 import type { PackSession } from "../packs/session.ts";
 import { createStagingStore, type StagingStore } from "../wiring/staging.ts";
 import { loadChannelResolver } from "../wiring/channels.ts";
-import { publish } from "../publish/discord.ts";
+import { createReleaseStore, type ReleaseStore } from "../release/release-store.ts";
+import { openPublisherSession } from "../publish/discord-session.ts";
 import {
   validateImage,
   DEFAULT_VALIDATION_POLICY,
@@ -16,48 +17,26 @@ import type { CaptureAttemptResult } from "../wiring/capture-once.ts";
 import {
   publishActivePack,
   type PublishPackResult,
-  type PublishPackDeps,
+  type PublishOptions,
 } from "../wiring/publish-pack.ts";
 
 /**
- * Composition root for the new (Snapshot-centric) architecture.
- *
- * buildApp() assembles the REAL application dependencies from config and wires
- * the existing application/orchestration services over them. It does not define
- * new use cases — it composes captureFromFile (application layer) and
- * publishActivePack (wiring) over a SHARED session and staging store, which are
- * the app instance's state (constructed once, not per operation).
+ * Composition root. Assembles the real dependencies from config and wires the
+ * application/orchestration services over a SHARED session, staging store, and
+ * release store (the app instance's state, constructed once).
  *
  * Pure assembly: buildApp() does NOT decide filesystem locations or read
- * process.env. sessionPath and stagingDir are required inputs — each caller
- * (tests, a CLI, a GUI, the eventual runtime index.ts) supplies the locations.
- * This keeps the composition root reusable across all of them without embedding
- * any environment or path policy of its own.
+ * process.env. sessionPath, stagingDir, and archiveDir are required inputs.
+ * (The Discord publisher session reads DISCORD_BOT_TOKEN itself at open time —
+ * the adapter owns its credential, same as the legacy publisher.)
  *
- * This is additive and infrastructure-only: nothing here is imported by the
- * current runtime (index.ts / pipeline.ts), so npm run start is untouched. It is
- * the wiring the runtime will eventually inherit, exercised today through tests.
+ * Publishing produces a RELEASE: archived custody + record before any post,
+ * per-analysis Discord message identities recorded as earned, complete-only
+ * (partial publishing does not exist — the old confirmPartial seam is gone),
+ * workspace reset only on a fully published release. The real clock is bound
+ * here (now) — orchestration receives time as an injected fact.
  *
- * The registry (asset catalog) is exposed because the future UI/operator
- * workflow needs catalog access — to list active-pack assets with display names,
- * show pending/captured assets, tell the operator which TradingView symbol to
- * export, and map pack asset IDs to full Asset records. The resolver stays
- * forward-only (resolve(filename) only); catalog queries belong to the Registry,
- * which owns them (all(), lookupByTradingView). No reverse lookup or query logic
- * is added here.
- *
- * Seam notes:
- *  - validation: the canonical validateImage is bound with a complete, explicit
- *    ValidationPolicy (defaults to DEFAULT_VALIDATION_POLICY, whose
- *    expectedDimensions is null until export dimensions are reconciled) — a real
- *    validator with an explicit, named policy, not a stub.
- *  - publisher: discord.publish is (imagePath, channelId); publishActivePack
- *    wants (channelId, imagePath). The one-line inline bind below translates the
- *    argument order. discord.ts is unchanged.
- *  - confirmPartial: injected by the caller (no partial-publish policy is baked
- *    into the composition root).
- *  - channels: real channels.json IDs are currently empty, so publishActivePack
- *    fails closed with channel_unresolved until real IDs are filled in. Correct.
+ * Nothing here is imported by the legacy runtime; npm run start is untouched.
  */
 
 export interface BuildAppOptions {
@@ -65,30 +44,25 @@ export interface BuildAppOptions {
   readonly sessionPath: string;
   /** Base directory for the staging store (required — no default). */
   readonly stagingDir: string;
-  /** Partial-publish confirmation policy (injected, not hardcoded). */
-  readonly confirmPartial: PublishPackDeps["confirmPartial"];
-  /**
-   * Complete validation policy for the file-ingest path. Defaults to
-   * DEFAULT_VALIDATION_POLICY (expectedDimensions: null — dimensions are not
-   * enforced until reconciled). Supply a complete policy to override.
-   */
+  /** Root directory of the release archive (required — no default). */
+  readonly archiveDir: string;
+  /** Complete validation policy for the file-ingest path (defaults applied). */
   readonly validationPolicy?: ValidationPolicy;
 }
 
 export interface App {
-  /** Asset catalog (display names, tradingView tokens, id->Asset via all()). */
   readonly registry: Registry;
   readonly resolver: Resolver;
   readonly session: PackSession;
   readonly staging: StagingStore;
+  readonly releases: ReleaseStore;
   /** Application use case: capture one operator-exported file. */
   captureFromFile(filePath: string): Promise<CaptureAttemptResult>;
-  /** Orchestration: publish the active pack (confirmPartial injected at build). */
-  publishActivePack(): Promise<PublishPackResult>;
+  /** Orchestration: publish the active pack as a Release. */
+  publishActivePack(options: PublishOptions): Promise<PublishPackResult>;
 }
 
 export function buildApp(opts: BuildAppOptions): App {
-  // --- shared infrastructure (constructed once; app instance state) ---
   const registry = loadRegistry();
   const resolver = createResolver(registry);
   const session = createPersistentSession({
@@ -96,35 +70,41 @@ export function buildApp(opts: BuildAppOptions): App {
     path: opts.sessionPath,
   });
   const staging = createStagingStore(opts.stagingDir);
+  const releases = createReleaseStore(opts.archiveDir);
 
-  // --- validation: canonical validator bound with a complete, explicit policy ---
   const policy: ValidationPolicy = opts.validationPolicy ?? DEFAULT_VALIDATION_POLICY;
   const validate = (imagePath: string) => validateImage(imagePath, policy);
 
-  // --- publisher: inline arg-order bind over the real discord publisher ---
-  const publisher = {
-    publish: (channelId: string, imagePath: string) => publish(imagePath, channelId),
-  };
-
-  // --- channel resolution (real config; empty IDs -> null, fail closed) ---
   const resolveChannel = loadChannelResolver();
+
+  /** Registry-owned display names, injected honestly as a function. */
+  const assetDisplay = (assetId: string): string => {
+    const asset = registry.all().find((a) => a.id === assetId);
+    return asset ? asset.display : assetId;
+  };
 
   return {
     registry,
     resolver,
     session,
     staging,
+    releases,
     captureFromFile(filePath: string): Promise<CaptureAttemptResult> {
       return captureFromFile({ filePath, resolver, session, staging, validate });
     },
-    publishActivePack(): Promise<PublishPackResult> {
-      return publishActivePack({
-        session,
-        staging,
-        publisher,
-        resolveChannel,
-        confirmPartial: opts.confirmPartial,
-      });
+    publishActivePack(options: PublishOptions): Promise<PublishPackResult> {
+      return publishActivePack(
+        {
+          session,
+          staging,
+          releases,
+          resolveChannel,
+          openPublisher: openPublisherSession,
+          assetDisplay,
+          now: () => new Date().toISOString(),
+        },
+        options,
+      );
     },
   };
 }

@@ -1,28 +1,24 @@
 # dependencies
 node_modules/
-
 # secrets & env
 .env
-.env.*
-!.env.example
-
-# Playwright persistent session — contains TradingView login/session
+.env.local
+# Playwright persistent session (added Day 3) — contains your TradingView login
 .pw-profile/
-
-# runtime state
+# captured images
 output/
-staging/
+# operator runtime state (not source)
 session.json
-
+staging/
+# release archive (operator state; durable Releases live here)
+archive/
 # logs
 *.log
-
 # OS / editor noise
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
-
-# build artifacts
+# build artifacts (we run via tsx, but just in case)
 dist/
 *.tsbuildinfo
