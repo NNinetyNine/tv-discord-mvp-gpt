@@ -110,7 +110,7 @@ function report(app: App, result: PublishPackResult): number {
         console.error(`  Failed at: ${label(app, result.failedAssetId)}`);
       }
       console.error(`  Reason: ${result.detail}`);
-      console.error(`\n  Release ${result.releaseId} is archived in state "publishing" and records the exact truth:`);
+      console.error(`\n  Release ${result.releaseId} is archived, unfinished, and records the exact truth:`);
       if (result.publishedAssetIds.length > 0) {
         console.error(`  ${result.publishedAssetIds.length} chart(s) are LIVE on Discord, identities recorded:`);
         for (const assetId of result.publishedAssetIds) {

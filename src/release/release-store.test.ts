@@ -78,11 +78,10 @@ describe("release identity", () => {
 });
 
 describe("createRelease", () => {
-  it("copies images into the archive and writes a publishing record", () => {
+  it("copies images into the archive and writes an in-flight record (publishedAt null)", () => {
     const record = store.createRelease(input());
 
-    expect(record.state).toBe("publishing");
-    expect(record.publishedAt).toBeNull();
+    expect(record.publishedAt).toBeNull(); // lifecycle: in flight — derived, not stored
     expect(record.startedAt).toBe("2026-07-08T14:30:22.118Z"); // metadata, preserved verbatim
     expect(record.corrections).toEqual([]);
     expect(record.analyses).toEqual([
@@ -94,6 +93,15 @@ describe("createRelease", () => {
     expect(existsSync(join(dir, "release.json"))).toBe(true);
     expect(readFileSync(join(dir, "btc.png"), "utf8")).toBe("fake-png-bytes:btc.png");
     expect(readFileSync(join(dir, "eth.png"), "utf8")).toBe("fake-png-bytes:eth.png");
+  });
+
+  it("the record on disk stores NO state field — lifecycle is derived", () => {
+    const record = store.createRelease(input());
+    const raw = JSON.parse(
+      readFileSync(join(archiveDir, "crypto", record.releaseId, "release.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect("state" in raw).toBe(false);
+    expect(raw["publishedAt"]).toBeNull();
   });
 
   it("archived images are COPIES: sources remain untouched", () => {
@@ -141,7 +149,7 @@ describe("listReleases — policy-free facts", () => {
     expect(store.listReleases("crypto")).toEqual([]);
   });
 
-  it("returns every release regardless of state", () => {
+  it("returns every release, in flight or published", () => {
     const a = store.createRelease(singleAt("2026-07-08T09:00:00.000Z"));
     const b = store.createRelease(singleAt("2026-07-08T11:00:00.000Z"));
     store.recordPost("crypto", b.releaseId, "btc", "m1", "t");
@@ -150,8 +158,8 @@ describe("listReleases — policy-free facts", () => {
     const all = store.listReleases("crypto");
     expect(all).toHaveLength(2);
     const byId = new Map(all.map((r) => [r.releaseId, r]));
-    expect(byId.get(a.releaseId)?.state).toBe("publishing");
-    expect(byId.get(b.releaseId)?.state).toBe("published");
+    expect(byId.get(a.releaseId)?.publishedAt).toBeNull();
+    expect(byId.get(b.releaseId)?.publishedAt).toBe("t-pub");
   });
 
   it("imposes no ordering policy (facts only; ordering belongs to policy)", () => {
@@ -181,7 +189,7 @@ describe("recordPost", () => {
       { assetId: "btc", display: "Bitcoin", capturedAt: "2026-07-08T14:00:00.000Z", imageFile: "btc.png", discordMessageId: "msg-100", postedAt: "2026-07-08T14:31:00.000Z" },
       { assetId: "eth", display: "Ethereum", capturedAt: "2026-07-08T14:05:00.000Z", imageFile: "eth.png", discordMessageId: null, postedAt: null },
     ]);
-    expect(loaded.state).toBe("publishing");
+    expect(loaded.publishedAt).toBeNull(); // still in flight
   });
 
   it("rejects a post for an unknown asset", () => {
@@ -195,12 +203,12 @@ describe("recordPost", () => {
     expect(() => store.recordPost("crypto", rec.releaseId, "btc", "msg-200", "t2")).toThrow(/double post/);
   });
 
-  it("rejects posts on a published release", () => {
+  it("rejects posts on an already-published release", () => {
     const rec = store.createRelease(input());
     store.recordPost("crypto", rec.releaseId, "btc", "m1", "t");
     store.recordPost("crypto", rec.releaseId, "eth", "m2", "t");
     store.markPublished("crypto", rec.releaseId, "t-pub");
-    expect(() => store.recordPost("crypto", rec.releaseId, "btc", "m3", "t")).toThrow(/state "published"/);
+    expect(() => store.recordPost("crypto", rec.releaseId, "btc", "m3", "t")).toThrow(/already published/);
   });
 });
 
@@ -211,16 +219,15 @@ describe("markPublished", () => {
     expect(() => store.markPublished("crypto", rec.releaseId, "t-pub")).toThrow(/eth/);
   });
 
-  it("transitions publishing -> published once every analysis is posted", () => {
+  it("sets publishedAt once every analysis is posted", () => {
     const rec = store.createRelease(input());
     store.recordPost("crypto", rec.releaseId, "btc", "m1", "t1");
     store.recordPost("crypto", rec.releaseId, "eth", "m2", "t2");
     const done = store.markPublished("crypto", rec.releaseId, "2026-07-08T14:35:00.000Z");
-    expect(done.state).toBe("published");
     expect(done.publishedAt).toBe("2026-07-08T14:35:00.000Z");
 
     const loaded = store.getRelease("crypto", rec.releaseId);
-    expect(loaded.state).toBe("published");
+    expect(loaded.publishedAt).toBe("2026-07-08T14:35:00.000Z");
   });
 
   it("cannot double-publish", () => {
@@ -228,6 +235,6 @@ describe("markPublished", () => {
     store.recordPost("crypto", rec.releaseId, "btc", "m1", "t");
     store.recordPost("crypto", rec.releaseId, "eth", "m2", "t");
     store.markPublished("crypto", rec.releaseId, "t-pub");
-    expect(() => store.markPublished("crypto", rec.releaseId, "t-again")).toThrow(/state "published"/);
+    expect(() => store.markPublished("crypto", rec.releaseId, "t-again")).toThrow(/already published/);
   });
 });

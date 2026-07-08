@@ -156,9 +156,9 @@ describe("published (happy path)", () => {
     expect(r.advanced).toBe(true);
     expect(r.cleared).toBe(true);
 
-    // Release record: published, message identities recorded, custody held.
+    // Release record: published (publishedAt set), identities recorded, custody held.
     const rec = releases.getRelease("crypto", r.releaseId);
-    expect(rec.state).toBe("published");
+    expect(rec.publishedAt).not.toBeNull();
     expect(rec.packDisplay).toBe("Crypto");
     expect(rec.channelId).toBe("chan-1");
     expect(rec.analyses.map((a) => [a.assetId, a.display, a.discordMessageId])).toEqual([
@@ -190,9 +190,10 @@ describe("publish_interrupted (honest failure)", () => {
     expect(r.failedAssetId).toBe("eth");
     expect(r.publishedAssetIds).toEqual(["btc"]);
 
-    // The release tells the exact truth: btc posted (identity held), eth not.
+    // The release tells the exact truth: btc posted (identity held), eth not,
+    // and the release is still in flight (publishedAt null).
     const rec = releases.getRelease("crypto", r.releaseId);
-    expect(rec.state).toBe("publishing");
+    expect(rec.publishedAt).toBeNull();
     expect(rec.analyses.find((a) => a.assetId === "btc")?.discordMessageId).toBe("msg-1");
     expect(rec.analyses.find((a) => a.assetId === "eth")?.discordMessageId).toBeNull();
 
@@ -237,19 +238,19 @@ describe("interrupted release: refuse / supersede", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
 
-    // Old record: unchanged on disk, still publishing, identity preserved.
+    // Old record: unchanged on disk, still in flight, identity preserved.
     const old = releases.getRelease("crypto", stuckId);
-    expect(old.state).toBe("publishing");
+    expect(old.publishedAt).toBeNull();
     expect(old.analyses.find((a) => a.assetId === "btc")?.discordMessageId).toBe("msg-1");
 
     // New record published; supersession is DERIVED: the old interrupted record
     // no longer blocks anything.
-    expect(releases.getRelease("crypto", r.releaseId).state).toBe("published");
+    expect(releases.getRelease("crypto", r.releaseId).publishedAt).not.toBeNull();
     expect(session.activePack()?.id).toBe("stocks");
   });
 
   it("an interrupted release superseded by a later published one no longer blocks (derived, not stored)", async () => {
-    // Build the archive state directly: old publishing record, newer published.
+    // Build the archive state directly: old in-flight record, newer published.
     const src1 = join(workDir, "a.png");
     writeFileSync(src1, "png");
     releases.createRelease({
@@ -326,7 +327,7 @@ describe("publish + persistent session restore (regression)", () => {
 });
 
 describe("record-write failure after a successful post (truth-telling branch)", () => {
-  it("reports the live-but-unrecorded message in detail; release stays publishing", async () => {
+  it("reports the live-but-unrecorded message in detail; release stays in flight", async () => {
     captureAll("crypto");
     const wrapped: ReleaseStore = {
       ...releases,
@@ -345,7 +346,7 @@ describe("record-write failure after a successful post (truth-telling branch)", 
     expect(r.detail).toContain("msg-2"); // the live message's identity is confessed
 
     const rec = releases.getRelease("crypto", r.releaseId);
-    expect(rec.state).toBe("publishing");
+    expect(rec.publishedAt).toBeNull();
     expect(rec.analyses.find((a) => a.assetId === "btc")?.discordMessageId).toBe("msg-1");
     // eth is LIVE on Discord but honestly unrecorded — the gap the detail names.
     expect(rec.analyses.find((a) => a.assetId === "eth")?.discordMessageId).toBeNull();

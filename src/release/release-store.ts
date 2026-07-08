@@ -25,17 +25,21 @@ import { randomBytes } from "node:crypto";
  * "interrupted", "superseded", or "resumable" is decided ABOVE the store, by
  * pure policy over the records it returns.
  *
- * Lifecycle (v1):   publishing -> published
- *   - "publishing": record + images exist; Discord posting is in flight (or was
- *     interrupted). Message identities are recorded incrementally as each post
- *     succeeds, so an interrupted record states exactly which messages exist.
- *   - "published": every analysis posted; the Release is the historical record.
- * There is deliberately no third state; everything else is derived by policy
- * from the facts on disk.
+ * Lifecycle (v1):   publishing -> published — DERIVED, never stored.
+ *   - publishedAt === null:  the Release is in flight (or was interrupted).
+ *     Message identities are recorded incrementally as each post succeeds, so
+ *     an interrupted record states exactly which messages exist.
+ *   - publishedAt !== null:  every analysis posted; the Release is the
+ *     historical record.
+ * There is deliberately NO stored state field: "published" MEANS "there is a
+ * moment at which it was published", so the fact carries the lifecycle and a
+ * separate state could only agree with it or corrupt it. Everything else
+ * ("interrupted", "superseded") is likewise derived by policy from facts.
  *
  * Identity vs. metadata: releaseId is an OPAQUE generated identifier with no
  * semantic meaning (rls_<hex>). startedAt/publishedAt/postedAt are historical
- * facts. Nothing derives identity or structure from time.
+ * facts. Nothing derives identity or structure from time; lifecycle derivation
+ * reads only the PRESENCE of the publishedAt fact, never its value.
  *
  * Custody: createRelease() COPIES images from their source paths into the
  * release directory as part of the SAME transactional write that creates the
@@ -65,8 +69,6 @@ export class ReleaseError extends Error {
   }
 }
 
-export type ReleaseState = "publishing" | "published";
-
 export interface ReleaseAnalysis {
   readonly assetId: string;
   readonly display: string;
@@ -83,8 +85,8 @@ export interface ReleaseRecord {
   readonly packId: string;
   readonly packDisplay: string;
   readonly channelId: string;
-  readonly state: ReleaseState;
   readonly startedAt: string;
+  /** null while publishing is in flight; set exactly once when complete. */
   readonly publishedAt: string | null;
   /** Canonical pack order; this array IS the pack-membership snapshot. */
   readonly analyses: readonly ReleaseAnalysis[];
@@ -111,10 +113,10 @@ export interface CreateReleaseInput {
 }
 
 export interface ReleaseStore {
-  /** Take custody of all images and write the record (state: publishing). */
+  /** Take custody of all images and write the record (publishedAt: null). */
   createRelease(input: CreateReleaseInput): ReleaseRecord;
   getRelease(packId: string, releaseId: string): ReleaseRecord;
-  /** ALL release records for a pack, any state, unordered. Policy-free facts. */
+  /** ALL release records for a pack, unordered. Policy-free facts. */
   listReleases(packId: string): readonly ReleaseRecord[];
   /** Record one successful Discord post (incremental, atomic). */
   recordPost(
@@ -124,7 +126,7 @@ export interface ReleaseStore {
     discordMessageId: string,
     postedAt: string,
   ): ReleaseRecord;
-  /** publishing -> published. Requires every analysis to have been posted. */
+  /** Set publishedAt. Requires every analysis to have been posted. */
   markPublished(packId: string, releaseId: string, publishedAt: string): ReleaseRecord;
 }
 
@@ -158,60 +160,85 @@ function isStringOrNull(v: unknown): v is string | null {
   return v === null || typeof v === "string";
 }
 
-/** Validate raw parsed JSON into a ReleaseRecord, or throw a clear error. */
+/**
+ * Validate raw parsed JSON into a ReleaseRecord, or throw a clear error.
+ *
+ * Every field is bound to a LOCAL before validation: TypeScript does not
+ * narrow repeated indexed accesses (o["x"]) under noUncheckedIndexedAccess,
+ * so each value is read once, guarded, and then used from its narrowed local.
+ */
 function parseRecord(raw: unknown, sourcePath: string): ReleaseRecord {
-  const fail = (why: string): never => {
-    throw new ReleaseError(`corrupt release record at ${sourcePath}: ${why}`);
-  };
+  const corrupt = (why: string): ReleaseError =>
+    new ReleaseError(`corrupt release record at ${sourcePath}: ${why}`);
 
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("not an object");
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw corrupt("not an object");
+  }
   const o = raw as Record<string, unknown>;
 
-  if (o["version"] !== VERSION) fail(`unsupported version: ${String(o["version"])}`);
-  if (!isNonEmptyString(o["releaseId"])) fail("releaseId must be a non-empty string");
-  if (!isNonEmptyString(o["packId"])) fail("packId must be a non-empty string");
-  if (!isNonEmptyString(o["packDisplay"])) fail("packDisplay must be a non-empty string");
-  if (!isNonEmptyString(o["channelId"])) fail("channelId must be a non-empty string");
-  const state = o["state"];
-  if (state !== "publishing" && state !== "published") {
-    fail(`invalid state: ${String(state)}`);
-  }
-  if (!isNonEmptyString(o["startedAt"])) fail("startedAt must be a non-empty string");
-  if (!isStringOrNull(o["publishedAt"])) fail("publishedAt must be a string or null");
-  if (!Array.isArray(o["analyses"])) fail("analyses must be an array");
-  if (!Array.isArray(o["corrections"])) fail("corrections must be an array");
+  const version = o["version"];
+  if (version !== VERSION) throw corrupt(`unsupported version: ${String(version)}`);
+
+  const releaseId = o["releaseId"];
+  if (!isNonEmptyString(releaseId)) throw corrupt("releaseId must be a non-empty string");
+
+  const packId = o["packId"];
+  if (!isNonEmptyString(packId)) throw corrupt("packId must be a non-empty string");
+
+  const packDisplay = o["packDisplay"];
+  if (!isNonEmptyString(packDisplay)) throw corrupt("packDisplay must be a non-empty string");
+
+  const channelId = o["channelId"];
+  if (!isNonEmptyString(channelId)) throw corrupt("channelId must be a non-empty string");
+
+  const startedAt = o["startedAt"];
+  if (!isNonEmptyString(startedAt)) throw corrupt("startedAt must be a non-empty string");
+
+  const publishedAt = o["publishedAt"];
+  if (!isStringOrNull(publishedAt)) throw corrupt("publishedAt must be a string or null");
+
+  const analysesRaw = o["analyses"];
+  if (!Array.isArray(analysesRaw)) throw corrupt("analyses must be an array");
+
+  const correctionsRaw = o["corrections"];
+  if (!Array.isArray(correctionsRaw)) throw corrupt("corrections must be an array");
 
   const analyses: ReleaseAnalysis[] = [];
-  for (const item of o["analyses"]) {
-    if (typeof item !== "object" || item === null) fail("analysis entry is not an object");
+  for (const item of analysesRaw) {
+    if (typeof item !== "object" || item === null) throw corrupt("analysis entry is not an object");
     const a = item as Record<string, unknown>;
-    if (!isNonEmptyString(a["assetId"])) fail("analysis assetId must be a non-empty string");
-    if (!isNonEmptyString(a["display"])) fail("analysis display must be a non-empty string");
-    if (!isNonEmptyString(a["capturedAt"])) fail("analysis capturedAt must be a non-empty string");
-    if (!isNonEmptyString(a["imageFile"])) fail("analysis imageFile must be a non-empty string");
-    if (!isStringOrNull(a["discordMessageId"])) fail("analysis discordMessageId must be string or null");
-    if (!isStringOrNull(a["postedAt"])) fail("analysis postedAt must be string or null");
-    analyses.push({
-      assetId: a["assetId"],
-      display: a["display"],
-      capturedAt: a["capturedAt"],
-      imageFile: a["imageFile"],
-      discordMessageId: a["discordMessageId"],
-      postedAt: a["postedAt"],
-    });
+
+    const assetId = a["assetId"];
+    if (!isNonEmptyString(assetId)) throw corrupt("analysis assetId must be a non-empty string");
+
+    const display = a["display"];
+    if (!isNonEmptyString(display)) throw corrupt("analysis display must be a non-empty string");
+
+    const capturedAt = a["capturedAt"];
+    if (!isNonEmptyString(capturedAt)) throw corrupt("analysis capturedAt must be a non-empty string");
+
+    const imageFile = a["imageFile"];
+    if (!isNonEmptyString(imageFile)) throw corrupt("analysis imageFile must be a non-empty string");
+
+    const discordMessageId = a["discordMessageId"];
+    if (!isStringOrNull(discordMessageId)) throw corrupt("analysis discordMessageId must be string or null");
+
+    const postedAt = a["postedAt"];
+    if (!isStringOrNull(postedAt)) throw corrupt("analysis postedAt must be string or null");
+
+    analyses.push({ assetId, display, capturedAt, imageFile, discordMessageId, postedAt });
   }
 
   return {
     version: VERSION,
-    releaseId: o["releaseId"],
-    packId: o["packId"],
-    packDisplay: o["packDisplay"],
-    channelId: o["channelId"],
-    state,
-    startedAt: o["startedAt"],
-    publishedAt: o["publishedAt"],
+    releaseId,
+    packId,
+    packDisplay,
+    channelId,
+    startedAt,
+    publishedAt,
     analyses,
-    corrections: [...(o["corrections"] as unknown[])],
+    corrections: [...correctionsRaw],
   };
 }
 
@@ -237,6 +264,7 @@ export function createReleaseStore(archiveDir: string): ReleaseStore {
     return dir;
   }
 
+  /** THE one definition of where a release record lives. */
   function recordPath(packId: string, releaseId: string): string {
     return join(releaseDir(packId, releaseId), "release.json");
   }
@@ -244,7 +272,7 @@ export function createReleaseStore(archiveDir: string): ReleaseStore {
   /** Atomic record write: temp file in the same dir, then rename into place. */
   function writeRecord(record: ReleaseRecord): void {
     const dir = releaseDir(record.packId, record.releaseId);
-    const dest = join(dir, "release.json");
+    const dest = recordPath(record.packId, record.releaseId);
     const tmp = join(dir, `.release.json.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
     try {
       writeFileSync(tmp, JSON.stringify(record, null, 2), "utf8");
@@ -351,7 +379,6 @@ export function createReleaseStore(archiveDir: string): ReleaseStore {
         packId: input.packId,
         packDisplay: input.packDisplay,
         channelId: input.channelId,
-        state: "publishing",
         startedAt: input.startedAt,
         publishedAt: null,
         analyses: input.analyses.map((a) => ({
@@ -380,7 +407,7 @@ export function createReleaseStore(archiveDir: string): ReleaseStore {
       for (const entry of readdirSync(dir)) {
         const candidate = join(dir, entry);
         if (!statSync(candidate).isDirectory()) continue;
-        if (!existsSync(join(candidate, "release.json"))) continue;
+        if (!existsSync(recordPath(packId, entry))) continue;
         // Fail LOUD on a corrupt record: silently skipping could let policy
         // above conclude "nothing interrupted" over a record we failed to read.
         out.push(readRecord(packId, entry));
@@ -402,9 +429,9 @@ export function createReleaseStore(archiveDir: string): ReleaseStore {
         throw new ReleaseError("postedAt must be a non-empty string");
       }
       const record = readRecord(packId, releaseId);
-      if (record.state !== "publishing") {
+      if (record.publishedAt !== null) {
         throw new ReleaseError(
-          `cannot record a post on release ${packId}/${releaseId} in state "${record.state}"`,
+          `cannot record a post on release ${packId}/${releaseId} — it is already published`,
         );
       }
       const target = record.analyses.find((a) => a.assetId === assetId);
@@ -431,9 +458,9 @@ export function createReleaseStore(archiveDir: string): ReleaseStore {
         throw new ReleaseError("publishedAt must be a non-empty string");
       }
       const record = readRecord(packId, releaseId);
-      if (record.state !== "publishing") {
+      if (record.publishedAt !== null) {
         throw new ReleaseError(
-          `cannot mark release ${packId}/${releaseId} published from state "${record.state}"`,
+          `cannot mark release ${packId}/${releaseId} published — it is already published`,
         );
       }
       const unposted = record.analyses.filter((a) => a.discordMessageId === null);
@@ -444,7 +471,7 @@ export function createReleaseStore(archiveDir: string): ReleaseStore {
             .join(", ")})`,
         );
       }
-      const updated: ReleaseRecord = { ...record, state: "published", publishedAt };
+      const updated: ReleaseRecord = { ...record, publishedAt };
       writeRecord(updated);
       return updated;
     },

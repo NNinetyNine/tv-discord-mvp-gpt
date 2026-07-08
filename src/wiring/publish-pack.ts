@@ -12,16 +12,19 @@ import type { ReleaseStore, ReleaseRecord } from "../release/release-store.ts";
  *  - COMPLETE-ONLY: an incomplete pack cannot be published (pack_incomplete).
  *    Partial publishing does not exist; there is no confirmation for it.
  *  - ARCHIVE-BEFORE-EXTERNAL: the release record + image custody are written
- *    (state: publishing) before any Discord post; the workspace (session) is
- *    reset ONLY on a fully published release.
- *  - HONEST INTERRUPTION: a failure mid-posting leaves a publishing-state
- *    release stating exactly which messages exist; the session does not
+ *    (publishedAt: null — in flight) before any Discord post; the workspace
+ *    (session) is reset ONLY on a fully published release.
+ *  - HONEST INTERRUPTION: a failure mid-posting leaves an in-flight release
+ *    record stating exactly which messages exist; the session does not
  *    advance and staging is kept.
  *  - SUPERSESSION (private policy, single consumer): a new publish for a pack
  *    with an unsuperseded interrupted release is REFUSED unless the operator
  *    explicitly chooses to supersede; publishing fresh is itself what retires
  *    the old record from "live" (its later startedAt outranks it) — the old
  *    record is never modified.
+ *
+ * Lifecycle is DERIVED, never stored: publishedAt === null means in flight
+ * (or interrupted); publishedAt !== null means published.
  *
  * Ordering: the publisher session is OPENED before the release is created, so
  * a connection failure aborts with zero durable side effects.
@@ -102,16 +105,16 @@ function errMsg(e: unknown): string {
 /**
  * PRIVATE supersession policy (single consumer; extract only when a second
  * real consumer exists). The interrupted release that still COUNTS is the
- * newest record overall, if and only if it is still "publishing" — anything
- * older was superseded by whatever started after it. startedAt is read as an
- * ordering FACT (metadata), never as identity.
+ * newest record overall, if and only if it is still in flight (publishedAt
+ * null) — anything older was superseded by whatever started after it.
+ * startedAt is read as an ordering FACT (metadata), never as identity.
  */
 function findUnsupersededInterrupted(records: readonly ReleaseRecord[]): ReleaseRecord | null {
   let newest: ReleaseRecord | null = null;
   for (const r of records) {
     if (newest === null || r.startedAt > newest.startedAt) newest = r;
   }
-  return newest !== null && newest.state === "publishing" ? newest : null;
+  return newest !== null && newest.publishedAt === null ? newest : null;
 }
 
 export async function publishActivePack(
@@ -157,14 +160,26 @@ export async function publishActivePack(
     };
   }
 
-  // 4. Every asset must have a staged image (fail closed).
+  // 4. Resolve every staged image ONCE into assetId -> path (fail closed).
+  const stagedPaths = new Map<string, string>();
   const missing: string[] = [];
   for (const rec of plan.toPublish) {
-    if (!staging.has(packId, rec.assetId)) missing.push(rec.assetId);
+    const staged = staging.get(packId, rec.assetId);
+    if (staged === null) missing.push(rec.assetId);
+    else stagedPaths.set(rec.assetId, staged.path);
   }
   if (missing.length > 0) {
     return { ok: false, outcome: "missing_staged_images", packId, missing };
   }
+
+  /** The one lookup of the truth resolved in step 4; absence here is a bug. */
+  const stagedPath = (assetId: string): string => {
+    const path = stagedPaths.get(assetId);
+    if (path === undefined) {
+      throw new Error(`internal: no staged path resolved for "${assetId}"`);
+    }
+    return path;
+  };
 
   // 5. Channel.
   const channelId = resolveChannel(packId);
@@ -173,7 +188,7 @@ export async function publishActivePack(
   }
 
   // 6. Open the publisher BEFORE creating durable state: a connect failure
-  //    must leave zero side effects (no publishing-state release to refuse on).
+  //    must leave zero side effects (no in-flight release to refuse on).
   let publisher: PublisherSessionShape;
   try {
     publisher = await openPublisher();
@@ -184,25 +199,18 @@ export async function publishActivePack(
   let releaseId: string;
   const publishedAssetIds: string[] = [];
   try {
-    // 7. Archive first: take custody + write the record (state: publishing).
+    // 7. Archive first: take custody + write the record (publishedAt: null).
     const record = releases.createRelease({
       packId,
       packDisplay: active.display,
       channelId,
       startedAt: now(),
-      analyses: plan.toPublish.map((rec) => {
-        const staged = staging.get(packId, rec.assetId);
-        if (staged === null) {
-          // Step 4 checked; a vanish between then and now is a genuine fault.
-          throw new Error(`staged image for "${rec.assetId}" disappeared before archiving`);
-        }
-        return {
-          assetId: rec.assetId,
-          display: assetDisplay(rec.assetId),
-          capturedAt: rec.capturedAt,
-          sourceImagePath: staged.path,
-        };
-      }),
+      analyses: plan.toPublish.map((rec) => ({
+        assetId: rec.assetId,
+        display: assetDisplay(rec.assetId),
+        capturedAt: rec.capturedAt,
+        sourceImagePath: stagedPath(rec.assetId),
+      })),
     });
     releaseId = record.releaseId;
 
@@ -210,7 +218,7 @@ export async function publishActivePack(
     for (const rec of plan.toPublish) {
       let messageId: string;
       try {
-        const posted = await publisher.post(channelId, staging.get(packId, rec.assetId)!.path);
+        const posted = await publisher.post(channelId, stagedPath(rec.assetId));
         messageId = posted.messageId;
       } catch (e) {
         return {
@@ -228,7 +236,7 @@ export async function publishActivePack(
         publishedAssetIds.push(rec.assetId);
       } catch (e) {
         // Posted but the record write failed: the message is LIVE but
-        // unrecorded. Report the whole truth; the release stays publishing.
+        // unrecorded. Report the whole truth; the release stays in flight.
         return {
           ok: false,
           outcome: "publish_interrupted",
