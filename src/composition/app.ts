@@ -16,27 +16,50 @@ import { captureFromFile } from "../application/capture-from-file.ts";
 import type { CaptureAttemptResult } from "../wiring/capture-once.ts";
 import {
   publishActivePack,
+  resumeInterruptedRelease,
   type PublishPackResult,
   type PublishOptions,
+  type ResumePackResult,
 } from "../wiring/publish-pack.ts";
 
 /**
- * Composition root. Assembles the real dependencies from config and wires the
- * application/orchestration services over a SHARED session, staging store, and
- * release store (the app instance's state, constructed once).
+ * Composition root for the new (Snapshot-centric) architecture.
+ *
+ * buildApp() assembles the REAL application dependencies from config and wires
+ * the existing application/orchestration services over them. It does not define
+ * new use cases — it composes captureFromFile (application layer) and the
+ * publish/resume orchestrations (wiring) over a SHARED session, staging store,
+ * and release store, which are the app instance's state (constructed once, not
+ * per operation).
  *
  * Pure assembly: buildApp() does NOT decide filesystem locations or read
- * process.env. sessionPath, stagingDir, and archiveDir are required inputs.
- * (The Discord publisher session reads DISCORD_BOT_TOKEN itself at open time —
- * the adapter owns its credential, same as the legacy publisher.)
+ * process.env. sessionPath, stagingDir and archiveDir are required inputs —
+ * each caller (tests, the CLI scripts, the eventual runtime) supplies the
+ * locations. This keeps the composition root reusable across all of them
+ * without embedding any environment or path policy of its own. The one env
+ * read on the publish path (DISCORD_BOT_TOKEN) lives inside the publisher
+ * adapter, which owns that installation concern.
  *
- * Publishing produces a RELEASE: archived custody + record before any post,
- * per-analysis Discord message identities recorded as earned, complete-only
- * (partial publishing does not exist — the old confirmPartial seam is gone),
- * workspace reset only on a fully published release. The real clock is bound
- * here (now) — orchestration receives time as an injected fact.
+ * The composition root is also the ONLY place the real clock is bound
+ * (now: () => new Date().toISOString()); orchestration receives time as a
+ * dependency because time is metadata, never mechanism.
  *
- * Nothing here is imported by the legacy runtime; npm run start is untouched.
+ * The registry (asset catalog) is exposed because the operator workflow needs
+ * catalog access — display names for reporting, id->Asset mapping. The
+ * resolver stays forward-only (resolve(filename) only); catalog queries belong
+ * to the Registry, which owns them.
+ *
+ * Seam notes:
+ *  - validation: the canonical validateImage is bound with a complete, explicit
+ *    ValidationPolicy (defaults to DEFAULT_VALIDATION_POLICY, whose
+ *    expectedDimensions is null until export dimensions are reconciled).
+ *  - publisher: the session-scoped openPublisherSession is passed as the
+ *    openPublisher factory; orchestration opens it before any durable effect.
+ *  - channels: real channels.json IDs resolve per pack; empty -> null, and
+ *    publish fails closed with channel_unresolved. Resume needs no channel
+ *    resolution at all — the Release record snapshotted its channel.
+ *  - resume is PACK-scoped (the Constitution has no "active pack"); which pack
+ *    to resume is the delivery layer's choice, passed through as packId.
  */
 
 export interface BuildAppOptions {
@@ -46,11 +69,16 @@ export interface BuildAppOptions {
   readonly stagingDir: string;
   /** Root directory of the release archive (required — no default). */
   readonly archiveDir: string;
-  /** Complete validation policy for the file-ingest path (defaults applied). */
+  /**
+   * Complete validation policy for the file-ingest path. Defaults to
+   * DEFAULT_VALIDATION_POLICY (expectedDimensions: null — dimensions are not
+   * enforced until reconciled). Supply a complete policy to override.
+   */
   readonly validationPolicy?: ValidationPolicy;
 }
 
 export interface App {
+  /** Asset catalog (display names, tradingView tokens, id->Asset via all()). */
   readonly registry: Registry;
   readonly resolver: Resolver;
   readonly session: PackSession;
@@ -58,11 +86,14 @@ export interface App {
   readonly releases: ReleaseStore;
   /** Application use case: capture one operator-exported file. */
   captureFromFile(filePath: string): Promise<CaptureAttemptResult>;
-  /** Orchestration: publish the active pack as a Release. */
+  /** Orchestration: publish the active pack as an archived Release. */
   publishActivePack(options: PublishOptions): Promise<PublishPackResult>;
+  /** Orchestration: resume the given pack's interrupted release. */
+  resumePack(packId: string): Promise<ResumePackResult>;
 }
 
 export function buildApp(opts: BuildAppOptions): App {
+  // --- shared infrastructure (constructed once; app instance state) ---
   const registry = loadRegistry();
   const resolver = createResolver(registry);
   const session = createPersistentSession({
@@ -72,16 +103,21 @@ export function buildApp(opts: BuildAppOptions): App {
   const staging = createStagingStore(opts.stagingDir);
   const releases = createReleaseStore(opts.archiveDir);
 
+  // --- validation: canonical validator bound with a complete, explicit policy ---
   const policy: ValidationPolicy = opts.validationPolicy ?? DEFAULT_VALIDATION_POLICY;
   const validate = (imagePath: string) => validateImage(imagePath, policy);
 
+  // --- channel resolution (real config; empty IDs -> null, fail closed) ---
   const resolveChannel = loadChannelResolver();
 
-  /** Registry-owned display names, injected honestly as a function. */
+  // --- display names (registry-owned; injected into orchestration honestly) ---
   const assetDisplay = (assetId: string): string => {
     const asset = registry.all().find((a) => a.id === assetId);
     return asset ? asset.display : assetId;
   };
+
+  // --- the one binding of the real clock ---
+  const now = (): string => new Date().toISOString();
 
   return {
     registry,
@@ -101,9 +137,21 @@ export function buildApp(opts: BuildAppOptions): App {
           resolveChannel,
           openPublisher: openPublisherSession,
           assetDisplay,
-          now: () => new Date().toISOString(),
+          now,
         },
         options,
+      );
+    },
+    resumePack(packId: string): Promise<ResumePackResult> {
+      return resumeInterruptedRelease(
+        {
+          session,
+          staging,
+          releases,
+          openPublisher: openPublisherSession,
+          now,
+        },
+        packId,
       );
     },
   };

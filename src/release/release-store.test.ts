@@ -238,3 +238,23 @@ describe("markPublished", () => {
     expect(() => store.markPublished("crypto", rec.releaseId, "t-again")).toThrow(/already published/);
   });
 });
+
+describe("imagePath — archive custody location", () => {
+  it("returns the absolute path of an archived image", () => {
+    const rec = store.createRelease(input());
+    const p = store.imagePath("crypto", rec.releaseId, "btc.png");
+    expect(p).toBe(join(archiveDir, "crypto", rec.releaseId, "btc.png"));
+    expect(readFileSync(p, "utf8")).toBe("fake-png-bytes:btc.png");
+  });
+
+  it("throws (violated custody invariant) when the image is missing", () => {
+    const rec = store.createRelease(input());
+    rmSync(join(archiveDir, "crypto", rec.releaseId, "eth.png"));
+    expect(() => store.imagePath("crypto", rec.releaseId, "eth.png")).toThrow(/custody/);
+  });
+
+  it("rejects an unsafe imageFile", () => {
+    const rec = store.createRelease(input());
+    expect(() => store.imagePath("crypto", rec.releaseId, "../release.json")).toThrow(ReleaseError);
+  });
+});

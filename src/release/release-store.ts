@@ -19,11 +19,11 @@ import { randomBytes } from "node:crypto";
  * exactly what was posted where.
  *
  * RESPONSIBILITY: persistence and record integrity ONLY. The store exposes
- * policy-free facts (create/get/list/recordPost/markPublished) and enforces its
- * own invariants (no posts on published records, no double posts, no publish
- * with unposted analyses). It contains NO workflow policy: what counts as
- * "interrupted", "superseded", or "resumable" is decided ABOVE the store, by
- * pure policy over the records it returns.
+ * policy-free facts (create/get/list/imagePath/recordPost/markPublished) and
+ * enforces its own invariants (no posts on published records, no double
+ * posts, no publish with unposted analyses). It contains NO workflow policy:
+ * what counts as "interrupted", "superseded", or "resumable" is decided ABOVE
+ * the store, by pure policy over the records it returns.
  *
  * Lifecycle (v1):   publishing -> published — DERIVED, never stored.
  *   - publishedAt === null:  the Release is in flight (or was interrupted).
@@ -46,7 +46,9 @@ import { randomBytes } from "node:crypto";
  * record — a Release record must never exist without custody of its artifacts
  * (archive-before-reset depends on it). The store takes source PATHS and knows
  * nothing about staging as a concept; choosing which files to archive is the
- * caller's job, taking custody of them is the store's.
+ * caller's job, taking custody of them is the store's. imagePath() is the one
+ * definition of where an archived artifact lives; a record whose artifact is
+ * missing is a violated invariant (corruption), so imagePath fails LOUD.
  *
  * Durability discipline:
  *   - release.json writes are atomic (temp file + rename), because a torn
@@ -118,6 +120,12 @@ export interface ReleaseStore {
   getRelease(packId: string, releaseId: string): ReleaseRecord;
   /** ALL release records for a pack, unordered. Policy-free facts. */
   listReleases(packId: string): readonly ReleaseRecord[];
+  /**
+   * Absolute path of an archived image belonging to a release. Throws if the
+   * file is missing: a record without custody of its artifacts is a violated
+   * invariant (corruption), not an operational outcome.
+   */
+  imagePath(packId: string, releaseId: string, imageFile: string): string;
   /** Record one successful Discord post (incremental, atomic). */
   recordPost(
     packId: string,
@@ -413,6 +421,21 @@ export function createReleaseStore(archiveDir: string): ReleaseStore {
         out.push(readRecord(packId, entry));
       }
       return out;
+    },
+
+    imagePath(packId: string, releaseId: string, imageFile: string): string {
+      assertSafeId("imageFile", imageFile);
+      const dir = releaseDir(packId, releaseId);
+      const path = resolve(dir, imageFile);
+      if (path !== join(dir, imageFile)) {
+        throw new ReleaseError(`imageFile "${imageFile}" resolves outside the release directory`);
+      }
+      if (!existsSync(path)) {
+        throw new ReleaseError(
+          `archived image missing for ${packId}/${releaseId}: ${imageFile} — a release record must never exist without custody of its artifacts`,
+        );
+      }
+      return path;
     },
 
     recordPost(

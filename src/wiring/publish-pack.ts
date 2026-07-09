@@ -4,30 +4,42 @@ import type { ChannelResolver } from "./channels.ts";
 import type { ReleaseStore, ReleaseRecord } from "../release/release-store.ts";
 
 /**
- * Pack publishing orchestration. Publishing a pack = producing a RELEASE: the
- * durable archived record of the complete pack thesis, with per-analysis
- * Discord message identities recorded incrementally as they are earned.
+ * Pack publishing orchestration: producing a RELEASE, and RESUMING one that
+ * was interrupted. Both live here because both are the same responsibility —
+ * the publish process — publish starts it, resume completes it.
  *
  * Constitution rules enforced here:
  *  - COMPLETE-ONLY: an incomplete pack cannot be published (pack_incomplete).
  *    Partial publishing does not exist; there is no confirmation for it.
  *  - ARCHIVE-BEFORE-EXTERNAL: the release record + image custody are written
- *    (publishedAt: null — in flight) before any Discord post; the workspace
- *    (session) is reset ONLY on a fully published release.
+ *    (publishedAt: null — in flight) before any Discord post; the pack's
+ *    workspace is reset ONLY on a fully published release.
  *  - HONEST INTERRUPTION: a failure mid-posting leaves an in-flight release
- *    record stating exactly which messages exist; the session does not
- *    advance and staging is kept.
- *  - SUPERSESSION (private policy, single consumer): a new publish for a pack
- *    with an unsuperseded interrupted release is REFUSED unless the operator
- *    explicitly chooses to supersede; publishing fresh is itself what retires
- *    the old record from "live" (its later startedAt outranks it) — the old
- *    record is never modified.
+ *    record stating exactly which messages exist; the workspace is untouched
+ *    and staging is kept. Resume itself can interrupt, leaving the release
+ *    exactly as resumable as before.
+ *  - RESUME: completes an existing interrupted release from its own record —
+ *    never creates a second release, posts ONLY analyses whose message
+ *    identity is still null, posts from ARCHIVE CUSTODY (never staging), and
+ *    posts to the record's snapshotted channelId (a Release snapshots its
+ *    delivery target like everything else). Resume is PACK-scoped: the
+ *    Constitution has no "active pack" — per-pack releases are independently
+ *    resumable, and choosing WHICH pack to resume belongs to the operator via
+ *    the delivery layer. (Today's single-active session means the delivery
+ *    layer can only ever choose the in-flight pack; that is the session's
+ *    limitation, not this function's contract.)
+ *  - SUPERSESSION (private policy; both consumers live in this module —
+ *    extraction fires only when a consumer in another module exists): the
+ *    interrupted release that still COUNTS is the newest record overall, iff
+ *    still in flight. Publishing fresh past it (--supersede) is what retires
+ *    it; the old record is never modified.
  *
  * Lifecycle is DERIVED, never stored: publishedAt === null means in flight
  * (or interrupted); publishedAt !== null means published.
  *
- * Ordering: the publisher session is OPENED before the release is created, so
- * a connection failure aborts with zero durable side effects.
+ * Ordering: the publisher session is OPENED before any durable effect, so a
+ * connection failure aborts with zero side effects (resume's gates are pure
+ * reads, so this holds for both operations).
  *
  * Time is metadata: all timestamps flow from the injected now(); nothing here
  * reads a clock directly.
@@ -48,6 +60,19 @@ export interface PublishPackDeps {
   /** Display name for an asset id (registry-owned; injected honestly). */
   readonly assetDisplay: (assetId: string) => string;
   /** Timestamp source (ISO-8601). Injected: time is metadata, tests are deterministic. */
+  readonly now: () => string;
+}
+
+/**
+ * Resume needs strictly less than publish: no channel resolution (the record
+ * snapshotted its channel), no display lookup (the record snapshotted its
+ * displays). Honest deps — it declares only what it uses.
+ */
+export interface ResumePackDeps {
+  readonly session: PackSession;
+  readonly staging: StagingStore;
+  readonly releases: ReleaseStore;
+  readonly openPublisher: () => Promise<PublisherSessionShape>;
   readonly now: () => string;
 }
 
@@ -98,16 +123,48 @@ export type PublishPackResult =
       readonly detail: string;
     };
 
+/**
+ * Resume's own contract. Not shared with PublishPackResult: a result union is
+ * the exhaustive promise of what a function can produce, and each of these
+ * functions produces outcomes the other cannot. There is deliberately NO
+ * no_active_pack variant: resume is pack-scoped, and "which pack" is the
+ * delivery layer's question. `resumed.postedNowAssetIds` may legitimately be
+ * EMPTY (a release interrupted after its last post but before markPublished
+ * resumes by posting nothing).
+ */
+export type ResumePackResult =
+  | {
+      readonly ok: true;
+      readonly outcome: "resumed";
+      readonly packId: string;
+      readonly releaseId: string;
+      /** Analyses posted by THIS run (already-posted ones are never re-posted). */
+      readonly postedNowAssetIds: readonly string[];
+      readonly cleared: boolean; // false if staging clear failed (non-fatal)
+    }
+  | { readonly ok: false; readonly outcome: "nothing_to_resume"; readonly packId: string }
+  | { readonly ok: false; readonly outcome: "publisher_connect_failed"; readonly packId: string; readonly detail: string }
+  | {
+      readonly ok: false;
+      readonly outcome: "publish_interrupted";
+      readonly packId: string;
+      readonly releaseId: string;
+      readonly publishedAssetIds: readonly string[];
+      readonly failedAssetId: string | null;
+      readonly detail: string;
+    };
+
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
 /**
- * PRIVATE supersession policy (single consumer; extract only when a second
- * real consumer exists). The interrupted release that still COUNTS is the
- * newest record overall, if and only if it is still in flight (publishedAt
- * null) — anything older was superseded by whatever started after it.
- * startedAt is read as an ordering FACT (metadata), never as identity.
+ * PRIVATE supersession policy (both consumers are in this module; extract
+ * only when a consumer in a DIFFERENT module exists). The interrupted release
+ * that still COUNTS is the newest record overall, if and only if it is still
+ * in flight (publishedAt null) — anything older was superseded by whatever
+ * started after it. startedAt is read as an ordering FACT (metadata), never
+ * as identity.
  */
 function findUnsupersededInterrupted(records: readonly ReleaseRecord[]): ReleaseRecord | null {
   let newest: ReleaseRecord | null = null;
@@ -288,4 +345,130 @@ export async function publishActivePack(
     advanced: true,
     cleared,
   };
+}
+
+/**
+ * Resume the given pack's interrupted release: complete the existing record,
+ * never create a second one. Posts ONLY analyses whose discordMessageId is
+ * still null, from ARCHIVE CUSTODY, to the record's snapshotted channel,
+ * recording each identity as earned. The pack's workspace resets and its
+ * staging clears only once the release is fully published. Interruption of
+ * resume itself leaves the release exactly as resumable as before — resume is
+ * re-runnable.
+ *
+ * The pack is a PARAMETER: which pack to resume is the operator's choice,
+ * made at the delivery layer. Under today's single-active session the only
+ * legitimately resumable pack is the in-flight one (an interrupted publish
+ * means advance() never fired), so a resumable release for any OTHER pack
+ * means session and archive disagree — a violated invariant, thrown loudly
+ * BEFORE any external effect, never a soft outcome.
+ */
+export async function resumeInterruptedRelease(
+  deps: ResumePackDeps,
+  packId: string,
+): Promise<ResumePackResult> {
+  const { session, staging, releases, openPublisher, now } = deps;
+
+  // 1. The pack's interrupted release that still counts, or nothing to do.
+  const release = findUnsupersededInterrupted(releases.listReleases(packId));
+  if (release === null) {
+    return { ok: false, outcome: "nothing_to_resume", packId };
+  }
+  const releaseId = release.releaseId;
+
+  // 2. Invariant: under the single-active session, the interrupted pack IS
+  //    the in-flight pack (advance never fired). Completing a release for any
+  //    other pack and then advancing would silently discard the in-flight
+  //    pack's work — so incoherence fails LOUD, before any external effect.
+  //    (This assert dissolves when session evolution brings per-pack reset.)
+  const active = session.activePack();
+  if (active === null || active.id !== packId) {
+    throw new Error(
+      `internal: pack "${packId}" has an interrupted release but is not the session's in-flight pack` +
+        `${active === null ? " (session is complete)" : ` (in flight: "${active.id}")`} — session and archive are inconsistent`,
+    );
+  }
+
+  // 3. Open the publisher first: gates above were pure reads, so a connect
+  //    failure leaves zero side effects.
+  let publisher: PublisherSessionShape;
+  try {
+    publisher = await openPublisher();
+  } catch (e) {
+    return { ok: false, outcome: "publisher_connect_failed", packId, detail: errMsg(e) };
+  }
+
+  const postedNowAssetIds: string[] = [];
+  try {
+    // 4. Post ONLY the unposted remainder, in the record's canonical order,
+    //    from archive custody, to the record's snapshotted channel.
+    for (const analysis of release.analyses) {
+      if (analysis.discordMessageId !== null) continue; // never duplicate a post
+
+      const imagePath = releases.imagePath(packId, releaseId, analysis.imageFile);
+
+      let messageId: string;
+      try {
+        const posted = await publisher.post(release.channelId, imagePath);
+        messageId = posted.messageId;
+      } catch (e) {
+        return {
+          ok: false,
+          outcome: "publish_interrupted",
+          packId,
+          releaseId,
+          publishedAssetIds: postedNowAssetIds,
+          failedAssetId: analysis.assetId,
+          detail: errMsg(e),
+        };
+      }
+      try {
+        releases.recordPost(packId, releaseId, analysis.assetId, messageId, now());
+        postedNowAssetIds.push(analysis.assetId);
+      } catch (e) {
+        return {
+          ok: false,
+          outcome: "publish_interrupted",
+          packId,
+          releaseId,
+          publishedAssetIds: postedNowAssetIds,
+          failedAssetId: analysis.assetId,
+          detail: `posted to Discord (message ${messageId}) but failed to record it: ${errMsg(e)}`,
+        };
+      }
+    }
+
+    // 5. Everything posted (possibly by earlier runs): the release completes.
+    //    A record interrupted after its last post resumes here naturally,
+    //    with postedNowAssetIds empty.
+    try {
+      releases.markPublished(packId, releaseId, now());
+    } catch (e) {
+      return {
+        ok: false,
+        outcome: "publish_interrupted",
+        packId,
+        releaseId,
+        publishedAssetIds: postedNowAssetIds,
+        failedAssetId: null,
+        detail: `all analyses posted, but marking the release published failed: ${errMsg(e)}`,
+      };
+    }
+  } finally {
+    await publisher.close().catch(() => {});
+  }
+
+  // 6. Fully published: reset the pack's workspace (today: advance the
+  //    single-active session), then clear staging (best-effort; the archive
+  //    has held custody since the release was created).
+  session.advance();
+
+  let cleared = true;
+  try {
+    staging.clear(packId);
+  } catch {
+    cleared = false;
+  }
+
+  return { ok: true, outcome: "resumed", packId, releaseId, postedNowAssetIds, cleared };
 }

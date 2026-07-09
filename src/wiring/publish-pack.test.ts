@@ -3,7 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { publishActivePack, type PublishPackDeps, type PublisherSessionShape } from "./publish-pack.ts";
+import {
+  publishActivePack,
+  resumeInterruptedRelease,
+  type PublishPackDeps,
+  type ResumePackDeps,
+  type PublisherSessionShape,
+} from "./publish-pack.ts";
 import { createSession, type PackSession } from "../packs/session.ts";
 import { createPersistentSession } from "../packs/persistence.ts";
 import { createStagingStore, type StagingStore } from "./staging.ts";
@@ -74,6 +80,17 @@ function deps(overrides?: Partial<PublishPackDeps>): PublishPackDeps {
     openPublisher: fakePublisher().open,
     assetDisplay: (id) => id.toUpperCase(),
     now: makeNow(),
+    ...overrides,
+  };
+}
+
+function resumeDeps(overrides?: Partial<ResumePackDeps>): ResumePackDeps {
+  return {
+    session,
+    staging,
+    releases,
+    openPublisher: fakePublisher().open,
+    now: makeNow(40),
     ...overrides,
   };
 }
@@ -350,5 +367,131 @@ describe("record-write failure after a successful post (truth-telling branch)", 
     expect(rec.analyses.find((a) => a.assetId === "btc")?.discordMessageId).toBe("msg-1");
     // eth is LIVE on Discord but honestly unrecorded — the gap the detail names.
     expect(rec.analyses.find((a) => a.assetId === "eth")?.discordMessageId).toBeNull();
+  });
+});
+
+describe("resume — completing an interrupted release", () => {
+  async function interruptCrypto(): Promise<string> {
+    captureAll("crypto");
+    const fp = fakePublisher("eth.png"); // btc posts, eth fails
+    const r = await publishActivePack(deps({ openPublisher: fp.open, now: makeNow(10) }), GO);
+    if (r.ok || r.outcome !== "publish_interrupted") throw new Error("setup failed");
+    return r.releaseId;
+  }
+
+  it("posts ONLY the unposted remainder from archive custody, completes, advances, clears", async () => {
+    const releaseId = await interruptCrypto();
+    const fp = fakePublisher();
+    const r = await resumeInterruptedRelease(resumeDeps({ openPublisher: fp.open }), "crypto");
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.outcome).toBe("resumed");
+    expect(r.releaseId).toBe(releaseId); // the SAME release — never a second one
+    expect(r.postedNowAssetIds).toEqual(["eth"]);
+    expect(r.cleared).toBe(true);
+
+    // Exactly one post happened, from ARCHIVE custody (not staging).
+    expect(fp.posts).toHaveLength(1);
+    expect(fp.posts[0]!.imagePath).toBe(
+      join(workDir, "archive", "crypto", releaseId, "eth.png"),
+    );
+
+    // The record: published, btc's ORIGINAL identity preserved, eth's earned.
+    // (Both read "msg-1" because each fake publisher session numbers its own
+    // posts from 1 — the invariant is that btc's identity from the FIRST run
+    // survived untouched, not the counter values.)
+    const rec = releases.getRelease("crypto", releaseId);
+    expect(rec.publishedAt).not.toBeNull();
+    expect(rec.analyses.find((a) => a.assetId === "btc")?.discordMessageId).toBe("msg-1");
+    expect(rec.analyses.find((a) => a.assetId === "eth")?.discordMessageId).toBe("msg-1");
+    expect(releases.listReleases("crypto")).toHaveLength(1); // no second release
+
+    // Workspace reset only now.
+    expect(session.activePack()?.id).toBe("stocks");
+    expect(staging.list("crypto")).toEqual([]);
+    expect(fp.closedCount()).toBe(1);
+  });
+
+  it("posts to the RECORD's snapshotted channel (no channel resolver dependency exists)", async () => {
+    await interruptCrypto();
+    const fp = fakePublisher();
+    await resumeInterruptedRelease(resumeDeps({ openPublisher: fp.open }), "crypto");
+    expect(fp.posts[0]!.channelId).toBe("chan-1"); // from the record
+  });
+
+  it("a release interrupted AFTER its last post resumes by posting nothing", async () => {
+    // Build the state directly: all posted, never marked published.
+    const src = join(workDir, "s.png");
+    writeFileSync(src, "png");
+    const rec = releases.createRelease({
+      packId: "crypto", packDisplay: "Crypto", channelId: "c",
+      startedAt: "2026-07-08T10:00:00.000Z",
+      analyses: [{ assetId: "btc", display: "BTC", capturedAt: "t", sourceImagePath: src }],
+    });
+    releases.recordPost("crypto", rec.releaseId, "btc", "msg-old", "t");
+
+    const fp = fakePublisher();
+    const r = await resumeInterruptedRelease(resumeDeps({ openPublisher: fp.open }), "crypto");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.postedNowAssetIds).toEqual([]); // nothing posted now — and that's correct
+    expect(fp.posts).toHaveLength(0);
+    expect(releases.getRelease("crypto", rec.releaseId).publishedAt).not.toBeNull();
+    expect(session.activePack()?.id).toBe("stocks");
+  });
+
+  it("nothing_to_resume when the pack has no interrupted release; nothing changes", async () => {
+    const r = await resumeInterruptedRelease(resumeDeps(), "crypto");
+    expect(r).toEqual({ ok: false, outcome: "nothing_to_resume", packId: "crypto" });
+    expect(session.activePack()?.id).toBe("crypto"); // no advance
+  });
+
+  it("throws LOUDLY (session/archive inconsistency) if the pack is not the in-flight pack", async () => {
+    // Construct the illegitimate state directly: an interrupted release for
+    // stocks while the session's in-flight pack is crypto. Unreachable through
+    // the workflow — corruption class, so it must throw, not soft-fail.
+    const src = join(workDir, "x.png");
+    writeFileSync(src, "png");
+    releases.createRelease({
+      packId: "stocks", packDisplay: "Stocks", channelId: "c",
+      startedAt: "2026-07-08T10:00:00.000Z",
+      analyses: [{ assetId: "aapl", display: "AAPL", capturedAt: "t", sourceImagePath: src }],
+    });
+    await expect(resumeInterruptedRelease(resumeDeps(), "stocks")).rejects.toThrow(/in-flight/);
+    expect(session.activePack()?.id).toBe("crypto"); // untouched
+  });
+
+  it("connect failure leaves the interrupted release and workspace untouched", async () => {
+    const releaseId = await interruptCrypto();
+    const r = await resumeInterruptedRelease(
+      resumeDeps({ openPublisher: async () => { throw new Error("bad token"); } }),
+      "crypto",
+    );
+    expect(r).toMatchObject({ ok: false, outcome: "publisher_connect_failed", detail: "bad token" });
+    expect(releases.getRelease("crypto", releaseId).publishedAt).toBeNull(); // unchanged
+    expect(session.activePack()?.id).toBe("crypto"); // no advance
+    expect(staging.has("crypto", "btc")).toBe(true); // staging kept
+  });
+
+  it("resume interrupted AGAIN stays honest and re-runnable", async () => {
+    const releaseId = await interruptCrypto();
+
+    // First resume attempt also fails on eth.
+    const failing = fakePublisher("eth.png");
+    const r1 = await resumeInterruptedRelease(resumeDeps({ openPublisher: failing.open }), "crypto");
+    expect(r1.ok).toBe(false);
+    if (r1.ok || r1.outcome !== "publish_interrupted") throw new Error("expected publish_interrupted");
+    expect(r1.releaseId).toBe(releaseId);
+    expect(r1.publishedAssetIds).toEqual([]); // nothing earned this run
+    expect(session.activePack()?.id).toBe("crypto"); // still not advanced
+
+    // Second resume succeeds — same release, completed.
+    const fp = fakePublisher();
+    const r2 = await resumeInterruptedRelease(resumeDeps({ openPublisher: fp.open }), "crypto");
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    expect(r2.releaseId).toBe(releaseId);
+    expect(releases.listReleases("crypto")).toHaveLength(1); // still exactly one release
   });
 });
