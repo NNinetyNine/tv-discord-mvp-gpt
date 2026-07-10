@@ -34,6 +34,10 @@ import type { ReleaseStore, ReleaseRecord } from "../release/release-store.ts";
  *    still in flight. Publishing fresh past it (--supersede) is what retires
  *    it; the old record is never modified.
  *
+ * Staging custody is ASSET-keyed: pack membership and canonical order come
+ * from the session's plan (publish) or the Release record (resume), never
+ * from staging. Post-publish clearing targets exactly the release's assets.
+ *
  * Lifecycle is DERIVED, never stored: publishedAt === null means in flight
  * (or interrupted); publishedAt !== null means published.
  *
@@ -218,10 +222,11 @@ export async function publishActivePack(
   }
 
   // 4. Resolve every staged image ONCE into assetId -> path (fail closed).
+  //    Custody is asset-keyed; membership/order came from the plan above.
   const stagedPaths = new Map<string, string>();
   const missing: string[] = [];
   for (const rec of plan.toPublish) {
-    const staged = staging.get(packId, rec.assetId);
+    const staged = staging.get(rec.assetId);
     if (staged === null) missing.push(rec.assetId);
     else stagedPaths.set(rec.assetId, staged.path);
   }
@@ -326,12 +331,13 @@ export async function publishActivePack(
   }
 
   // 10. Fully published: reset the workspace (advance auto-persists), then
-  //     clear staging (best-effort; the archive holds custody now).
+  //     clear exactly the release's assets from staging (best-effort; the
+  //     archive holds custody now).
   session.advance();
 
   let cleared = true;
   try {
-    staging.clear(packId);
+    staging.clear(plan.toPublish.map((rec) => rec.assetId));
   } catch {
     cleared = false;
   }
@@ -459,13 +465,14 @@ export async function resumeInterruptedRelease(
   }
 
   // 6. Fully published: reset the pack's workspace (today: advance the
-  //    single-active session), then clear staging (best-effort; the archive
-  //    has held custody since the release was created).
+  //    single-active session), then clear exactly the release's assets from
+  //    staging (best-effort; the archive has held custody since the release
+  //    was created).
   session.advance();
 
   let cleared = true;
   try {
-    staging.clear(packId);
+    staging.clear(release.analyses.map((a) => a.assetId));
   } catch {
     cleared = false;
   }

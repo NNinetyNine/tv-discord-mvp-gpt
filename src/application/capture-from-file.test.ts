@@ -81,7 +81,7 @@ describe("captureFromFile — end-to-end through captureOnce", () => {
       expect(existsSync(r.stagedPath)).toBe(true);
     }
     expect(session.capturedAssets().map((c) => c.assetId)).toEqual(["btc"]);
-    expect(staging.has("crypto", "btc")).toBe(true);
+    expect(staging.has("btc")).toBe(true);
   });
 
   it("preserves an awkward native filename through the whole chain (BRK.B)", async () => {
@@ -97,7 +97,7 @@ describe("captureFromFile — end-to-end through captureOnce", () => {
 
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.asset.id).toBe("brkb"); // BRK.B survived ingest -> resolve
-    expect(staging.has("stocks", "brkb")).toBe(true);
+    expect(staging.has("brkb")).toBe(true);
   });
 
   it("auto-persists through a persistent session", async () => {
@@ -135,7 +135,7 @@ describe("captureFromFile — outcomes pass through unaltered", () => {
       expect(r.asset.id).toBe("aapl");
       expect(r.activePackId).toBe("crypto");
     } else throw new Error("expected not_in_active_pack");
-    expect(staging.has("crypto", "aapl")).toBe(false);
+    expect(staging.has("aapl")).toBe(false);
     expect(session.capturedAssets()).toEqual([]);
   });
 

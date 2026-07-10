@@ -122,8 +122,8 @@ describe("buildApp — assembles against real config", () => {
       expect(r.asset.id).toBe(asset.id);
       expect(r.packId).toBe(pack.id);
     }
-    // shared app state reflects the capture
+    // shared app state reflects the capture (staging custody is asset-keyed)
     expect(app.session.capturedAssets().map((c) => c.assetId)).toContain(asset.id);
-    expect(app.staging.has(pack.id, asset.id)).toBe(true);
+    expect(app.staging.has(asset.id)).toBe(true);
   });
 });

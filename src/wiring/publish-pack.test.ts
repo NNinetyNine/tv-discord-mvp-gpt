@@ -59,7 +59,7 @@ function fakePublisher(failOnPath?: string) {
 function stageAsset(packId: string, assetId: string): void {
   const src = join(workDir, `src-${packId}-${assetId}.png`);
   writeFileSync(src, `png:${assetId}`);
-  staging.stage(packId, assetId, src);
+  staging.stage(assetId, src);
 }
 
 function captureAll(packId: "crypto" | "stocks"): void {
@@ -136,7 +136,7 @@ describe("gates", () => {
 
   it("missing_staged_images fails closed before any posting", async () => {
     captureAll("crypto");
-    staging.unstage("crypto", "eth");
+    staging.unstage("eth");
     const r = await publishActivePack(deps(), GO);
     expect(r).toMatchObject({ ok: false, outcome: "missing_staged_images", missing: ["eth"] });
     expect(releases.listReleases("crypto")).toHaveLength(0);
@@ -186,9 +186,9 @@ describe("published (happy path)", () => {
     expect(fp.posts.map((p) => p.channelId)).toEqual(["chan-1", "chan-1"]);
     expect(fp.closedCount()).toBe(1);
 
-    // Workspace reset: session advanced to stocks; staging cleared.
+    // Workspace reset: session advanced to stocks; the release's assets cleared.
     expect(session.activePack()?.id).toBe("stocks");
-    expect(staging.list("crypto")).toEqual([]);
+    expect(staging.list()).toEqual([]);
     // Archive custody survives the staging clear.
     expect(existsSync(join(workDir, "archive", "crypto", r.releaseId, "btc.png"))).toBe(true);
   });
@@ -216,7 +216,7 @@ describe("publish_interrupted (honest failure)", () => {
 
     // Workspace untouched; socket closed.
     expect(session.activePack()?.id).toBe("crypto");
-    expect(staging.has("crypto", "btc")).toBe(true);
+    expect(staging.has("btc")).toBe(true);
     expect(fp.closedCount()).toBe(1);
   });
 });
@@ -309,7 +309,7 @@ describe("revision honesty — newest staged image publishes and is archived", (
     captureAll("crypto");
     const newerSrc = join(workDir, "btc-v2.png");
     writeFileSync(newerSrc, "png:btc-v2");
-    staging.stage("crypto", "btc", newerSrc);
+    staging.stage("btc", newerSrc);
     session.capture("btc", "recaptured");
 
     const r = await publishActivePack(deps(), GO);
@@ -328,7 +328,7 @@ describe("publish + persistent session restore (regression)", () => {
     for (const assetId of ["btc", "eth"]) {
       const src = join(workDir, `p-${assetId}.png`);
       writeFileSync(src, `png:${assetId}`);
-      staging.stage("crypto", assetId, src);
+      staging.stage(assetId, src);
       const c = persistent.capture(assetId, `t-${assetId}`);
       if (!c.ok) throw new Error(`test setup: capture rejected for ${assetId}`);
     }
@@ -407,9 +407,9 @@ describe("resume — completing an interrupted release", () => {
     expect(rec.analyses.find((a) => a.assetId === "eth")?.discordMessageId).toBe("msg-1");
     expect(releases.listReleases("crypto")).toHaveLength(1); // no second release
 
-    // Workspace reset only now.
+    // Workspace reset only now; the release's assets cleared from staging.
     expect(session.activePack()?.id).toBe("stocks");
-    expect(staging.list("crypto")).toEqual([]);
+    expect(staging.list()).toEqual([]);
     expect(fp.closedCount()).toBe(1);
   });
 
@@ -471,7 +471,7 @@ describe("resume — completing an interrupted release", () => {
     expect(r).toMatchObject({ ok: false, outcome: "publisher_connect_failed", detail: "bad token" });
     expect(releases.getRelease("crypto", releaseId).publishedAt).toBeNull(); // unchanged
     expect(session.activePack()?.id).toBe("crypto"); // no advance
-    expect(staging.has("crypto", "btc")).toBe(true); // staging kept
+    expect(staging.has("btc")).toBe(true); // staging kept
   });
 
   it("resume interrupted AGAIN stays honest and re-runnable", async () => {

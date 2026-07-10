@@ -15,8 +15,11 @@ import { decide } from "./decide.ts";
  *     membership). Orchestration never re-resolves or re-checks membership.
  *   - validation runs only AFTER an accept decision.
  *   - staging happens BEFORE session.capture(): a staged file with no session
- *     record is benign (Session is source of truth and reconciles), whereas a
- *     recorded capture with no image would be worse.
+ *     record is benign (working state is source of truth and reconciles),
+ *     whereas a recorded capture with no image would be worse.
+ *   - staging custody is ASSET-keyed (custody follows the asset, not the
+ *     pack); the packId in the result comes from the decision, which owns
+ *     membership.
  *   - persistence is automatic and invisible here: if `session` is the
  *     persistent wrapper, its capture() auto-saves.
  *
@@ -115,10 +118,10 @@ export async function captureOnce(deps: CaptureOnceDeps): Promise<CaptureAttempt
     };
   }
 
-  // 4. Stage (before recording in the session).
+  // 4. Stage (before recording in the session). Custody is asset-keyed.
   let stagedPath: string;
   try {
-    stagedPath = staging.stage(packId, asset.id, capture.imagePath).path;
+    stagedPath = staging.stage(asset.id, capture.imagePath).path;
   } catch (e) {
     return { ok: false, outcome: "staging_failed", asset, detail: errMsg(e) };
   }
