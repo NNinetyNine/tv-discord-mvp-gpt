@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Pack } from "./packs.ts";
-import { createPersistentSession, PersistenceError } from "./persistence.ts";
+import { createPersistentSession, createPersistentWorkspace, PersistenceError } from "./persistence.ts";
 
 const packs: Pack[] = [
   { id: "crypto", display: "Crypto", assets: ["btc", "eth", "sol"] },
@@ -117,6 +117,58 @@ describe("auto-save on mutation", () => {
   });
 });
 
+describe("shared persisted workspace + compatibility session (one store, one save)", () => {
+  it("workspace.capture auto-saves and the session observes it immediately", () => {
+    const { workspace, session } = createPersistentWorkspace({ packs, path });
+    const fact = workspace.capture("btc", "t1");
+    expect(fact).toEqual({ assetId: "btc", capturedAt: "t1", revisions: 1 });
+
+    // Same store: the compat session's derived views see it at once.
+    expect(session.pendingAssets()).toEqual(["eth", "sol"]);
+    expect(session.hasCaptured("btc")).toBe(true);
+    expect(session.progress()?.captured).toBe(1);
+
+    // One save discipline: the mutation is already on disk.
+    const onDisk = JSON.parse(readFileSync(path, "utf8"));
+    expect(onDisk.captures).toEqual([{ assetId: "btc", capturedAt: "t1", revisions: 1 }]);
+  });
+
+  it("a session capture is visible through the workspace (same store)", () => {
+    const { workspace, session } = createPersistentWorkspace({ packs, path });
+    session.capture("btc", "t1");
+    expect(workspace.captureOf("btc")).toEqual({ assetId: "btc", capturedAt: "t1", revisions: 1 });
+  });
+
+  it("workspace.capture has NO gates: a non-active-pack asset persists as a fact", () => {
+    const { workspace, session } = createPersistentWorkspace({ packs, path });
+    workspace.capture("aapl", "t1"); // active pack is crypto; no gate on this surface
+
+    const onDisk = JSON.parse(readFileSync(path, "utf8"));
+    expect(onDisk.captures.map((c: { assetId: string }) => c.assetId)).toEqual(["aapl"]);
+    // The compat session's ACTIVE-pack views don't count it — but the fact exists.
+    expect(session.capturedAssets()).toEqual([]);
+    expect(session.hasCaptured("aapl")).toBe(true);
+    expect(workspace.packState("stocks")).toBe("building");
+  });
+
+  it("workspace.resetPack auto-saves", () => {
+    const { workspace } = createPersistentWorkspace({ packs, path });
+    workspace.capture("btc", "t1");
+    workspace.resetPack("crypto");
+    const onDisk = JSON.parse(readFileSync(path, "utf8"));
+    expect(onDisk.captures).toEqual([]);
+  });
+
+  it("workspace facts survive a restart", () => {
+    const first = createPersistentWorkspace({ packs, path });
+    first.workspace.capture("btc", "t1");
+    first.workspace.capture("btc", "t2"); // revision 2
+
+    const second = createPersistentWorkspace({ packs, path });
+    expect(second.workspace.captureOf("btc")).toEqual({ assetId: "btc", capturedAt: "t2", revisions: 2 });
+  });
+});
+
 describe("version-1 migration (one-time, demolition-scheduled)", () => {
   it("migrates a v1 file: captures carry over with revisions 1; cursor preserved", () => {
     writeFileSync(
@@ -204,9 +256,9 @@ describe("fail-closed on bad files", () => {
   });
 
   it("a v2 capture outside the active pack is ACCEPTED (workspace fact, not corruption)", () => {
-    // The workspace models captures for any asset (held work arrives in a
-    // later step); rejecting membership here would rebuild Fossil 1 in the
-    // new format. The compatibility layer's views simply don't count it.
+    // The workspace models captures for any asset (held work, §4.6);
+    // rejecting membership here would rebuild Fossil 1 in the new format.
+    // The compatibility layer's views simply don't count it.
     writeFileSync(
       path,
       JSON.stringify({

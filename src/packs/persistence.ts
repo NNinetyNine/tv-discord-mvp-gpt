@@ -13,24 +13,29 @@ import {
 import { createWorkspace, type Workspace, type AssetCapture } from "./workspace.ts";
 
 /**
- * Persistent working state — the WORKSPACE persisted, exposed through the
- * legacy PackSession interface as a COMPATIBILITY LAYER (Session Evolution
- * step 2).
+ * Persistent working state — ONE persisted Workspace, exposed through TWO
+ * surfaces over the SAME instance and the SAME save discipline (Session
+ * Evolution step 4):
  *
- * Inside: the pure Workspace (asset-attached capture facts; every pack view
- * derived — Constitution §2.1, §3-Workspace) plus ONE piece of transitional
- * state, the pack cursor (completedPackIds). Outside: the exact PackSession
- * surface every current consumer uses, byte-for-byte behavior-compatible —
- * same outcomes, same rejections, same error messages, same auto-save timing.
+ *   - `workspace`: the constitutional surface (asset-attached capture facts;
+ *     derived pack views — Constitution §2.1, §3-Workspace, §4.1). Its two
+ *     mutations (capture, resetPack) auto-save.
+ *   - `session`: the legacy PackSession COMPATIBILITY surface, byte-for-byte
+ *     behavior-compatible with the old session (same outcomes, rejections,
+ *     error messages, save timing). Publish/resume still consume it.
+ *
+ * Both surfaces read and write the one underlying Workspace: a capture
+ * through either is immediately visible through the other, and every accepted
+ * mutation persists through the one shared save().
  *
  * TRANSITIONAL — DEMOLITION-SCHEDULED (Architecture §6): the cursor
- * (completedPackIds, and with it activePack/nextPack/advance/isComplete and
- * the capture gates) is COMPATIBILITY-LAYER state, not Workspace state. The
- * Constitution has no cursor (§4.1); it survives here solely so this step
- * changes no behavior. It is deleted in the later step that removes advance()
- * and the PackSession surface, at which point the durable format reaches its
- * ratified final form (no pack structure at all — Session Evolution Ruling 2)
- * and the prefix validation below dies with it.
+ * (completedPackIds, and with it the entire PackSession surface: activePack/
+ * nextPack/advance/isComplete and the capture gates) is COMPATIBILITY-LAYER
+ * state, not Workspace state. The Constitution has no cursor (§4.1). It is
+ * deleted in the step that removes the PackSession surface, at which point
+ * the durable format reaches its ratified final form (no pack structure at
+ * all — Session Evolution Ruling 2) and the prefix validation below dies with
+ * it. createPersistentSession() is part of that surface and dies with it.
  *
  * Durable format (version 2):
  *   { version: 2, completedPackIds: string[], captures: AssetCapture[] }
@@ -58,10 +63,9 @@ import { createWorkspace, type Workspace, type AssetCapture } from "./workspace.
  * Fail closed: any corrupt, unsupported, malformed, or incompatible saved
  * file throws PersistenceError. Progress is never silently discarded.
  *
- * Auto-save happens only after a successful state mutation (an accepted
- * capture or an advance). A rejected capture does not write. Writes use the
- * same plain-write discipline as before — durability behavior is unchanged
- * in this step by explicit ruling.
+ * Auto-save happens only after a successful state mutation. A rejected compat
+ * capture does not write. Writes use the same plain-write discipline as
+ * before — durability behavior is unchanged by explicit ruling.
  *
  * No singleton, no runtime imports, no UI. Packs and the file path are
  * injected.
@@ -80,6 +84,14 @@ interface PersistedState {
   readonly version: typeof VERSION;
   readonly completedPackIds: readonly string[];
   readonly captures: readonly AssetCapture[];
+}
+
+/** The two surfaces over one persisted Workspace. */
+export interface PersistentWorkspace {
+  /** The constitutional surface; capture()/resetPack() auto-save. */
+  readonly workspace: Workspace;
+  /** TRANSITIONAL compatibility surface (legacy PackSession); dies with the cursor. */
+  readonly session: PackSession;
 }
 
 function isStringArray(v: unknown): v is string[] {
@@ -203,26 +215,19 @@ function writeState(path: string, state: PersistedState): void {
 }
 
 /**
- * The compatibility layer: the legacy PackSession surface over a Workspace
- * plus the transitional cursor. Behavior-identical to the old session,
- * including every rejection and error message.
+ * The compatibility layer: the legacy PackSession surface over the shared
+ * Workspace plus the transitional cursor. Behavior-identical to the old
+ * session, including every rejection and error message. TRANSITIONAL —
+ * dies with the cursor.
  */
 function makeCompatSession(
   packs: readonly Pack[],
   workspace: Workspace,
   completed: string[],
-  path: string,
+  save: () => void,
 ): PackSession {
   function active(): Pack | null {
     return completed.length < packs.length ? (packs[completed.length] as Pack) : null;
-  }
-
-  function save(): void {
-    writeState(path, {
-      version: VERSION,
-      completedPackIds: [...completed],
-      captures: workspace.captures(),
-    });
   }
 
   function toRecord(c: AssetCapture): CaptureRecord {
@@ -326,18 +331,49 @@ function makeCompatSession(
 }
 
 /**
- * Create a persistent session for the given packs at `path`.
+ * The auto-saving Workspace surface: reads delegate to the shared instance;
+ * the two mutations persist through the shared save().
+ */
+function makePersistedWorkspace(workspace: Workspace, save: () => void): Workspace {
+  return {
+    packs: () => workspace.packs(),
+    pack: (packId) => workspace.pack(packId),
+    capture(assetId: string, capturedAt: string): AssetCapture {
+      const fact = workspace.capture(assetId, capturedAt);
+      save(); // save only on successful mutation
+      return fact;
+    },
+    captureOf: (assetId) => workspace.captureOf(assetId),
+    captures: () => workspace.captures(),
+    packState: (packId) => workspace.packState(packId),
+    pendingAssets: (packId) => workspace.pendingAssets(packId),
+    capturedFor: (packId) => workspace.capturedFor(packId),
+    resetPack(packId: string): void {
+      workspace.resetPack(packId);
+      save();
+    },
+  };
+}
+
+/**
+ * Create the persisted working state at `path`: ONE Workspace, TWO surfaces.
  *  - file missing      -> fresh state, written to disk
  *  - version-1 file    -> migrated, immediately rewritten as version 2
  *  - version-2 file    -> restored (fail-closed on corrupt/incompatible)
  */
-export function createPersistentSession(opts: { packs: readonly Pack[]; path: string }): PackSession {
+export function createPersistentWorkspace(opts: {
+  packs: readonly Pack[];
+  path: string;
+}): PersistentWorkspace {
   const { packs, path } = opts;
 
   if (packs.length === 0) {
     // Same guard (and error type) the pure session enforced.
     throw new SessionError("cannot create a session with no packs");
   }
+
+  let workspace: Workspace;
+  let completed: string[];
 
   if (existsSync(path)) {
     let raw: unknown;
@@ -349,19 +385,37 @@ export function createPersistentSession(opts: { packs: readonly Pack[]; path: st
       );
     }
     const { state, migrated } = parseState(raw, packs);
-    const workspace = createWorkspace(packs, state.captures);
-    const completed = [...state.completedPackIds];
+    workspace = createWorkspace(packs, state.captures);
+    completed = [...state.completedPackIds];
     if (migrated) {
       // Rewrite migrated state in the new format immediately: the v1 shape
       // is never read twice and never written again.
       writeState(path, { version: VERSION, completedPackIds: completed, captures: workspace.captures() });
     }
-    return makeCompatSession(packs, workspace, completed, path);
+  } else {
+    workspace = createWorkspace(packs);
+    completed = [];
+    writeState(path, { version: VERSION, completedPackIds: [], captures: [] }); // persist fresh state immediately
   }
 
-  const workspace = createWorkspace(packs);
-  const completed: string[] = [];
-  const session = makeCompatSession(packs, workspace, completed, path);
-  writeState(path, { version: VERSION, completedPackIds: [], captures: [] }); // persist the fresh state immediately
-  return session;
+  const save = (): void => {
+    writeState(path, {
+      version: VERSION,
+      completedPackIds: [...completed],
+      captures: workspace.captures(),
+    });
+  };
+
+  return {
+    workspace: makePersistedWorkspace(workspace, save),
+    session: makeCompatSession(packs, workspace, completed, save),
+  };
+}
+
+/**
+ * TRANSITIONAL — legacy factory for consumers still on the PackSession
+ * surface. Delegates to createPersistentWorkspace; dies with that surface.
+ */
+export function createPersistentSession(opts: { packs: readonly Pack[]; path: string }): PackSession {
+  return createPersistentWorkspace(opts).session;
 }

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 
 import { buildApp, type App } from "../composition/app.ts";
 import type { CaptureAttemptResult } from "../wiring/capture-once.ts";
+import type { Pack } from "../packs/packs.ts";
 import type { Asset } from "../types.ts";
 
 /**
@@ -13,20 +14,24 @@ import type { Asset } from "../types.ts";
  *
  *   tsx src/scripts/ingest-file.ts <path-to-export.png>
  *
- * It builds the app (composition root), ingests the file through the proven
- * file-ingest path (captureFromFile -> captureOnce -> resolve/decide/validate/
- * stage/record), and prints the outcome.
+ * ROUTING IS BY IDENTITY (Constitution §4.1): the chart lands on its Asset —
+ * there is no active pack and no targeting. The receipt then reports the
+ * FACTS: which pack (if any) the capture counts toward, that pack's remaining
+ * required assets, or — for an asset in no pack — that the work is held
+ * (§4.6: it exists, counts toward nothing, and starts counting the moment a
+ * pack includes the asset).
  *
  * This is a THIN delivery-layer trigger. It owns only: argument parsing, path
- * defaults, invoking buildApp/captureFromFile, and printing. All assembly lives
- * in buildApp; all orchestration in the services. Nothing here is imported by
+ * defaults, invoking buildApp/captureFromFile, and printing (including the
+ * local three-line membership derivation over workspace.packs() — the
+ * delivery layer composes sentences from facts). Nothing here is imported by
  * the runtime, so `npm run start` is untouched.
  *
  * Configuration:
- *   - session file, staging dir, and release archive default to ./session.json,
- *     ./staging and ./archive, resolved against process.cwd(). RUN THIS FROM THE
- *     PROJECT ROOT so repeated runs accumulate into the same session/staging
- *     (capture one asset, run again for the next, all within the active pack).
+ *   - working-state file, staging dir, and release archive default to
+ *     ./session.json, ./staging and ./archive, resolved against process.cwd().
+ *     RUN THIS FROM THE PROJECT ROOT so repeated runs accumulate into the same
+ *     workspace/staging.
  *   - IMAGE_OUTPUT_DIR (existing env var, read by the file-ingest source) still
  *     controls where branded custody copies land; this script does not touch it.
  *
@@ -43,22 +48,20 @@ function label(app: App, assetId: string): string {
   return asset ? `${asset.id} (${asset.display})` : assetId;
 }
 
-/** Print the active pack's progress: captured count + pending assets. */
-function printProgress(app: App): void {
-  const pack = app.session.activePack();
-  if (pack === null) {
-    console.log("Session complete — no active pack remaining.");
-    return;
-  }
-  const progress = app.session.progress();
-  const pending = app.session.pendingAssets();
-  const capturedCount = progress ? progress.captured : app.session.capturedAssets().length;
+/** The pack containing this asset, derived locally from the definitions (§9.1: at most one). */
+function packContaining(app: App, assetId: string): Pack | null {
+  return app.workspace.packs().find((p) => p.assets.includes(assetId)) ?? null;
+}
 
-  console.log(`\nActive pack: ${pack.id} (${pack.display}) — ${capturedCount}/${pack.assets.length} captured`);
+/** Print the receipt facts for the pack this capture counts toward. */
+function printPackFacts(app: App, pack: Pack): void {
+  const pending = app.workspace.pendingAssets(pack.id);
+  const captured = pack.assets.length - pending.length;
+  console.log(`\nCounts toward ${pack.id} (${pack.display}) — ${captured}/${pack.assets.length} captured`);
   if (pending.length === 0) {
-    console.log("All assets in this pack are captured.");
+    console.log(`${pack.display} is COMPLETE — ready to publish.`);
   } else {
-    console.log("Pending:");
+    console.log("Remaining required:");
     for (const assetId of pending) {
       console.log(`  - ${label(app, assetId)}`);
     }
@@ -68,12 +71,21 @@ function printProgress(app: App): void {
 /** Print the capture outcome. Returns the process exit code (0 only on staged). */
 function report(app: App, filePath: string, result: CaptureAttemptResult): number {
   if (result.ok) {
-    // outcome === "staged"
-    const replaced = result.replaced ? " (replaced an existing capture)" : "";
-    console.log(`✓ Staged ${label(app, result.asset.id)} into pack "${result.packId}"${replaced}`);
+    // outcome === "staged"; replacement is derived: revisions > 1.
+    const revision = result.revisions > 1 ? ` (Revision ${result.revisions} — replaced the previous capture)` : "";
+    console.log(`✓ Staged ${label(app, result.asset.id)}${revision}`);
     console.log(`  source:  ${filePath}`);
     console.log(`  staged:  ${result.stagedPath}`);
-    printProgress(app);
+
+    const pack = packContaining(app, result.asset.id);
+    if (pack === null) {
+      // Held work (§4.6): it exists, counts toward nothing, and starts
+      // counting the moment a pack includes this asset.
+      console.log(`\nNo pack contains ${result.asset.id} — the work is held.`);
+      console.log("It counts toward nothing until a pack's definition includes this asset.");
+    } else {
+      printPackFacts(app, pack);
+    }
     return 0;
   }
 
@@ -89,18 +101,6 @@ function report(app: App, filePath: string, result: CaptureAttemptResult): numbe
       console.error(`✗ Symbol "${result.symbol}" is not in the registry.`);
       console.error("  The exported filename's symbol did not match any registry `tradingView` token.");
       console.error("  If this is a real, expected chart, the registry or normalizer may need reconciling.");
-      return 1;
-
-    case "no_active_pack":
-      console.error("✗ No active pack — the session is complete. Nothing to capture into.");
-      return 1;
-
-    case "not_in_active_pack":
-      console.error(
-        `✗ ${label(app, result.asset.id)} is not in the active pack "${result.activePackId}".`,
-      );
-      console.error("  Capture assets belonging to the active pack, or advance/publish to reach its pack.");
-      printProgress(app);
       return 1;
 
     case "validation_failed": {

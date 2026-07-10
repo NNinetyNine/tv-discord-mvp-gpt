@@ -10,8 +10,8 @@ vi.mock("../capture/branding.ts", () => ({ applyBranding: vi.fn(async () => {}) 
 import type { Pack } from "../packs/packs.ts";
 import { buildRegistry } from "../registry/registry.ts";
 import { createResolver } from "../resolver/index.ts";
-import { createSession } from "../packs/session.ts";
-import { createPersistentSession } from "../packs/persistence.ts";
+import { createWorkspace } from "../packs/workspace.ts";
+import { createPersistentWorkspace } from "../packs/persistence.ts";
 import { createStagingStore, type StagingStore } from "../wiring/staging.ts";
 import { captureFromFile, type CaptureFromFileDeps } from "./capture-from-file.ts";
 
@@ -64,11 +64,11 @@ function makeExport(name: string): string {
 
 describe("captureFromFile — end-to-end through captureOnce", () => {
   it("ingests an exported file, resolves, validates, stages, and records", async () => {
-    const session = createSession(packs); // active = crypto
+    const workspace = createWorkspace(packs);
     const r = await captureFromFile({
       filePath: makeExport("BTCUSD_2026-06-25_01-18-55.png"),
       resolver,
-      session,
+      workspace,
       staging,
       validate: passValidator,
     });
@@ -77,20 +77,20 @@ describe("captureFromFile — end-to-end through captureOnce", () => {
     if (r.ok) {
       expect(r.outcome).toBe("staged");
       expect(r.asset.id).toBe("btc");
-      expect(r.packId).toBe("crypto");
+      expect(r.revisions).toBe(1);
       expect(existsSync(r.stagedPath)).toBe(true);
     }
-    expect(session.capturedAssets().map((c) => c.assetId)).toEqual(["btc"]);
+    expect(workspace.captureOf("btc")).not.toBeNull();
     expect(staging.has("btc")).toBe(true);
   });
 
   it("preserves an awkward native filename through the whole chain (BRK.B)", async () => {
-    const session = createSession(packs);
-    session.advance(); // -> stocks active (brkb lives there)
+    const workspace = createWorkspace(packs);
+    // Routing is by identity: no cursor to advance — brkb ingests directly.
     const r = await captureFromFile({
       filePath: makeExport("BRK.B_2026-06-25_01-00-00.png"),
       resolver,
-      session,
+      workspace,
       staging,
       validate: passValidator,
     });
@@ -98,21 +98,37 @@ describe("captureFromFile — end-to-end through captureOnce", () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.asset.id).toBe("brkb"); // BRK.B survived ingest -> resolve
     expect(staging.has("brkb")).toBe(true);
+    expect(workspace.packState("stocks")).toBe("building");
   });
 
-  it("auto-persists through a persistent session", async () => {
-    const sessionPath = join(outDir, "session.json");
-    const session = createPersistentSession({ packs, path: sessionPath });
+  it("captures for any pack without a gate (was not_in_active_pack; the gate is deleted)", async () => {
+    const workspace = createWorkspace(packs);
     const r = await captureFromFile({
-      filePath: makeExport("ETHUSD_2026-06-25_01-18-55.png"),
+      filePath: makeExport("AAPL_2026-06-25_01-21-06.png"),
       resolver,
-      session,
+      workspace,
       staging,
       validate: passValidator,
     });
 
     expect(r.ok).toBe(true);
-    // Version-2 persisted shape: workspace capture facts (with revision counts).
+    if (r.ok) expect(r.asset.id).toBe("aapl");
+    expect(workspace.captureOf("aapl")).not.toBeNull();
+    expect(staging.has("aapl")).toBe(true);
+  });
+
+  it("auto-persists through the persisted workspace surface", async () => {
+    const sessionPath = join(outDir, "session.json");
+    const { workspace } = createPersistentWorkspace({ packs, path: sessionPath });
+    const r = await captureFromFile({
+      filePath: makeExport("ETHUSD_2026-06-25_01-18-55.png"),
+      resolver,
+      workspace,
+      staging,
+      validate: passValidator,
+    });
+
+    expect(r.ok).toBe(true);
     const onDisk = JSON.parse(readFileSync(sessionPath, "utf8"));
     expect(onDisk.captures.map((c: { assetId: string }) => c.assetId)).toEqual(["eth"]);
     expect(onDisk.captures[0].revisions).toBe(1); // first capture: revision 1 persisted
@@ -120,47 +136,29 @@ describe("captureFromFile — end-to-end through captureOnce", () => {
 });
 
 describe("captureFromFile — outcomes pass through unaltered", () => {
-  it("returns not_in_active_pack for an exported asset outside the active pack", async () => {
-    const session = createSession(packs); // active = crypto; aapl is in stocks
-    const r = await captureFromFile({
-      filePath: makeExport("AAPL_2026-06-25_01-21-06.png"),
-      resolver,
-      session,
-      staging,
-      validate: passValidator,
-    });
-
-    expect(r.ok).toBe(false);
-    if (!r.ok && r.outcome === "not_in_active_pack") {
-      expect(r.asset.id).toBe("aapl");
-      expect(r.activePackId).toBe("crypto");
-    } else throw new Error("expected not_in_active_pack");
-    expect(staging.has("aapl")).toBe(false);
-    expect(session.capturedAssets()).toEqual([]);
-  });
-
   it("returns unknown_symbol for an exported file with no registry match", async () => {
-    const session = createSession(packs);
+    const workspace = createWorkspace(packs);
     const r = await captureFromFile({
       filePath: makeExport("DOGEUSD_2026-06-25_01-30-00.png"),
       resolver,
-      session,
+      workspace,
       staging,
       validate: passValidator,
     });
     expect(r).toMatchObject({ ok: false, outcome: "unknown_symbol" });
+    expect(workspace.captures()).toEqual([]);
   });
 
   it("maps a missing export file to capture_failed (ingest throws, caught by captureOnce)", async () => {
-    const session = createSession(packs);
+    const workspace = createWorkspace(packs);
     const r = await captureFromFile({
       filePath: join(exportDir, "does-not-exist.png"),
       resolver,
-      session,
+      workspace,
       staging,
       validate: passValidator,
     });
     expect(r).toMatchObject({ ok: false, outcome: "capture_failed" });
-    expect(session.capturedAssets()).toEqual([]);
+    expect(workspace.captures()).toEqual([]);
   });
 });

@@ -1,7 +1,8 @@
 import { loadRegistry, type Registry } from "../registry/registry.ts";
 import { createResolver, type Resolver } from "../resolver/index.ts";
 import { loadPacks } from "../packs/packs.ts";
-import { createPersistentSession } from "../packs/persistence.ts";
+import { createPersistentWorkspace } from "../packs/persistence.ts";
+import type { Workspace } from "../packs/workspace.ts";
 import type { PackSession } from "../packs/session.ts";
 import { createStagingStore, type StagingStore } from "../wiring/staging.ts";
 import { loadChannelResolver } from "../wiring/channels.ts";
@@ -23,22 +24,22 @@ import {
 } from "../wiring/publish-pack.ts";
 
 /**
- * Composition root for the new (Snapshot-centric) architecture.
+ * Composition root for the new architecture.
  *
  * buildApp() assembles the REAL application dependencies from config and wires
- * the existing application/orchestration services over them. It does not define
- * new use cases — it composes captureFromFile (application layer) and the
- * publish/resume orchestrations (wiring) over a SHARED session, staging store,
- * and release store, which are the app instance's state (constructed once, not
- * per operation).
+ * the existing application/orchestration services over them. The persisted
+ * working state is ONE Workspace exposed through TWO surfaces (one save
+ * discipline, one store): capture runs on the constitutional `workspace`
+ * surface (routing by identity — §4.1); publish and resume remain on the
+ * TRANSITIONAL `session` compatibility surface until their own migration step
+ * retires it. A capture through one surface is immediately visible through
+ * the other.
  *
  * Pure assembly: buildApp() does NOT decide filesystem locations or read
  * process.env. sessionPath, stagingDir and archiveDir are required inputs —
  * each caller (tests, the CLI scripts, the eventual runtime) supplies the
- * locations. This keeps the composition root reusable across all of them
- * without embedding any environment or path policy of its own. The one env
- * read on the publish path (DISCORD_BOT_TOKEN) lives inside the publisher
- * adapter, which owns that installation concern.
+ * locations. The one env read on the publish path (DISCORD_BOT_TOKEN) lives
+ * inside the publisher adapter, which owns that installation concern.
  *
  * The composition root is also the ONLY place the real clock is bound
  * (now: () => new Date().toISOString()); orchestration receives time as a
@@ -63,7 +64,7 @@ import {
  */
 
 export interface BuildAppOptions {
-  /** Where the persistent session file lives (required — no default). */
+  /** Where the persistent working-state file lives (required — no default). */
   readonly sessionPath: string;
   /** Base directory for the staging store (required — no default). */
   readonly stagingDir: string;
@@ -81,6 +82,9 @@ export interface App {
   /** Asset catalog (display names, tradingView tokens, id->Asset via all()). */
   readonly registry: Registry;
   readonly resolver: Resolver;
+  /** The constitutional working-state surface (capture facts, derived views). */
+  readonly workspace: Workspace;
+  /** TRANSITIONAL compatibility surface; publish/resume still consume it. */
   readonly session: PackSession;
   readonly staging: StagingStore;
   readonly releases: ReleaseStore;
@@ -96,7 +100,7 @@ export function buildApp(opts: BuildAppOptions): App {
   // --- shared infrastructure (constructed once; app instance state) ---
   const registry = loadRegistry();
   const resolver = createResolver(registry);
-  const session = createPersistentSession({
+  const { workspace, session } = createPersistentWorkspace({
     packs: loadPacks(),
     path: opts.sessionPath,
   });
@@ -122,11 +126,12 @@ export function buildApp(opts: BuildAppOptions): App {
   return {
     registry,
     resolver,
+    workspace,
     session,
     staging,
     releases,
     captureFromFile(filePath: string): Promise<CaptureAttemptResult> {
-      return captureFromFile({ filePath, resolver, session, staging, validate });
+      return captureFromFile({ filePath, resolver, workspace, staging, validate });
     },
     publishActivePack(options: PublishOptions): Promise<PublishPackResult> {
       return publishActivePack(

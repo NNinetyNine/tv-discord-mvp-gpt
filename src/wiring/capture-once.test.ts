@@ -5,11 +5,10 @@ import { join } from "node:path";
 
 import type { Pack } from "../packs/packs.ts";
 import type { Snapshot, SnapshotSource } from "../snapshot/snapshot.ts";
-import type { PackSession } from "../packs/session.ts";
 import { buildRegistry } from "../registry/registry.ts";
 import { createResolver } from "../resolver/index.ts";
-import { createSession } from "../packs/session.ts";
-import { createPersistentSession } from "../packs/persistence.ts";
+import { createWorkspace, type Workspace } from "../packs/workspace.ts";
+import { createPersistentWorkspace } from "../packs/persistence.ts";
 import { createStagingStore, type StagingStore } from "./staging.ts";
 import { captureOnce, type CaptureOnceDeps } from "./capture-once.ts";
 
@@ -20,6 +19,7 @@ const registryData = {
   btc:  { tradingView: "BTCUSD", display: "Bitcoin",  channel: "crypto" },
   eth:  { tradingView: "ETHUSD", display: "Ethereum", channel: "crypto" },
   aapl: { tradingView: "AAPL",   display: "Apple",    channel: "stocks" },
+  spx:  { tradingView: "SPX",    display: "S&P 500",  channel: "indices" }, // in registry, in NO pack
 };
 const resolver = createResolver(buildRegistry(registryData, channels));
 
@@ -72,67 +72,94 @@ afterEach(() => {
 function deps(
   source: SnapshotSource,
   validate: CaptureOnceDeps["validate"],
-  session: PackSession,
+  workspace: Workspace,
 ): CaptureOnceDeps {
-  return { capturer: source, resolver, session, staging, validate };
+  return { capturer: source, resolver, workspace, staging, validate };
 }
 
-/** Snapshot of all observable Session + Staging state, for invariant checks. */
-function snap(session: PackSession) {
+/** Snapshot of all observable Workspace + Staging state, for invariant checks. */
+function snap(workspace: Workspace) {
   return {
-    completed: [...session.completedPackIds()],
-    captured: session.capturedAssets().map((c) => c.assetId),
+    captured: workspace.captures().map((c) => c.assetId).sort(),
     staging: staging.list().map((s) => s.assetId),
   };
 }
 
 // ---- accept path ------------------------------------------------------------
 
-describe("captureOnce — accept path", () => {
-  it("stages a valid in-pack capture and records it in the session", async () => {
-    const session = createSession(packs);
+describe("captureOnce — accept path (routing by identity)", () => {
+  it("stages a valid capture and records the fact on the workspace", async () => {
+    const workspace = createWorkspace(packs);
     const r = await captureOnce(
-      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath }), passValidator, session),
+      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath }), passValidator, workspace),
     );
 
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.outcome).toBe("staged");
       expect(r.asset.id).toBe("btc");
-      expect(r.packId).toBe("crypto");
-      expect(r.replaced).toBe(false);
+      expect(r.revisions).toBe(1);
       expect(existsSync(r.stagedPath)).toBe(true);
     }
-    expect(session.capturedAssets().map((c) => c.assetId)).toEqual(["btc"]);
+    expect(workspace.captureOf("btc")).not.toBeNull();
+    expect(workspace.packState("crypto")).toBe("building");
     expect(staging.has("btc")).toBe(true);
   });
 
-  it("reports replaced=true on recapture (newest wins) without duplicating", async () => {
-    const session = createSession(packs);
-    await captureOnce(deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath }), passValidator, session));
+  it("recapture increments revisions (replacement derived as revisions > 1) without duplicating", async () => {
+    const workspace = createWorkspace(packs);
+    await captureOnce(deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath }), passValidator, workspace));
     const r = await captureOnce(
-      deps(fakeSource({ filename: "BTCUSD_2026-06-25_02-00-00.png", imagePath }), passValidator, session),
+      deps(fakeSource({ filename: "BTCUSD_2026-06-25_02-00-00.png", imagePath }), passValidator, workspace),
     );
 
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.replaced).toBe(true);
-    expect(session.capturedAssets().map((c) => c.assetId)).toEqual(["btc"]);
+    if (r.ok) {
+      expect(r.revisions).toBe(2);
+      expect(r.revisions > 1).toBe(true); // "replaced", derived
+    }
+    expect(workspace.captures()).toHaveLength(1);
     expect(staging.list().map((s) => s.assetId)).toEqual(["btc"]);
   });
 
-  it("auto-persists through the persistent session wrapper", async () => {
-    const sessionPath = join(srcDir, "session.json");
-    const session = createPersistentSession({ packs, path: sessionPath });
+  it("captures an asset from ANY pack — no active-pack gate exists", async () => {
+    const workspace = createWorkspace(packs);
     const r = await captureOnce(
-      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath, capturedAt: "T-CAP" }), passValidator, session),
+      deps(fakeSource({ filename: "AAPL_2026-06-25_01-21-06.png", imagePath }), passValidator, workspace),
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.asset.id).toBe("aapl");
+    // Membership affected only what it counts toward: stocks is now complete.
+    expect(workspace.packState("stocks")).toBe("complete");
+    expect(workspace.packState("crypto")).toBe("empty");
+  });
+
+  it("captures an asset in NO pack — held work simply exists (§4.6)", async () => {
+    const workspace = createWorkspace(packs);
+    const r = await captureOnce(
+      deps(fakeSource({ filename: "SPX_2026-06-25_01-30-00.png", imagePath }), passValidator, workspace),
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.asset.id).toBe("spx");
+    expect(workspace.captureOf("spx")).not.toBeNull();
+    expect(staging.has("spx")).toBe(true);
+    // Counts toward nothing: every pack view is unaffected.
+    expect(workspace.packState("crypto")).toBe("empty");
+    expect(workspace.packState("stocks")).toBe("empty");
+  });
+
+  it("auto-persists through the persisted workspace surface", async () => {
+    const sessionPath = join(srcDir, "session.json");
+    const { workspace } = createPersistentWorkspace({ packs, path: sessionPath });
+    const r = await captureOnce(
+      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath, capturedAt: "T-CAP" }), passValidator, workspace),
     );
 
     expect(r.ok).toBe(true);
-    // Version-2 persisted shape: workspace capture facts (with revision counts).
     const onDisk = JSON.parse(readFileSync(sessionPath, "utf8"));
     expect(onDisk.captures.map((c: { assetId: string }) => c.assetId)).toEqual(["btc"]);
     expect(onDisk.captures[0].capturedAt).toBe("T-CAP");
-    expect(onDisk.captures[0].revisions).toBe(1); // first capture: revision 1 persisted
+    expect(onDisk.captures[0].revisions).toBe(1);
   });
 });
 
@@ -140,54 +167,33 @@ describe("captureOnce — accept path", () => {
 
 describe("captureOnce — operational outcomes (result shape)", () => {
   it("capture_failed when the source throws", async () => {
-    const session = createSession(packs);
+    const workspace = createWorkspace(packs);
     const r = await captureOnce(
-      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath, fail: true }), passValidator, session),
+      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath, fail: true }), passValidator, workspace),
     );
     expect(r).toMatchObject({ ok: false, outcome: "capture_failed" });
   });
 
   it("unparseable_filename for an empty filename", async () => {
-    const session = createSession(packs);
-    const r = await captureOnce(deps(fakeSource({ filename: "", imagePath }), passValidator, session));
+    const workspace = createWorkspace(packs);
+    const r = await captureOnce(deps(fakeSource({ filename: "", imagePath }), passValidator, workspace));
     expect(r).toMatchObject({ ok: false, outcome: "unparseable_filename" });
   });
 
   it("unknown_symbol carries the symbol", async () => {
-    const session = createSession(packs);
+    const workspace = createWorkspace(packs);
     const r = await captureOnce(
-      deps(fakeSource({ filename: "DOGEUSD_2026-06-25_01-30-00.png", imagePath }), passValidator, session),
+      deps(fakeSource({ filename: "DOGEUSD_2026-06-25_01-30-00.png", imagePath }), passValidator, workspace),
     );
     expect(r.ok).toBe(false);
     if (!r.ok && r.outcome === "unknown_symbol") expect(r.symbol).toBe("DOGEUSD");
     else throw new Error("expected unknown_symbol");
   });
 
-  it("not_in_active_pack carries the asset and active pack id", async () => {
-    const session = createSession(packs); // active = crypto
-    const r = await captureOnce(
-      deps(fakeSource({ filename: "AAPL_2026-06-25_01-21-06.png", imagePath }), passValidator, session),
-    );
-    expect(r.ok).toBe(false);
-    if (!r.ok && r.outcome === "not_in_active_pack") {
-      expect(r.asset.id).toBe("aapl");
-      expect(r.activePackId).toBe("crypto");
-    } else throw new Error("expected not_in_active_pack");
-  });
-
-  it("no_active_pack when the session is complete", async () => {
-    const session = createSession([{ id: "only", display: "Only", assets: ["btc"] }]);
-    session.advance(); // complete
-    const r = await captureOnce(
-      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath }), passValidator, session),
-    );
-    expect(r).toMatchObject({ ok: false, outcome: "no_active_pack" });
-  });
-
   it("validation_failed carries the asset, reason, and checks", async () => {
-    const session = createSession(packs);
+    const workspace = createWorkspace(packs);
     const r = await captureOnce(
-      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath }), failValidator, session),
+      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath }), failValidator, workspace),
     );
     expect(r.ok).toBe(false);
     if (!r.ok && r.outcome === "validation_failed") {
@@ -198,10 +204,10 @@ describe("captureOnce — operational outcomes (result shape)", () => {
   });
 
   it("staging_failed when the source image is missing", async () => {
-    const session = createSession(packs);
+    const workspace = createWorkspace(packs);
     const missing = join(srcDir, "does-not-exist.png");
     const r = await captureOnce(
-      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath: missing }), passValidator, session),
+      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath: missing }), passValidator, workspace),
     );
     expect(r.ok).toBe(false);
     if (!r.ok && r.outcome === "staging_failed") expect(r.asset.id).toBe("btc");
@@ -209,78 +215,57 @@ describe("captureOnce — operational outcomes (result shape)", () => {
   });
 });
 
-// ---- invariants: every non-success leaves Session AND Staging unchanged ------
+// ---- invariants: every non-success leaves Workspace AND Staging unchanged ----
 
 describe("captureOnce — invariants (no side effects on non-success)", () => {
-  it("capture_failed leaves session and staging unchanged", async () => {
-    const session = createSession(packs);
-    const before = snap(session);
+  it("capture_failed leaves workspace and staging unchanged", async () => {
+    const workspace = createWorkspace(packs);
+    const before = snap(workspace);
     const r = await captureOnce(
-      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath, fail: true }), passValidator, session),
+      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath, fail: true }), passValidator, workspace),
     );
     expect(r.ok).toBe(false);
-    expect(snap(session)).toEqual(before);
+    expect(snap(workspace)).toEqual(before);
   });
 
-  it("unparseable_filename leaves session and staging unchanged", async () => {
-    const session = createSession(packs);
-    const before = snap(session);
-    const r = await captureOnce(deps(fakeSource({ filename: "", imagePath }), passValidator, session));
+  it("unparseable_filename leaves workspace and staging unchanged", async () => {
+    const workspace = createWorkspace(packs);
+    const before = snap(workspace);
+    const r = await captureOnce(deps(fakeSource({ filename: "", imagePath }), passValidator, workspace));
     expect(r.ok).toBe(false);
-    expect(snap(session)).toEqual(before);
+    expect(snap(workspace)).toEqual(before);
   });
 
-  it("unknown_symbol leaves session and staging unchanged", async () => {
-    const session = createSession(packs);
-    const before = snap(session);
+  it("unknown_symbol leaves workspace and staging unchanged", async () => {
+    const workspace = createWorkspace(packs);
+    const before = snap(workspace);
     const r = await captureOnce(
-      deps(fakeSource({ filename: "DOGEUSD_2026-06-25_01-30-00.png", imagePath }), passValidator, session),
+      deps(fakeSource({ filename: "DOGEUSD_2026-06-25_01-30-00.png", imagePath }), passValidator, workspace),
     );
     expect(r.ok).toBe(false);
-    expect(snap(session)).toEqual(before);
+    expect(snap(workspace)).toEqual(before);
   });
 
-  it("not_in_active_pack leaves session and staging unchanged", async () => {
-    const session = createSession(packs);
-    const before = snap(session);
+  it("validation_failed leaves workspace and staging unchanged (nothing staged)", async () => {
+    const workspace = createWorkspace(packs);
+    const before = snap(workspace);
     const r = await captureOnce(
-      deps(fakeSource({ filename: "AAPL_2026-06-25_01-21-06.png", imagePath }), passValidator, session),
+      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath }), failValidator, workspace),
     );
     expect(r.ok).toBe(false);
-    expect(snap(session)).toEqual(before);
-  });
-
-  it("validation_failed leaves session and staging unchanged (nothing staged)", async () => {
-    const session = createSession(packs);
-    const before = snap(session);
-    const r = await captureOnce(
-      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath }), failValidator, session),
-    );
-    expect(r.ok).toBe(false);
-    expect(snap(session)).toEqual(before);
+    expect(snap(workspace)).toEqual(before);
     expect(staging.has("btc")).toBe(false);
   });
 
-  it("staging_failed leaves session unchanged (session.capture never reached)", async () => {
-    const session = createSession(packs);
-    const before = snap(session);
+  it("staging_failed leaves the workspace unchanged (capture fact never recorded)", async () => {
+    const workspace = createWorkspace(packs);
+    const before = snap(workspace);
     const missing = join(srcDir, "does-not-exist.png");
     const r = await captureOnce(
-      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath: missing }), passValidator, session),
+      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath: missing }), passValidator, workspace),
     );
     expect(r.ok).toBe(false);
-    expect(snap(session)).toEqual(before);
+    expect(snap(workspace)).toEqual(before);
     expect(staging.has("btc")).toBe(false);
-  });
-
-  it("no_active_pack (complete session) leaves session and staging unchanged", async () => {
-    const session = createSession([{ id: "only", display: "Only", assets: ["btc"] }]);
-    session.advance();
-    const before = snap(session);
-    const r = await captureOnce(
-      deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath }), passValidator, session),
-    );
-    expect(r.ok).toBe(false);
-    expect(snap(session)).toEqual(before);
   });
 });
