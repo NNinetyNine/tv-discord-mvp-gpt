@@ -3,7 +3,6 @@ import { createResolver, type Resolver } from "../resolver/index.ts";
 import { loadPacks } from "../packs/packs.ts";
 import { createPersistentWorkspace } from "../packs/persistence.ts";
 import type { Workspace } from "../packs/workspace.ts";
-import type { PackSession } from "../packs/session.ts";
 import { createStagingStore, type StagingStore } from "../wiring/staging.ts";
 import { loadChannelResolver } from "../wiring/channels.ts";
 import { createReleaseStore, type ReleaseStore } from "../release/release-store.ts";
@@ -16,7 +15,7 @@ import {
 import { captureFromFile } from "../application/capture-from-file.ts";
 import type { CaptureAttemptResult } from "../wiring/capture-once.ts";
 import {
-  publishActivePack,
+  publishPack,
   resumeInterruptedRelease,
   type PublishPackResult,
   type PublishOptions,
@@ -28,12 +27,10 @@ import {
  *
  * buildApp() assembles the REAL application dependencies from config and wires
  * the existing application/orchestration services over them. The persisted
- * working state is ONE Workspace exposed through TWO surfaces (one save
- * discipline, one store): capture runs on the constitutional `workspace`
- * surface (routing by identity — §4.1); publish and resume remain on the
- * TRANSITIONAL `session` compatibility surface until their own migration step
- * retires it. A capture through one surface is immediately visible through
- * the other.
+ * working state is the Workspace (routing by identity — §4.1); capture,
+ * publish, and resume all operate on it, pack-explicitly where a pack is the
+ * operation's subject. Publish and resume take the packId from the delivery
+ * layer (Constitution §4.5: the operator chooses).
  *
  * Pure assembly: buildApp() does NOT decide filesystem locations or read
  * process.env. sessionPath, stagingDir and archiveDir are required inputs —
@@ -59,8 +56,6 @@ import {
  *  - channels: real channels.json IDs resolve per pack; empty -> null, and
  *    publish fails closed with channel_unresolved. Resume needs no channel
  *    resolution at all — the Release record snapshotted its channel.
- *  - resume is PACK-scoped (the Constitution has no "active pack"); which pack
- *    to resume is the delivery layer's choice, passed through as packId.
  */
 
 export interface BuildAppOptions {
@@ -82,16 +77,14 @@ export interface App {
   /** Asset catalog (display names, tradingView tokens, id->Asset via all()). */
   readonly registry: Registry;
   readonly resolver: Resolver;
-  /** The constitutional working-state surface (capture facts, derived views). */
+  /** The persisted working-state surface (capture facts, derived pack views). */
   readonly workspace: Workspace;
-  /** TRANSITIONAL compatibility surface; publish/resume still consume it. */
-  readonly session: PackSession;
   readonly staging: StagingStore;
   readonly releases: ReleaseStore;
   /** Application use case: capture one operator-exported file. */
   captureFromFile(filePath: string): Promise<CaptureAttemptResult>;
-  /** Orchestration: publish the active pack as an archived Release. */
-  publishActivePack(options: PublishOptions): Promise<PublishPackResult>;
+  /** Orchestration: publish the given pack as an archived Release. */
+  publishPack(packId: string, options: PublishOptions): Promise<PublishPackResult>;
   /** Orchestration: resume the given pack's interrupted release. */
   resumePack(packId: string): Promise<ResumePackResult>;
 }
@@ -100,7 +93,7 @@ export function buildApp(opts: BuildAppOptions): App {
   // --- shared infrastructure (constructed once; app instance state) ---
   const registry = loadRegistry();
   const resolver = createResolver(registry);
-  const { workspace, session } = createPersistentWorkspace({
+  const { workspace } = createPersistentWorkspace({
     packs: loadPacks(),
     path: opts.sessionPath,
   });
@@ -127,16 +120,15 @@ export function buildApp(opts: BuildAppOptions): App {
     registry,
     resolver,
     workspace,
-    session,
     staging,
     releases,
     captureFromFile(filePath: string): Promise<CaptureAttemptResult> {
       return captureFromFile({ filePath, resolver, workspace, staging, validate });
     },
-    publishActivePack(options: PublishOptions): Promise<PublishPackResult> {
-      return publishActivePack(
+    publishPack(packId: string, options: PublishOptions): Promise<PublishPackResult> {
+      return publishPack(
         {
-          session,
+          workspace,
           staging,
           releases,
           resolveChannel,
@@ -144,13 +136,14 @@ export function buildApp(opts: BuildAppOptions): App {
           assetDisplay,
           now,
         },
+        packId,
         options,
       );
     },
     resumePack(packId: string): Promise<ResumePackResult> {
       return resumeInterruptedRelease(
         {
-          session,
+          workspace,
           staging,
           releases,
           openPublisher: openPublisherSession,

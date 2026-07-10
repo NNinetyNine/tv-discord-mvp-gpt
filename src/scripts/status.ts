@@ -1,7 +1,6 @@
 import { resolve } from "node:path";
 
 import { buildApp, type App } from "../composition/app.ts";
-import { loadPacks } from "../packs/packs.ts";
 import type { Pack } from "../packs/packs.ts";
 import type { Asset } from "../types.ts";
 
@@ -11,29 +10,28 @@ import type { Asset } from "../types.ts";
  *   npx tsx src/scripts/status.ts
  *
  * Prints, read-only:
- *   - the ACTIVE pack in detail: captured/total, position in the sequence, and
- *     the pending assets (first 10 named, then "...and N more" for large packs);
- *   - an ordered board of ALL packs with their state (complete / active / not
- *     started).
+ *   - an ordered board of ALL packs with their derived state (empty /
+ *     building x/y / complete);
+ *   - for each pack still missing work, its pending assets (first 10 named,
+ *     then "...and N more" for large packs).
  *
- * This is a THIN delivery-layer trigger, mirroring ingest-file.ts. It builds the
- * app, reads session + registry state (and the ordered pack list via loadPacks),
- * and prints. It MUTATES NOTHING: no capture, no publish, no advance, no staging,
- * no session write beyond what buildApp's restore already does. It reports
- * operational POSITION only — not config validity, not environment health, not
- * staged-file detail, not history.
+ * This is a THIN delivery-layer trigger, mirroring ingest-file.ts. It builds
+ * the app, reads workspace + registry facts, and prints. It MUTATES NOTHING:
+ * no capture, no publish, no reset, no staging, no working-state write beyond
+ * what buildApp's restore already does. It reports operational FACTS only —
+ * not config validity, not environment health, not staged-file detail, not
+ * history.
  *
- * State per pack is what the forward-only session can honestly report:
- *   - completed packs -> "complete" (their per-asset captures were cleared on
- *     advance, so no captured/total is shown — none is retained);
- *   - the active pack -> its real captured/total (from progress());
- *   - packs not yet reached -> "not started" (captures only accumulate for the
- *     active pack, so a future pack has no progress to show — by design).
+ * Every pack's state is DERIVED from the workspace (definitions ∩ captures):
+ * packs are independent instances (Constitution §3-Workspace), so each shows
+ * its own real captured/total — there is no ordering, no position, and no
+ * terminal state.
  *
- * Configuration: session file, staging dir, and release archive default to
- * ./session.json, ./staging and ./archive, resolved against process.cwd() — the
- * same locations ingest-file.ts and publish-pack.ts use. RUN FROM THE PROJECT
- * ROOT so it reads the same session the other tools wrote. It never publishes.
+ * Configuration: working-state file, staging dir, and release archive default
+ * to ./session.json, ./staging and ./archive, resolved against process.cwd() —
+ * the same locations ingest-file.ts and publish-pack.ts use. RUN FROM THE
+ * PROJECT ROOT so it reads the same state the other tools wrote. It never
+ * publishes.
  */
 
 const SESSION_PATH = resolve(process.cwd(), "session.json");
@@ -49,8 +47,8 @@ const USAGE = [
   "Usage:",
   "  npx tsx src/scripts/status.ts",
   "",
-  "Takes no arguments. Prints the active pack's progress and pending assets,",
-  "plus an ordered board of every pack's state. It changes nothing.",
+  "Takes no arguments. Prints every pack's derived state (empty / building /",
+  "complete) with its captured counts and pending assets. It changes nothing.",
   "",
   "Run from the project root so it reads the same ./session.json the ingest and",
   "publish tools use.",
@@ -67,71 +65,47 @@ function pad(s: string, width: number): string {
   return s.length >= width ? s : s + " ".repeat(width - s.length);
 }
 
-/** Print the ACTIVE pack in detail: progress + pending (previewed for large packs). */
-function printActivePack(app: App): void {
-  const progress = app.session.progress();
-  const pack = app.session.activePack();
-
-  if (progress === null || pack === null) {
-    console.log("All packs complete — session finished.");
-    console.log("");
-    return;
-  }
-
-  console.log(
-    `Active pack: ${progress.packId} (${progress.packDisplay}) — pack ${progress.position} of ${progress.packCount}`,
-  );
-
-  const pending = app.session.pendingAssets();
-  if (pending.length === 0) {
-    console.log(`  captured: ${progress.captured}/${progress.total} — complete`);
-    console.log("  All assets captured. Next: publish.");
-    console.log("");
-    return;
-  }
-
-  console.log(`  captured: ${progress.captured}/${progress.total}`);
-  console.log(`  pending (${pending.length}):`);
-  const preview = pending.slice(0, PENDING_PREVIEW);
-  for (const assetId of preview) {
-    console.log(`    ${label(app, assetId)}`);
-  }
-  const remaining = pending.length - preview.length;
-  if (remaining > 0) {
-    console.log(`    ...and ${remaining} more`);
-  }
-  console.log("");
-}
-
-/** Print the ordered board of ALL packs with their state. */
+/** Print the ordered board of ALL packs with their derived state. */
 function printBoard(app: App, packs: readonly Pack[]): void {
-  const completed = new Set(app.session.completedPackIds());
-  const active = app.session.activePack();
-  const activeId = active ? active.id : null;
-  const progress = app.session.progress();
-
   // Column widths for a tidy, aligned board.
   const idW = Math.min(Math.max(0, ...packs.map((p) => p.id.length)) + 2, 16);
   const dispW = Math.min(Math.max(0, ...packs.map((p) => p.display.length)) + 2, 20);
 
   console.log("All packs:");
   for (const pack of packs) {
+    const state = app.workspace.packState(pack.id);
+    const captured = pack.assets.length - app.workspace.pendingAssets(pack.id).length;
     let marker: string;
-    let state: string;
-    if (completed.has(pack.id)) {
+    let detail: string;
+    if (state === "complete") {
       marker = "✓";
-      state = "complete";
-    } else if (pack.id === activeId) {
+      detail = `complete — ${captured}/${pack.assets.length} captured, ready to publish`;
+    } else if (state === "building") {
       marker = "▸";
-      // The active pack is the only one with real captured/total to show.
-      state = progress
-        ? `active — ${progress.captured}/${progress.total} captured`
-        : "active";
+      detail = `building — ${captured}/${pack.assets.length} captured`;
     } else {
       marker = "○";
-      state = "not started";
+      detail = "empty";
     }
-    console.log(`  ${marker} ${pad(pack.id, idW)}${pad(pack.display, dispW)}${state}`);
+    console.log(`  ${marker} ${pad(pack.id, idW)}${pad(pack.display, dispW)}${detail}`);
+  }
+}
+
+/** Print pending assets for each pack still missing work (previewed for large packs). */
+function printPending(app: App, packs: readonly Pack[]): void {
+  for (const pack of packs) {
+    const pending = app.workspace.pendingAssets(pack.id);
+    if (pending.length === 0) continue;
+    console.log("");
+    console.log(`${pack.id} (${pack.display}) — pending (${pending.length}):`);
+    const preview = pending.slice(0, PENDING_PREVIEW);
+    for (const assetId of preview) {
+      console.log(`  ${label(app, assetId)}`);
+    }
+    const remaining = pending.length - preview.length;
+    if (remaining > 0) {
+      console.log(`  ...and ${remaining} more`);
+    }
   }
 }
 
@@ -155,15 +129,13 @@ function main(): void {
     archiveDir: ARCHIVE_DIR,
   });
 
-  // The ordered pack list for the board. loadPacks() is the same list the
-  // session was built from (workflow order); calling it here is a public,
-  // delivery-layer read (its internal registry re-load is accepted).
-  const packs = loadPacks();
+  // The ordered pack list for the board — the workspace's own definitions.
+  const packs = app.workspace.packs();
 
   console.log("VisionX status");
   console.log("");
-  printActivePack(app);
   printBoard(app, packs);
+  printPending(app, packs);
 
   // Read-only report: it succeeded in reporting regardless of the state found.
   process.exitCode = 0;

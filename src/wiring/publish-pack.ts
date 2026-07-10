@@ -1,4 +1,4 @@
-import type { PackSession, PublishPlan } from "../packs/session.ts";
+import type { Workspace, AssetCapture } from "../packs/workspace.ts";
 import type { StagingStore } from "./staging.ts";
 import type { ChannelResolver } from "./channels.ts";
 import type { ReleaseStore, ReleaseRecord } from "../release/release-store.ts";
@@ -8,12 +8,19 @@ import type { ReleaseStore, ReleaseRecord } from "../release/release-store.ts";
  * was interrupted. Both live here because both are the same responsibility —
  * the publish process — publish starts it, resume completes it.
  *
+ * Both operations are PACK-EXPLICIT: they take the packId as input. Which
+ * pack to publish or resume is the operator's choice, made at the delivery
+ * layer (Constitution §4.5: the subset of Complete Packs is operator-chosen).
+ * An unknown packId is a programming fault (callers validate operator input)
+ * and fails LOUD.
+ *
  * Constitution rules enforced here:
  *  - COMPLETE-ONLY: an incomplete pack cannot be published (pack_incomplete).
  *    Partial publishing does not exist; there is no confirmation for it.
  *  - ARCHIVE-BEFORE-EXTERNAL: the release record + image custody are written
  *    (publishedAt: null — in flight) before any Discord post; the pack's
- *    workspace is reset ONLY on a fully published release.
+ *    workspace instance is reset ONLY on a fully published release, via
+ *    per-pack resetPack (§4.5, §4.7) — other packs' work is untouched.
  *  - HONEST INTERRUPTION: a failure mid-posting leaves an in-flight release
  *    record stating exactly which messages exist; the workspace is untouched
  *    and staging is kept. Resume itself can interrupt, leaving the release
@@ -22,12 +29,8 @@ import type { ReleaseStore, ReleaseRecord } from "../release/release-store.ts";
  *    never creates a second release, posts ONLY analyses whose message
  *    identity is still null, posts from ARCHIVE CUSTODY (never staging), and
  *    posts to the record's snapshotted channelId (a Release snapshots its
- *    delivery target like everything else). Resume is PACK-scoped: the
- *    Constitution has no "active pack" — per-pack releases are independently
- *    resumable, and choosing WHICH pack to resume belongs to the operator via
- *    the delivery layer. (Today's single-active session means the delivery
- *    layer can only ever choose the in-flight pack; that is the session's
- *    limitation, not this function's contract.)
+ *    delivery target like everything else). Per-pack releases are
+ *    independently resumable.
  *  - SUPERSESSION (private policy; both consumers live in this module —
  *    extraction fires only when a consumer in another module exists): the
  *    interrupted release that still COUNTS is the newest record overall, iff
@@ -35,13 +38,14 @@ import type { ReleaseStore, ReleaseRecord } from "../release/release-store.ts";
  *    it; the old record is never modified.
  *
  * Staging custody is ASSET-keyed: pack membership and canonical order come
- * from the session's plan (publish) or the Release record (resume), never
- * from staging. Post-publish clearing targets exactly the release's assets.
+ * from the Workspace's derived plan (publish) or the Release record (resume),
+ * never from staging. Post-publish clearing targets exactly the release's
+ * assets.
  *
  * Lifecycle is DERIVED, never stored: publishedAt === null means in flight
  * (or interrupted); publishedAt !== null means published.
  *
- * Ordering: the publisher session is OPENED before any durable effect, so a
+ * Ordering: the publisher gateway is OPENED before any durable effect, so a
  * connection failure aborts with zero side effects (resume's gates are pure
  * reads, so this holds for both operations).
  *
@@ -55,7 +59,7 @@ export interface PublisherSessionShape {
 }
 
 export interface PublishPackDeps {
-  readonly session: PackSession; // persistent wrapper -> advance() auto-saves
+  readonly workspace: Workspace; // pass the persisted surface -> resetPack auto-saves
   readonly staging: StagingStore;
   readonly releases: ReleaseStore;
   readonly resolveChannel: ChannelResolver;
@@ -73,7 +77,7 @@ export interface PublishPackDeps {
  * displays). Honest deps — it declares only what it uses.
  */
 export interface ResumePackDeps {
-  readonly session: PackSession;
+  readonly workspace: Workspace;
   readonly staging: StagingStore;
   readonly releases: ReleaseStore;
   readonly openPublisher: () => Promise<PublisherSessionShape>;
@@ -92,10 +96,8 @@ export type PublishPackResult =
       readonly packId: string;
       readonly releaseId: string;
       readonly publishedAssetIds: readonly string[];
-      readonly advanced: true;
       readonly cleared: boolean; // false if staging clear failed (non-fatal)
     }
-  | { readonly ok: false; readonly outcome: "no_active_pack" }
   | {
       readonly ok: false;
       readonly outcome: "pack_incomplete";
@@ -130,11 +132,9 @@ export type PublishPackResult =
 /**
  * Resume's own contract. Not shared with PublishPackResult: a result union is
  * the exhaustive promise of what a function can produce, and each of these
- * functions produces outcomes the other cannot. There is deliberately NO
- * no_active_pack variant: resume is pack-scoped, and "which pack" is the
- * delivery layer's question. `resumed.postedNowAssetIds` may legitimately be
- * EMPTY (a release interrupted after its last post but before markPublished
- * resumes by posting nothing).
+ * functions produces outcomes the other cannot. `resumed.postedNowAssetIds`
+ * may legitimately be EMPTY (a release interrupted after its last post but
+ * before markPublished resumes by posting nothing).
  */
 export type ResumePackResult =
   | {
@@ -178,34 +178,34 @@ function findUnsupersededInterrupted(records: readonly ReleaseRecord[]): Release
   return newest !== null && newest.publishedAt === null ? newest : null;
 }
 
-export async function publishActivePack(
+export async function publishPack(
   deps: PublishPackDeps,
+  packId: string,
   options: PublishOptions,
 ): Promise<PublishPackResult> {
-  const { session, staging, releases, resolveChannel, openPublisher, assetDisplay, now } = deps;
+  const { workspace, staging, releases, resolveChannel, openPublisher, assetDisplay, now } = deps;
 
-  // 1. Active pack.
-  const active = session.activePack();
-  if (active === null) {
-    return { ok: false, outcome: "no_active_pack" };
+  // 1. The pack definition. Unknown packId = programming fault, fail loud.
+  const pack = workspace.pack(packId);
+  if (pack === null) {
+    throw new Error(`internal: unknown pack "${packId}" — callers validate operator input`);
   }
-  const packId = active.id;
 
   // 2. COMPLETE-ONLY gate. An incomplete pack is not a publishable thing.
-  const missingAssetIds = session.pendingAssets();
+  const missingAssetIds = workspace.pendingAssets(packId);
   if (missingAssetIds.length > 0) {
     return {
       ok: false,
       outcome: "pack_incomplete",
       packId,
-      captured: active.assets.length - missingAssetIds.length,
-      total: active.assets.length,
+      captured: pack.assets.length - missingAssetIds.length,
+      total: pack.assets.length,
       missingAssetIds,
     };
   }
 
-  // Complete pack -> the plan covers every asset in canonical order.
-  const plan: PublishPlan = session.publishPack();
+  // Complete pack -> the plan is the pack's captures in canonical order.
+  const toPublish: readonly AssetCapture[] = workspace.capturedFor(packId);
 
   // 3. Unsuperseded interrupted release? Refuse unless the operator supersedes.
   const interrupted = findUnsupersededInterrupted(releases.listReleases(packId));
@@ -225,7 +225,7 @@ export async function publishActivePack(
   //    Custody is asset-keyed; membership/order came from the plan above.
   const stagedPaths = new Map<string, string>();
   const missing: string[] = [];
-  for (const rec of plan.toPublish) {
+  for (const rec of toPublish) {
     const staged = staging.get(rec.assetId);
     if (staged === null) missing.push(rec.assetId);
     else stagedPaths.set(rec.assetId, staged.path);
@@ -264,10 +264,10 @@ export async function publishActivePack(
     // 7. Archive first: take custody + write the record (publishedAt: null).
     const record = releases.createRelease({
       packId,
-      packDisplay: active.display,
+      packDisplay: pack.display,
       channelId,
       startedAt: now(),
-      analyses: plan.toPublish.map((rec) => ({
+      analyses: toPublish.map((rec) => ({
         assetId: rec.assetId,
         display: assetDisplay(rec.assetId),
         capturedAt: rec.capturedAt,
@@ -277,7 +277,7 @@ export async function publishActivePack(
     releaseId = record.releaseId;
 
     // 8. Post sequentially in canonical order; record each identity as earned.
-    for (const rec of plan.toPublish) {
+    for (const rec of toPublish) {
       let messageId: string;
       try {
         const posted = await publisher.post(channelId, stagedPath(rec.assetId));
@@ -330,14 +330,14 @@ export async function publishActivePack(
     await publisher.close().catch(() => {});
   }
 
-  // 10. Fully published: reset the workspace (advance auto-persists), then
-  //     clear exactly the release's assets from staging (best-effort; the
-  //     archive holds custody now).
-  session.advance();
+  // 10. Fully published: this pack's instance ends (per-pack reset; other
+  //     packs untouched), then clear exactly the release's assets from
+  //     staging (best-effort; the archive holds custody now).
+  workspace.resetPack(packId);
 
   let cleared = true;
   try {
-    staging.clear(plan.toPublish.map((rec) => rec.assetId));
+    staging.clear(toPublish.map((rec) => rec.assetId));
   } catch {
     cleared = false;
   }
@@ -348,7 +348,6 @@ export async function publishActivePack(
     packId,
     releaseId,
     publishedAssetIds,
-    advanced: true,
     cleared,
   };
 }
@@ -357,23 +356,19 @@ export async function publishActivePack(
  * Resume the given pack's interrupted release: complete the existing record,
  * never create a second one. Posts ONLY analyses whose discordMessageId is
  * still null, from ARCHIVE CUSTODY, to the record's snapshotted channel,
- * recording each identity as earned. The pack's workspace resets and its
- * staging clears only once the release is fully published. Interruption of
- * resume itself leaves the release exactly as resumable as before — resume is
- * re-runnable.
+ * recording each identity as earned. The pack's workspace instance resets and
+ * its staging clears only once the release is fully published — other packs
+ * are untouched. Interruption of resume itself leaves the release exactly as
+ * resumable as before — resume is re-runnable.
  *
  * The pack is a PARAMETER: which pack to resume is the operator's choice,
- * made at the delivery layer. Under today's single-active session the only
- * legitimately resumable pack is the in-flight one (an interrupted publish
- * means advance() never fired), so a resumable release for any OTHER pack
- * means session and archive disagree — a violated invariant, thrown loudly
- * BEFORE any external effect, never a soft outcome.
+ * made at the delivery layer.
  */
 export async function resumeInterruptedRelease(
   deps: ResumePackDeps,
   packId: string,
 ): Promise<ResumePackResult> {
-  const { session, staging, releases, openPublisher, now } = deps;
+  const { workspace, staging, releases, openPublisher, now } = deps;
 
   // 1. The pack's interrupted release that still counts, or nothing to do.
   const release = findUnsupersededInterrupted(releases.listReleases(packId));
@@ -382,20 +377,7 @@ export async function resumeInterruptedRelease(
   }
   const releaseId = release.releaseId;
 
-  // 2. Invariant: under the single-active session, the interrupted pack IS
-  //    the in-flight pack (advance never fired). Completing a release for any
-  //    other pack and then advancing would silently discard the in-flight
-  //    pack's work — so incoherence fails LOUD, before any external effect.
-  //    (This assert dissolves when session evolution brings per-pack reset.)
-  const active = session.activePack();
-  if (active === null || active.id !== packId) {
-    throw new Error(
-      `internal: pack "${packId}" has an interrupted release but is not the session's in-flight pack` +
-        `${active === null ? " (session is complete)" : ` (in flight: "${active.id}")`} — session and archive are inconsistent`,
-    );
-  }
-
-  // 3. Open the publisher first: gates above were pure reads, so a connect
+  // 2. Open the publisher first: the gate above was a pure read, so a connect
   //    failure leaves zero side effects.
   let publisher: PublisherSessionShape;
   try {
@@ -406,7 +388,7 @@ export async function resumeInterruptedRelease(
 
   const postedNowAssetIds: string[] = [];
   try {
-    // 4. Post ONLY the unposted remainder, in the record's canonical order,
+    // 3. Post ONLY the unposted remainder, in the record's canonical order,
     //    from archive custody, to the record's snapshotted channel.
     for (const analysis of release.analyses) {
       if (analysis.discordMessageId !== null) continue; // never duplicate a post
@@ -444,7 +426,7 @@ export async function resumeInterruptedRelease(
       }
     }
 
-    // 5. Everything posted (possibly by earlier runs): the release completes.
+    // 4. Everything posted (possibly by earlier runs): the release completes.
     //    A record interrupted after its last post resumes here naturally,
     //    with postedNowAssetIds empty.
     try {
@@ -464,11 +446,11 @@ export async function resumeInterruptedRelease(
     await publisher.close().catch(() => {});
   }
 
-  // 6. Fully published: reset the pack's workspace (today: advance the
-  //    single-active session), then clear exactly the release's assets from
-  //    staging (best-effort; the archive has held custody since the release
-  //    was created).
-  session.advance();
+  // 5. Fully published: this pack's instance ends (per-pack reset; other
+  //    packs untouched), then clear exactly the release's assets from staging
+  //    (best-effort; the archive has held custody since the release was
+  //    created).
+  workspace.resetPack(packId);
 
   let cleared = true;
   try {

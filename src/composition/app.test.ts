@@ -52,19 +52,19 @@ function makeApp(): App {
 }
 
 /**
- * The full Asset record for the active pack, found via the real catalog: the
- * first Asset in registry.all() whose id belongs to the active pack. Starting
+ * The full Asset record for the first pack, found via the real catalog: the
+ * first Asset in registry.all() whose id belongs to that pack. Starting
  * from the catalog record (which carries both id and tradingView) avoids any
  * id->tradingView reverse-engineering, and scanning all() decouples the test
  * from the pack's internal asset ordering.
  */
-function activePackAssetFromCatalog(app: App): Asset {
-  const pack = app.session.activePack();
-  if (pack === null) throw new Error("no active pack in real config");
+function firstPackAssetFromCatalog(app: App): Asset {
+  const pack = app.workspace.packs()[0];
+  if (pack === undefined) throw new Error("no packs in real config");
   const packAssetIds = new Set(pack.assets);
   const asset = app.registry.all().find((a) => packAssetIds.has(a.id));
   if (asset === undefined) {
-    throw new Error(`no registry asset matches any id in active pack "${pack.id}"`);
+    throw new Error(`no registry asset matches any id in pack "${pack.id}"`);
   }
   return asset;
 }
@@ -84,27 +84,27 @@ async function makeExportPng(filename: string): Promise<string> {
 }
 
 describe("buildApp — assembles against real config", () => {
-  it("exposes registry, resolver, workspace, session, staging, releases, and the services", () => {
+  it("exposes registry, resolver, workspace, staging, releases, and the services", () => {
     const app = makeApp();
     expect(typeof app.captureFromFile).toBe("function");
-    expect(typeof app.publishActivePack).toBe("function");
+    expect(typeof app.publishPack).toBe("function");
+    expect(typeof app.resumePack).toBe("function");
     expect(typeof app.resolver.resolve).toBe("function");
-    expect(typeof app.workspace.captureOf).toBe("function"); // constitutional surface
+    expect(typeof app.workspace.captureOf).toBe("function");
     expect(app.registry.all().length).toBeGreaterThan(0); // real catalog loaded
     expect(app.workspace.packs().length).toBeGreaterThan(0); // real packs.json loaded
-    expect(app.session.activePack()).not.toBeNull(); // transitional surface still present
-    expect(app.session.activePack()!.assets.length).toBeGreaterThan(0);
+    expect(app.workspace.packs()[0]!.assets.length).toBeGreaterThan(0);
     // Release store assembled against the injected archive root: a fresh
     // archive answers (empty), with no Discord involvement.
-    const activeId = app.session.activePack()!.id;
-    expect(app.releases.listReleases(activeId)).toEqual([]);
+    const firstId = app.workspace.packs()[0]!.id;
+    expect(app.releases.listReleases(firstId)).toEqual([]);
   });
 
-  it("maps an active-pack asset to its full Asset via the catalog", () => {
+  it("maps a pack asset to its full Asset via the catalog", () => {
     const app = makeApp();
-    const asset = activePackAssetFromCatalog(app);
+    const asset = firstPackAssetFromCatalog(app);
     // The catalog record carries both id and tradingView — no reverse-engineering.
-    expect(app.session.activePack()!.assets).toContain(asset.id);
+    expect(app.workspace.packs()[0]!.assets).toContain(asset.id);
     expect(typeof asset.tradingView).toBe("string");
     expect(asset.tradingView.length).toBeGreaterThan(0);
     expect(typeof asset.display).toBe("string");
@@ -112,7 +112,7 @@ describe("buildApp — assembles against real config", () => {
 
   it("captures a real exported file end-to-end into the SHARED workspace + staging", async () => {
     const app = makeApp();
-    const asset = activePackAssetFromCatalog(app);
+    const asset = firstPackAssetFromCatalog(app);
 
     // Build the export filename from the asset's real TradingView token.
     const exportPath = await makeExportPng(`${asset.tradingView}_2026-06-25_01-18-55.png`);
@@ -123,10 +123,8 @@ describe("buildApp — assembles against real config", () => {
       expect(r.asset.id).toBe(asset.id);
       expect(r.revisions).toBe(1);
     }
-    // One store, two surfaces: the workspace holds the fact AND the
-    // transitional session's active-pack view observes it immediately.
+    // Shared app state reflects the capture (staging custody is asset-keyed).
     expect(app.workspace.captureOf(asset.id)).not.toBeNull();
-    expect(app.session.capturedAssets().map((c) => c.assetId)).toContain(asset.id);
-    expect(app.staging.has(asset.id)).toBe(true); // staging custody is asset-keyed
+    expect(app.staging.has(asset.id)).toBe(true);
   });
 });

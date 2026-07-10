@@ -4,14 +4,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
-  publishActivePack,
+  publishPack,
   resumeInterruptedRelease,
   type PublishPackDeps,
   type ResumePackDeps,
   type PublisherSessionShape,
 } from "./publish-pack.ts";
-import { createSession, type PackSession } from "../packs/session.ts";
-import { createPersistentSession } from "../packs/persistence.ts";
+import { createWorkspace, type Workspace } from "../packs/workspace.ts";
+import { createPersistentWorkspace } from "../packs/persistence.ts";
 import { createStagingStore, type StagingStore } from "./staging.ts";
 import { createReleaseStore, type ReleaseStore } from "../release/release-store.ts";
 import type { Pack } from "../packs/packs.ts";
@@ -24,7 +24,7 @@ const PACKS: readonly Pack[] = [
 let workDir: string;
 let staging: StagingStore;
 let releases: ReleaseStore;
-let session: PackSession;
+let workspace: Workspace;
 
 /** Deterministic increasing timestamps. */
 function makeNow(startMinute = 30): () => string {
@@ -65,15 +65,14 @@ function stageAsset(packId: string, assetId: string): void {
 function captureAll(packId: "crypto" | "stocks"): void {
   const pack = PACKS.find((p) => p.id === packId)!;
   for (const assetId of pack.assets) {
-    const r = session.capture(assetId, `captured-${assetId}`);
-    if (!r.ok) throw new Error(`test setup: capture rejected for ${assetId}`);
+    workspace.capture(assetId, `captured-${assetId}`);
     stageAsset(packId, assetId);
   }
 }
 
 function deps(overrides?: Partial<PublishPackDeps>): PublishPackDeps {
   return {
-    session,
+    workspace,
     staging,
     releases,
     resolveChannel: () => "chan-1",
@@ -86,7 +85,7 @@ function deps(overrides?: Partial<PublishPackDeps>): PublishPackDeps {
 
 function resumeDeps(overrides?: Partial<ResumePackDeps>): ResumePackDeps {
   return {
-    session,
+    workspace,
     staging,
     releases,
     openPublisher: fakePublisher().open,
@@ -102,7 +101,7 @@ beforeEach(() => {
   mkdirSync(join(workDir, "staging"), { recursive: true });
   staging = createStagingStore(join(workDir, "staging"));
   releases = createReleaseStore(join(workDir, "archive"));
-  session = createSession(PACKS);
+  workspace = createWorkspace(PACKS);
 });
 
 afterEach(() => {
@@ -110,18 +109,15 @@ afterEach(() => {
 });
 
 describe("gates", () => {
-  it("no_active_pack when the session is complete", async () => {
-    session.advance();
-    session.advance();
-    const r = await publishActivePack(deps(), GO);
-    expect(r).toEqual({ ok: false, outcome: "no_active_pack" });
+  it("throws LOUDLY on an unknown packId (callers validate operator input)", async () => {
+    await expect(publishPack(deps(), "nope", GO)).rejects.toThrow(/unknown pack/);
   });
 
   it("pack_incomplete names the missing assets; nothing external happens", async () => {
-    session.capture("btc", "t");
+    workspace.capture("btc", "t");
     stageAsset("crypto", "btc");
     const fp = fakePublisher();
-    const r = await publishActivePack(deps({ openPublisher: fp.open }), GO);
+    const r = await publishPack(deps({ openPublisher: fp.open }), "crypto", GO);
     expect(r).toEqual({
       ok: false,
       outcome: "pack_incomplete",
@@ -137,40 +133,40 @@ describe("gates", () => {
   it("missing_staged_images fails closed before any posting", async () => {
     captureAll("crypto");
     staging.unstage("eth");
-    const r = await publishActivePack(deps(), GO);
+    const r = await publishPack(deps(), "crypto", GO);
     expect(r).toMatchObject({ ok: false, outcome: "missing_staged_images", missing: ["eth"] });
     expect(releases.listReleases("crypto")).toHaveLength(0);
   });
 
   it("channel_unresolved fails closed", async () => {
     captureAll("crypto");
-    const r = await publishActivePack(deps({ resolveChannel: () => null }), GO);
+    const r = await publishPack(deps({ resolveChannel: () => null }), "crypto", GO);
     expect(r).toMatchObject({ ok: false, outcome: "channel_unresolved", packId: "crypto" });
     expect(releases.listReleases("crypto")).toHaveLength(0);
   });
 
   it("publisher_connect_failed leaves ZERO durable state (open precedes create)", async () => {
     captureAll("crypto");
-    const r = await publishActivePack(
+    const r = await publishPack(
       deps({ openPublisher: async () => { throw new Error("bad token"); } }),
+      "crypto",
       GO,
     );
     expect(r).toMatchObject({ ok: false, outcome: "publisher_connect_failed", detail: "bad token" });
     expect(releases.listReleases("crypto")).toHaveLength(0);
-    expect(session.activePack()?.id).toBe("crypto"); // no advance
+    expect(workspace.packState("crypto")).toBe("complete"); // no reset
   });
 });
 
 describe("published (happy path)", () => {
-  it("archives first, posts in canonical order, records identities, advances, clears", async () => {
+  it("archives first, posts in canonical order, records identities, resets the pack, clears", async () => {
     captureAll("crypto");
     const fp = fakePublisher();
-    const r = await publishActivePack(deps({ openPublisher: fp.open }), GO);
+    const r = await publishPack(deps({ openPublisher: fp.open }), "crypto", GO);
 
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.publishedAssetIds).toEqual(["btc", "eth"]);
-    expect(r.advanced).toBe(true);
     expect(r.cleared).toBe(true);
 
     // Release record: published (publishedAt set), identities recorded, custody held.
@@ -186,8 +182,8 @@ describe("published (happy path)", () => {
     expect(fp.posts.map((p) => p.channelId)).toEqual(["chan-1", "chan-1"]);
     expect(fp.closedCount()).toBe(1);
 
-    // Workspace reset: session advanced to stocks; the release's assets cleared.
-    expect(session.activePack()?.id).toBe("stocks");
+    // This pack's instance ended (per-pack reset); the release's assets cleared.
+    expect(workspace.packState("crypto")).toBe("empty");
     expect(staging.list()).toEqual([]);
     // Archive custody survives the staging clear.
     expect(existsSync(join(workDir, "archive", "crypto", r.releaseId, "btc.png"))).toBe(true);
@@ -195,10 +191,10 @@ describe("published (happy path)", () => {
 });
 
 describe("publish_interrupted (honest failure)", () => {
-  it("mid-post failure: earned identities recorded, no advance, staging kept, publisher closed", async () => {
+  it("mid-post failure: earned identities recorded, no reset, staging kept, publisher closed", async () => {
     captureAll("crypto");
     const fp = fakePublisher("eth.png"); // btc posts, eth fails
-    const r = await publishActivePack(deps({ openPublisher: fp.open }), GO);
+    const r = await publishPack(deps({ openPublisher: fp.open }), "crypto", GO);
 
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -215,7 +211,7 @@ describe("publish_interrupted (honest failure)", () => {
     expect(rec.analyses.find((a) => a.assetId === "eth")?.discordMessageId).toBeNull();
 
     // Workspace untouched; socket closed.
-    expect(session.activePack()?.id).toBe("crypto");
+    expect(workspace.packState("crypto")).toBe("complete");
     expect(staging.has("btc")).toBe(true);
     expect(fp.closedCount()).toBe(1);
   });
@@ -225,7 +221,7 @@ describe("interrupted release: refuse / supersede", () => {
   async function interruptCrypto(): Promise<string> {
     captureAll("crypto");
     const fp = fakePublisher("eth.png");
-    const r = await publishActivePack(deps({ openPublisher: fp.open, now: makeNow(10) }), GO);
+    const r = await publishPack(deps({ openPublisher: fp.open, now: makeNow(10) }), "crypto", GO);
     if (r.ok || r.outcome !== "publish_interrupted") throw new Error("setup failed");
     return r.releaseId;
   }
@@ -233,7 +229,7 @@ describe("interrupted release: refuse / supersede", () => {
   it("a fresh publish is REFUSED while an unsuperseded interrupted release exists", async () => {
     const stuckId = await interruptCrypto();
     const fp = fakePublisher();
-    const r = await publishActivePack(deps({ openPublisher: fp.open, now: makeNow(20) }), GO);
+    const r = await publishPack(deps({ openPublisher: fp.open, now: makeNow(20) }), "crypto", GO);
     expect(r).toMatchObject({
       ok: false,
       outcome: "interrupted_release_exists",
@@ -248,8 +244,9 @@ describe("interrupted release: refuse / supersede", () => {
   it("supersedeInterrupted publishes fresh; the old record is untouched and retired from 'live'", async () => {
     const stuckId = await interruptCrypto();
     const fp = fakePublisher();
-    const r = await publishActivePack(
+    const r = await publishPack(
       deps({ openPublisher: fp.open, now: makeNow(20) }),
+      "crypto",
       { supersedeInterrupted: true },
     );
     expect(r.ok).toBe(true);
@@ -263,7 +260,7 @@ describe("interrupted release: refuse / supersede", () => {
     // New record published; supersession is DERIVED: the old interrupted record
     // no longer blocks anything.
     expect(releases.getRelease("crypto", r.releaseId).publishedAt).not.toBeNull();
-    expect(session.activePack()?.id).toBe("stocks");
+    expect(workspace.packState("crypto")).toBe("empty"); // this pack's instance ended
   });
 
   it("an interrupted release superseded by a later published one no longer blocks (derived, not stored)", async () => {
@@ -285,14 +282,14 @@ describe("interrupted release: refuse / supersede", () => {
 
     captureAll("crypto");
     const fp = fakePublisher();
-    const r = await publishActivePack(deps({ openPublisher: fp.open, now: makeNow(50) }), GO);
+    const r = await publishPack(deps({ openPublisher: fp.open, now: makeNow(50) }), "crypto", GO);
     expect(r.ok).toBe(true); // no refusal: the 09:00 interruption was superseded
   });
 });
 
 describe("pack_incomplete — zero captured (nothing_captured is subsumed)", () => {
   it("a pack with nothing captured is simply incomplete", async () => {
-    const r = await publishActivePack(deps(), GO);
+    const r = await publishPack(deps(), "crypto", GO);
     expect(r).toMatchObject({
       ok: false,
       outcome: "pack_incomplete",
@@ -310,9 +307,9 @@ describe("revision honesty — newest staged image publishes and is archived", (
     const newerSrc = join(workDir, "btc-v2.png");
     writeFileSync(newerSrc, "png:btc-v2");
     staging.stage("btc", newerSrc);
-    session.capture("btc", "recaptured");
+    workspace.capture("btc", "recaptured");
 
-    const r = await publishActivePack(deps(), GO);
+    const r = await publishPack(deps(), "crypto", GO);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(
@@ -321,25 +318,25 @@ describe("revision honesty — newest staged image publishes and is archived", (
   });
 });
 
-describe("publish + persistent session restore (regression)", () => {
-  it("a session restored from the same file resumes on the next pack after publish", async () => {
+describe("publish + persisted workspace restore (regression)", () => {
+  it("a workspace restored from the same file shows the published pack reset and others untouched", async () => {
     const sessionPath = join(workDir, "session.json");
-    const persistent = createPersistentSession({ packs: PACKS, path: sessionPath });
+    const persisted = createPersistentWorkspace({ packs: PACKS, path: sessionPath });
+    persisted.workspace.capture("aapl", "t-aapl"); // another pack's work, must survive
     for (const assetId of ["btc", "eth"]) {
       const src = join(workDir, `p-${assetId}.png`);
       writeFileSync(src, `png:${assetId}`);
       staging.stage(assetId, src);
-      const c = persistent.capture(assetId, `t-${assetId}`);
-      if (!c.ok) throw new Error(`test setup: capture rejected for ${assetId}`);
+      persisted.workspace.capture(assetId, `t-${assetId}`);
     }
 
-    const r = await publishActivePack(deps({ session: persistent }), GO);
+    const r = await publishPack(deps({ workspace: persisted.workspace }), "crypto", GO);
     expect(r.ok).toBe(true);
 
-    const restored = createPersistentSession({ packs: PACKS, path: sessionPath });
-    expect(restored.completedPackIds()).toEqual(["crypto"]);
-    expect(restored.activePack()?.id).toBe("stocks");
-    expect(restored.capturedAssets()).toEqual([]);
+    const restored = createPersistentWorkspace({ packs: PACKS, path: sessionPath });
+    expect(restored.workspace.packState("crypto")).toBe("empty"); // published pack reset, durably
+    expect(restored.workspace.captureOf("btc")).toBeNull();
+    expect(restored.workspace.captureOf("aapl")).not.toBeNull(); // other pack untouched
   });
 });
 
@@ -354,7 +351,7 @@ describe("record-write failure after a successful post (truth-telling branch)", 
       },
     };
 
-    const r = await publishActivePack(deps({ releases: wrapped }), GO);
+    const r = await publishPack(deps({ releases: wrapped }), "crypto", GO);
     expect(r.ok).toBe(false);
     if (r.ok || r.outcome !== "publish_interrupted") throw new Error("expected publish_interrupted");
     expect(r.failedAssetId).toBe("eth");
@@ -374,12 +371,12 @@ describe("resume — completing an interrupted release", () => {
   async function interruptCrypto(): Promise<string> {
     captureAll("crypto");
     const fp = fakePublisher("eth.png"); // btc posts, eth fails
-    const r = await publishActivePack(deps({ openPublisher: fp.open, now: makeNow(10) }), GO);
+    const r = await publishPack(deps({ openPublisher: fp.open, now: makeNow(10) }), "crypto", GO);
     if (r.ok || r.outcome !== "publish_interrupted") throw new Error("setup failed");
     return r.releaseId;
   }
 
-  it("posts ONLY the unposted remainder from archive custody, completes, advances, clears", async () => {
+  it("posts ONLY the unposted remainder from archive custody, completes, resets the pack, clears", async () => {
     const releaseId = await interruptCrypto();
     const fp = fakePublisher();
     const r = await resumeInterruptedRelease(resumeDeps({ openPublisher: fp.open }), "crypto");
@@ -407,8 +404,8 @@ describe("resume — completing an interrupted release", () => {
     expect(rec.analyses.find((a) => a.assetId === "eth")?.discordMessageId).toBe("msg-1");
     expect(releases.listReleases("crypto")).toHaveLength(1); // no second release
 
-    // Workspace reset only now; the release's assets cleared from staging.
-    expect(session.activePack()?.id).toBe("stocks");
+    // This pack's instance ended only now; the release's assets cleared.
+    expect(workspace.packState("crypto")).toBe("empty");
     expect(staging.list()).toEqual([]);
     expect(fp.closedCount()).toBe(1);
   });
@@ -430,6 +427,7 @@ describe("resume — completing an interrupted release", () => {
       analyses: [{ assetId: "btc", display: "BTC", capturedAt: "t", sourceImagePath: src }],
     });
     releases.recordPost("crypto", rec.releaseId, "btc", "msg-old", "t");
+    workspace.capture("btc", "t"); // in-flight work for the pack being completed
 
     const fp = fakePublisher();
     const r = await resumeInterruptedRelease(resumeDeps({ openPublisher: fp.open }), "crypto");
@@ -438,28 +436,29 @@ describe("resume — completing an interrupted release", () => {
     expect(r.postedNowAssetIds).toEqual([]); // nothing posted now — and that's correct
     expect(fp.posts).toHaveLength(0);
     expect(releases.getRelease("crypto", rec.releaseId).publishedAt).not.toBeNull();
-    expect(session.activePack()?.id).toBe("stocks");
+    expect(workspace.packState("crypto")).toBe("empty"); // instance ended
   });
 
   it("nothing_to_resume when the pack has no interrupted release; nothing changes", async () => {
+    workspace.capture("btc", "t");
     const r = await resumeInterruptedRelease(resumeDeps(), "crypto");
     expect(r).toEqual({ ok: false, outcome: "nothing_to_resume", packId: "crypto" });
-    expect(session.activePack()?.id).toBe("crypto"); // no advance
+    expect(workspace.captureOf("btc")).not.toBeNull(); // no reset
   });
 
-  it("throws LOUDLY (session/archive inconsistency) if the pack is not the in-flight pack", async () => {
-    // Construct the illegitimate state directly: an interrupted release for
-    // stocks while the session's in-flight pack is crypto. Unreachable through
-    // the workflow — corruption class, so it must throw, not soft-fail.
-    const src = join(workDir, "x.png");
-    writeFileSync(src, "png");
-    releases.createRelease({
-      packId: "stocks", packDisplay: "Stocks", channelId: "c",
-      startedAt: "2026-07-08T10:00:00.000Z",
-      analyses: [{ assetId: "aapl", display: "AAPL", capturedAt: "t", sourceImagePath: src }],
-    });
-    await expect(resumeInterruptedRelease(resumeDeps(), "stocks")).rejects.toThrow(/in-flight/);
-    expect(session.activePack()?.id).toBe("crypto"); // untouched
+  it("resuming one pack never touches another pack's work (per-pack reset)", async () => {
+    const releaseId = await interruptCrypto();
+    workspace.capture("aapl", "t-aapl"); // stocks work in flight alongside
+
+    const fp = fakePublisher();
+    const r = await resumeInterruptedRelease(resumeDeps({ openPublisher: fp.open }), "crypto");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.releaseId).toBe(releaseId);
+
+    expect(workspace.packState("crypto")).toBe("empty"); // resumed pack reset
+    expect(workspace.captureOf("aapl")).not.toBeNull(); // stocks untouched
+    expect(workspace.packState("stocks")).toBe("complete");
   });
 
   it("connect failure leaves the interrupted release and workspace untouched", async () => {
@@ -470,7 +469,7 @@ describe("resume — completing an interrupted release", () => {
     );
     expect(r).toMatchObject({ ok: false, outcome: "publisher_connect_failed", detail: "bad token" });
     expect(releases.getRelease("crypto", releaseId).publishedAt).toBeNull(); // unchanged
-    expect(session.activePack()?.id).toBe("crypto"); // no advance
+    expect(workspace.packState("crypto")).toBe("complete"); // no reset
     expect(staging.has("btc")).toBe(true); // staging kept
   });
 
@@ -484,7 +483,7 @@ describe("resume — completing an interrupted release", () => {
     if (r1.ok || r1.outcome !== "publish_interrupted") throw new Error("expected publish_interrupted");
     expect(r1.releaseId).toBe(releaseId);
     expect(r1.publishedAssetIds).toEqual([]); // nothing earned this run
-    expect(session.activePack()?.id).toBe("crypto"); // still not advanced
+    expect(workspace.packState("crypto")).toBe("complete"); // still no reset
 
     // Second resume succeeds — same release, completed.
     const fp = fakePublisher();

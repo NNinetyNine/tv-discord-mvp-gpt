@@ -7,22 +7,24 @@ import type { PublishPackResult, ResumePackResult } from "../wiring/publish-pack
 import type { Asset } from "../types.ts";
 
 /**
- * Operator entrypoint: publish the active pack to Discord as a RELEASE, or
- * resume an interrupted one.
+ * Operator entrypoint: publish a pack to Discord as a RELEASE, or resume an
+ * interrupted one.
  *
- *   npx tsx src/scripts/publish-pack.ts [--resume | --supersede]
+ *   npx tsx src/scripts/publish-pack.ts <packId> [--resume | --supersede]
+ *
+ * The pack is EXPLICIT: publishing is an operator choice of pack (§4.5), so
+ * the command names its object. Run without a pack id and the script states
+ * the packs and their states as facts, then waits for an explicit command.
  *
  * COMPLETE-ONLY: an incomplete pack is refused — partial publishing does not
  * exist. On success the release (record + image custody + per-chart Discord
- * message identities) is archived under ./archive and the workspace resets.
+ * message identities) is archived under ./archive and that pack's workspace
+ * resets (other packs are untouched).
  *
- * --resume: complete the interrupted release from its own archived record —
- * posts only the charts that never reached Discord, then marks the release
- * published. Never creates a second release; never duplicates a post. The
- * resume orchestration is PACK-scoped; this script supplies the session's
- * in-flight pack, because under the single-active session that is the only
- * pack that can have a resumable release. (A future UI supplies whichever
- * interrupted pack the operator chooses.)
+ * --resume: complete the named pack's interrupted release from its own
+ * archived record — posts only the charts that never reached Discord, then
+ * marks the release published. Never creates a second release; never
+ * duplicates a post.
  *
  * --supersede: explicitly publish FRESH past an interrupted release instead
  * of resuming it. Its already-posted messages remain live on Discord (manual
@@ -34,16 +36,16 @@ const STAGING_DIR = resolve(process.cwd(), "staging");
 const ARCHIVE_DIR = resolve(process.cwd(), "archive");
 
 const USAGE = [
-  "Publish the active pack's charts to Discord as an archived Release.",
+  "Publish a pack's charts to Discord as an archived Release.",
   "",
   "Usage:",
-  "  npx tsx src/scripts/publish-pack.ts [--resume | --supersede]",
+  "  npx tsx src/scripts/publish-pack.ts <packId> [--resume | --supersede]",
   "",
   "The pack must be COMPLETE (every asset captured) — partial publishing does",
   "not exist.",
   "",
-  "  --resume     complete the interrupted release (posts only what never",
-  "               reached Discord; never duplicates).",
+  "  --resume     complete the named pack's interrupted release (posts only",
+  "               what never reached Discord; never duplicates).",
   "  --supersede  publish fresh past an interrupted release instead of",
   "               resuming it (its record is kept as honest history).",
   "",
@@ -54,6 +56,17 @@ const USAGE = [
 function label(app: App, assetId: string): string {
   const asset: Asset | undefined = app.registry.all().find((a) => a.id === assetId);
   return asset ? `${asset.id} (${asset.display})` : assetId;
+}
+
+/** State the packs and their derived states as facts (the operator chooses). */
+function printPackFacts(app: App): void {
+  console.error("  Packs:");
+  for (const pack of app.workspace.packs()) {
+    const state = app.workspace.packState(pack.id);
+    const captured = pack.assets.length - app.workspace.pendingAssets(pack.id).length;
+    const detail = state === "complete" ? "COMPLETE — ready to publish" : `${captured}/${pack.assets.length} captured`;
+    console.error(`    ${pack.id} (${pack.display}) — ${detail}`);
+  }
 }
 
 /** Shared truth-telling for an interrupted publish/resume run. */
@@ -89,20 +102,14 @@ function report(app: App, result: PublishPackResult): number {
       console.log(`  • ${label(app, assetId)}`);
     }
     console.log(`Release archived: ${result.packId}/${result.releaseId}`);
-    console.log("Workspace reset — session advanced.");
+    console.log(`Workspace reset for "${result.packId}" — other packs untouched.`);
     if (!result.cleared) {
       console.log("Note: staged files could not be cleared (non-fatal); the archive holds custody.");
     }
-    const next = app.session.activePack();
-    console.log(next === null ? "All packs complete — session finished." : `Next active pack: ${next.id} (${next.display}).`);
     return 0;
   }
 
   switch (result.outcome) {
-    case "no_active_pack":
-      console.error("✗ No active pack — the session is complete. There is nothing to publish.");
-      return 1;
-
     case "pack_incomplete": {
       console.error(`✗ Pack "${result.packId}" is incomplete: ${result.captured}/${result.total} captured.`);
       console.error("  A pack must be COMPLETE before it can be published. Still missing:");
@@ -163,12 +170,10 @@ function reportResume(app: App, result: ResumePackResult): number {
       console.log(`✓ Resumed pack "${result.packId}" — every chart was already posted; the release is now marked published.`);
     }
     console.log(`Release completed: ${result.packId}/${result.releaseId}`);
-    console.log("Workspace reset — session advanced.");
+    console.log(`Workspace reset for "${result.packId}" — other packs untouched.`);
     if (!result.cleared) {
       console.log("Note: staged files could not be cleared (non-fatal); the archive holds custody.");
     }
-    const next = app.session.activePack();
-    console.log(next === null ? "All packs complete — session finished." : `Next active pack: ${next.id} (${next.display}).`);
     return 0;
   }
 
@@ -203,9 +208,9 @@ async function main(): Promise<void> {
   }
   const supersede = args.includes("--supersede");
   const resume = args.includes("--resume");
-  const unexpected = args.filter((a) => a !== "--supersede" && a !== "--resume");
-  if (unexpected.length > 0) {
-    console.error(`✗ Unexpected argument: "${unexpected[0]}"\n`);
+  const positional = args.filter((a) => a !== "--supersede" && a !== "--resume");
+  if (positional.length > 1) {
+    console.error(`✗ Unexpected argument: "${positional[1]}"\n`);
     console.error(USAGE);
     process.exitCode = 2;
     return;
@@ -224,23 +229,31 @@ async function main(): Promise<void> {
     archiveDir: ARCHIVE_DIR,
   });
 
+  // The pack is the operator's explicit choice. Missing or unknown: state the
+  // facts and wait for an explicit command.
+  const packId = positional[0];
+  if (packId === undefined) {
+    console.error("✗ No pack named. Publishing names its object: supply a pack id.");
+    printPackFacts(app);
+    console.error("");
+    console.error(USAGE);
+    process.exitCode = 2;
+    return;
+  }
+  if (app.workspace.pack(packId) === null) {
+    console.error(`✗ Unknown pack "${packId}".`);
+    printPackFacts(app);
+    process.exitCode = 2;
+    return;
+  }
+
   if (resume) {
-    // The pack choice is the delivery layer's job: under today's single-active
-    // session, the only pack that can hold a resumable release is the
-    // in-flight one, so this script supplies it. "Session complete" is
-    // likewise this layer's fact to report — resume itself is pack-scoped.
-    const active = app.session.activePack();
-    if (active === null) {
-      console.error("✗ The session is complete — there is no in-flight pack to resume.");
-      process.exitCode = 1;
-      return;
-    }
-    const result = await app.resumePack(active.id);
+    const result = await app.resumePack(packId);
     process.exitCode = reportResume(app, result);
     return;
   }
 
-  const result = await app.publishActivePack({ supersedeInterrupted: supersede });
+  const result = await app.publishPack(packId, { supersedeInterrupted: supersede });
   process.exitCode = report(app, result);
 }
 
