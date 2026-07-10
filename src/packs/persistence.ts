@@ -3,31 +3,68 @@ import { dirname } from "node:path";
 
 import type { Pack } from "./packs.ts";
 import {
-  createSession,
+  SessionError,
   type PackSession,
   type CaptureOutcome,
   type CaptureRecord,
+  type Progress,
+  type PublishPlan,
 } from "./session.ts";
+import { createWorkspace, type Workspace, type AssetCapture } from "./workspace.ts";
 
 /**
- * Persistence wrapper around the PURE session model.
+ * Persistent working state — the WORKSPACE persisted, exposed through the
+ * legacy PackSession interface as a COMPATIBILITY LAYER (Session Evolution
+ * step 2).
  *
- * The session model is unchanged and owns NO filesystem code. This wrapper owns
- * all I/O. It serializes using ONLY the session's public API
- * (completedPackIds(), capturedAssets()) and restores by replaying advance()/
- * capture() onto a fresh session — it never reaches into session internals.
+ * Inside: the pure Workspace (asset-attached capture facts; every pack view
+ * derived — Constitution §2.1, §3-Workspace) plus ONE piece of transitional
+ * state, the pack cursor (completedPackIds). Outside: the exact PackSession
+ * surface every current consumer uses, byte-for-byte behavior-compatible —
+ * same outcomes, same rejections, same error messages, same auto-save timing.
  *
- * Only the minimum state is persisted: version, completedPackIds, captured.
- * Derived values (active pack, pending, progress, publish plan) are NEVER
- * persisted; they are always re-derived from the restored session.
+ * TRANSITIONAL — DEMOLITION-SCHEDULED (Architecture §6): the cursor
+ * (completedPackIds, and with it activePack/nextPack/advance/isComplete and
+ * the capture gates) is COMPATIBILITY-LAYER state, not Workspace state. The
+ * Constitution has no cursor (§4.1); it survives here solely so this step
+ * changes no behavior. It is deleted in the later step that removes advance()
+ * and the PackSession surface, at which point the durable format reaches its
+ * ratified final form (no pack structure at all — Session Evolution Ruling 2)
+ * and the prefix validation below dies with it.
  *
- * Fail closed: any corrupt, unsupported, malformed, or incompatible saved file
- * throws PersistenceError. Progress is never silently discarded.
+ * Durable format (version 2):
+ *   { version: 2, completedPackIds: string[], captures: AssetCapture[] }
+ * The captures array is the Workspace's complete fact set (assetId,
+ * capturedAt, revisions). Revision counts are persisted so §7.3's Rev-2
+ * indicator survives restart.
  *
- * Auto-save happens only after a successful state mutation (an accepted capture
- * or an advance). A rejected capture does not write.
+ * MIGRATION (one-time, demolition-scheduled — Architecture §6): a version-1
+ * file ({ version: 1, completedPackIds, captured: [{assetId, capturedAt}] })
+ * is migrated on load: captures carry over with revisions: 1 (the honest
+ * floor — v1 never recorded revision history, and history that was never
+ * recorded cannot be invented), the cursor carries over, and the file is
+ * immediately REWRITTEN in version-2 form. The v1 shape is never written
+ * again. Migration validates v1 files with the old replay-era checks (cursor
+ * prefix; captures must belong to the cursor's active pack) because a v1 file
+ * violating them could not have been written by the system and is corrupt.
+ * Deletable once the production session.json is confirmed rewritten; at the
+ * latest, at the runtime flip.
  *
- * No singleton, no runtime imports, no UI. Packs and the file path are injected.
+ * Version-2 validation: the cursor prefix is still checked (the cursor's
+ * coherence must hold while the cursor exists), but capture membership is
+ * NOT — the Workspace models captures for any asset (held work, §4.6), and a
+ * membership check here would rebuild Fossil 1 in the new format.
+ *
+ * Fail closed: any corrupt, unsupported, malformed, or incompatible saved
+ * file throws PersistenceError. Progress is never silently discarded.
+ *
+ * Auto-save happens only after a successful state mutation (an accepted
+ * capture or an advance). A rejected capture does not write. Writes use the
+ * same plain-write discipline as before — durability behavior is unchanged
+ * in this step by explicit ruling.
+ *
+ * No singleton, no runtime imports, no UI. Packs and the file path are
+ * injected.
  */
 
 export class PersistenceError extends Error {
@@ -37,48 +74,58 @@ export class PersistenceError extends Error {
   }
 }
 
-const VERSION = 1 as const;
+const VERSION = 2 as const;
 
-interface SessionSnapshot {
+interface PersistedState {
   readonly version: typeof VERSION;
   readonly completedPackIds: readonly string[];
-  readonly captured: readonly CaptureRecord[];
-}
-
-/** Read serializable state out of a live session (public API only). */
-function serialize(session: PackSession): SessionSnapshot {
-  return {
-    version: VERSION,
-    completedPackIds: [...session.completedPackIds()],
-    captured: session.capturedAssets().map((c) => ({
-      assetId: c.assetId,
-      capturedAt: c.capturedAt,
-    })),
-  };
+  readonly captures: readonly AssetCapture[];
 }
 
 function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === "string");
 }
 
-/** Validate raw parsed JSON into a SessionSnapshot, or throw a clear error. */
-function parseSnapshot(raw: unknown): SessionSnapshot {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new PersistenceError("saved session is not an object");
-  }
-  const o = raw as Record<string, unknown>;
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0;
+}
 
-  if (o["version"] !== VERSION) {
-    throw new PersistenceError(`unsupported saved session version: ${String(o["version"])}`);
+/**
+ * Validate the transitional cursor against the injected packs: completed ids
+ * must be a prefix of the pack sequence. This is cursor coherence, not
+ * workspace validation; it is deleted with the cursor.
+ */
+function validateCursor(packs: readonly Pack[], completedPackIds: readonly string[]): void {
+  if (completedPackIds.length > packs.length) {
+    throw new PersistenceError("saved session lists more completed packs than exist — packs changed");
   }
+  for (let i = 0; i < completedPackIds.length; i++) {
+    const expected = packs[i] as Pack;
+    const got = completedPackIds[i] as string;
+    if (expected.id !== got) {
+      throw new PersistenceError(
+        `saved session completed-pack mismatch ("${expected.id}" vs "${got}") — packs changed`,
+      );
+    }
+  }
+}
+
+/** Parse + migrate a version-1 file (one-time; demolition-scheduled). */
+function migrateV1(o: Record<string, unknown>, packs: readonly Pack[]): PersistedState {
   if (!isStringArray(o["completedPackIds"])) {
     throw new PersistenceError("saved session: completedPackIds must be an array of strings");
   }
   if (!Array.isArray(o["captured"])) {
     throw new PersistenceError("saved session: captured must be an array");
   }
+  const completedPackIds = o["completedPackIds"];
+  validateCursor(packs, completedPackIds);
 
-  const captured: CaptureRecord[] = [];
+  // The v1 replay-era invariant: every capture belongs to the cursor's active
+  // pack (v1 cleared captures on advance, so anything else is corruption).
+  const active = completedPackIds.length < packs.length ? (packs[completedPackIds.length] as Pack) : null;
+
+  const captures: AssetCapture[] = [];
   for (const item of o["captured"]) {
     if (
       typeof item !== "object" ||
@@ -89,88 +136,208 @@ function parseSnapshot(raw: unknown): SessionSnapshot {
       throw new PersistenceError("saved session: each captured entry needs string assetId and capturedAt");
     }
     const r = item as { assetId: string; capturedAt: string };
-    captured.push({ assetId: r.assetId, capturedAt: r.capturedAt });
-  }
-
-  return { version: VERSION, completedPackIds: o["completedPackIds"], captured };
-}
-
-/**
- * Rehydrate a session from a snapshot by replaying onto a fresh session.
- * Fail-closed if the snapshot is incompatible with the injected packs.
- */
-function restore(packs: readonly Pack[], snap: SessionSnapshot): PackSession {
-  const session = createSession(packs);
-
-  // Replay completed packs in order, verifying each matches the expected pack.
-  for (const expectedId of snap.completedPackIds) {
-    const active = session.activePack();
-    if (active === null) {
-      throw new PersistenceError("saved session lists more completed packs than exist — packs changed");
-    }
-    if (active.id !== expectedId) {
+    if (active === null || !active.assets.includes(r.assetId)) {
       throw new PersistenceError(
-        `saved session completed-pack mismatch ("${active.id}" vs "${expectedId}") — packs changed`,
+        `saved session capture "${r.assetId}" is not valid for the active pack — packs changed`,
       );
     }
-    session.advance();
+    // revisions: 1 — the honest floor; v1 never recorded revision history.
+    captures.push({ assetId: r.assetId, capturedAt: r.capturedAt, revisions: 1 });
   }
 
-  // Re-apply captures to the (now) active pack; reject means packs changed.
-  for (const rec of snap.captured) {
-    const r: CaptureOutcome = session.capture(rec.assetId, rec.capturedAt);
-    if (!r.ok) {
-      throw new PersistenceError(
-        `saved session capture "${rec.assetId}" is not valid for the active pack — packs changed`,
-      );
-    }
-  }
-
-  return session;
+  return { version: VERSION, completedPackIds, captures };
 }
 
-function writeSnapshot(path: string, session: PackSession): void {
+/** Parse a version-2 file. */
+function parseV2(o: Record<string, unknown>, packs: readonly Pack[]): PersistedState {
+  if (!isStringArray(o["completedPackIds"])) {
+    throw new PersistenceError("saved session: completedPackIds must be an array of strings");
+  }
+  if (!Array.isArray(o["captures"])) {
+    throw new PersistenceError("saved session: captures must be an array");
+  }
+  validateCursor(packs, o["completedPackIds"]);
+
+  const captures: AssetCapture[] = [];
+  for (const item of o["captures"]) {
+    if (typeof item !== "object" || item === null) {
+      throw new PersistenceError("saved session: each captures entry must be an object");
+    }
+    const r = item as Record<string, unknown>;
+    const assetId = r["assetId"];
+    const capturedAt = r["capturedAt"];
+    const revisions = r["revisions"];
+    if (!isNonEmptyString(assetId) || !isNonEmptyString(capturedAt)) {
+      throw new PersistenceError("saved session: each captures entry needs string assetId and capturedAt");
+    }
+    if (typeof revisions !== "number" || !Number.isInteger(revisions) || revisions < 1) {
+      throw new PersistenceError(
+        `saved session: captures entry "${assetId}" has invalid revisions (must be an integer >= 1)`,
+      );
+    }
+    captures.push({ assetId, capturedAt, revisions });
+  }
+
+  return { version: VERSION, completedPackIds: o["completedPackIds"], captures };
+}
+
+/** Parse raw JSON into persisted state, migrating v1 -> v2. Fail loud. */
+function parseState(raw: unknown, packs: readonly Pack[]): { state: PersistedState; migrated: boolean } {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new PersistenceError("saved session is not an object");
+  }
+  const o = raw as Record<string, unknown>;
+  const version = o["version"];
+  if (version === 1) {
+    return { state: migrateV1(o, packs), migrated: true };
+  }
+  if (version === VERSION) {
+    return { state: parseV2(o, packs), migrated: false };
+  }
+  throw new PersistenceError(`unsupported saved session version: ${String(version)}`);
+}
+
+function writeState(path: string, state: PersistedState): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(serialize(session), null, 2), "utf8");
+  writeFileSync(path, JSON.stringify(state, null, 2), "utf8");
 }
 
 /**
- * Wrap a session so accepted capture()/advance() auto-save to `path`.
- * Reads (activePack, progress, publishPack, etc.) delegate unchanged.
+ * The compatibility layer: the legacy PackSession surface over a Workspace
+ * plus the transitional cursor. Behavior-identical to the old session,
+ * including every rejection and error message.
  */
-function makePersistent(session: PackSession, path: string): PackSession {
+function makeCompatSession(
+  packs: readonly Pack[],
+  workspace: Workspace,
+  completed: string[],
+  path: string,
+): PackSession {
+  function active(): Pack | null {
+    return completed.length < packs.length ? (packs[completed.length] as Pack) : null;
+  }
+
+  function save(): void {
+    writeState(path, {
+      version: VERSION,
+      completedPackIds: [...completed],
+      captures: workspace.captures(),
+    });
+  }
+
+  function toRecord(c: AssetCapture): CaptureRecord {
+    return { assetId: c.assetId, capturedAt: c.capturedAt };
+  }
+
   return {
-    activePack: () => session.activePack(),
-    nextPack: () => session.nextPack(),
-    isComplete: () => session.isComplete(),
-    capturedAssets: () => session.capturedAssets(),
-    pendingAssets: () => session.pendingAssets(),
-    progress: () => session.progress(),
-    publishPack: () => session.publishPack(),
-    completedPackIds: () => session.completedPackIds(),
-    isAssetInActivePack: (assetId: string) => session.isAssetInActivePack(assetId),
-    hasCaptured: (assetId: string) => session.hasCaptured(assetId),
+    activePack(): Pack | null {
+      return active();
+    },
+
+    nextPack(): Pack | null {
+      const n = completed.length + 1;
+      return n < packs.length ? (packs[n] as Pack) : null;
+    },
+
+    isComplete(): boolean {
+      return active() === null;
+    },
 
     capture(assetId: string, capturedAt: string): CaptureOutcome {
-      const r = session.capture(assetId, capturedAt);
-      if (r.ok) writeSnapshot(path, session); // save only on accepted mutation
-      return r;
+      const pack = active();
+      if (pack === null) {
+        return { ok: false, reason: "no_active_pack" };
+      }
+      if (!pack.assets.includes(assetId)) {
+        return { ok: false, reason: "not_in_active_pack", assetId };
+      }
+      const fact = workspace.capture(assetId, capturedAt);
+      save(); // save only on accepted mutation
+      return { ok: true, assetId, replaced: fact.revisions > 1 };
+    },
+
+    capturedAssets(): readonly CaptureRecord[] {
+      const pack = active();
+      return pack ? workspace.capturedFor(pack.id).map(toRecord) : [];
+    },
+
+    pendingAssets(): readonly string[] {
+      const pack = active();
+      return pack ? workspace.pendingAssets(pack.id) : [];
+    },
+
+    progress(): Progress | null {
+      const pack = active();
+      if (!pack) return null;
+      return {
+        packId: pack.id,
+        packDisplay: pack.display,
+        captured: workspace.capturedFor(pack.id).length,
+        total: pack.assets.length,
+        position: completed.length + 1,
+        packCount: packs.length,
+      };
+    },
+
+    publishPack(): PublishPlan {
+      const pack = active();
+      if (pack === null) {
+        throw new SessionError("no active pack to publish (session complete)");
+      }
+      const captured = workspace.capturedFor(pack.id);
+      if (captured.length === 0) {
+        throw new SessionError(`pack "${pack.id}" has no captured assets to publish`);
+      }
+      return {
+        packId: pack.id,
+        toPublish: captured.map(toRecord),
+        total: pack.assets.length,
+        capturedCount: captured.length,
+        isPartial: captured.length < pack.assets.length,
+        pendingAssets: workspace.pendingAssets(pack.id),
+      };
     },
 
     advance(): void {
-      session.advance();
-      writeSnapshot(path, session);
+      const pack = active();
+      if (pack === null) {
+        throw new SessionError("cannot advance: session already complete");
+      }
+      // Strictly forward, as before: the instance ends (workspace reset for
+      // THIS pack's members) and the transitional cursor moves.
+      completed.push(pack.id);
+      workspace.resetPack(pack.id);
+      save();
+    },
+
+    completedPackIds(): readonly string[] {
+      return [...completed];
+    },
+
+    isAssetInActivePack(assetId: string): boolean {
+      const pack = active();
+      return pack !== null && pack.assets.includes(assetId);
+    },
+
+    hasCaptured(assetId: string): boolean {
+      return workspace.captureOf(assetId) !== null;
     },
   };
 }
 
 /**
  * Create a persistent session for the given packs at `path`.
- *  - file missing -> fresh session, written to disk
- *  - file present -> restored (fail-closed on corrupt/incompatible)
+ *  - file missing      -> fresh state, written to disk
+ *  - version-1 file    -> migrated, immediately rewritten as version 2
+ *  - version-2 file    -> restored (fail-closed on corrupt/incompatible)
  */
 export function createPersistentSession(opts: { packs: readonly Pack[]; path: string }): PackSession {
   const { packs, path } = opts;
+
+  if (packs.length === 0) {
+    // Same guard (and error type) the pure session enforced.
+    throw new SessionError("cannot create a session with no packs");
+  }
 
   if (existsSync(path)) {
     let raw: unknown;
@@ -181,13 +348,20 @@ export function createPersistentSession(opts: { packs: readonly Pack[]; path: st
         `saved session is corrupt (invalid JSON): ${e instanceof Error ? e.message : String(e)}`,
       );
     }
-    const snap = parseSnapshot(raw);
-    const session = restore(packs, snap);
-    return makePersistent(session, path);
+    const { state, migrated } = parseState(raw, packs);
+    const workspace = createWorkspace(packs, state.captures);
+    const completed = [...state.completedPackIds];
+    if (migrated) {
+      // Rewrite migrated state in the new format immediately: the v1 shape
+      // is never read twice and never written again.
+      writeState(path, { version: VERSION, completedPackIds: completed, captures: workspace.captures() });
+    }
+    return makeCompatSession(packs, workspace, completed, path);
   }
 
-  const session = createSession(packs);
-  const persistent = makePersistent(session, path);
-  writeSnapshot(path, session); // persist the fresh session immediately
-  return persistent;
+  const workspace = createWorkspace(packs);
+  const completed: string[] = [];
+  const session = makeCompatSession(packs, workspace, completed, path);
+  writeState(path, { version: VERSION, completedPackIds: [], captures: [] }); // persist the fresh state immediately
+  return session;
 }

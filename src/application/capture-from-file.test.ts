@@ -112,8 +112,10 @@ describe("captureFromFile — end-to-end through captureOnce", () => {
     });
 
     expect(r.ok).toBe(true);
+    // Version-2 persisted shape: workspace capture facts (with revision counts).
     const onDisk = JSON.parse(readFileSync(sessionPath, "utf8"));
-    expect(onDisk.captured.map((c: { assetId: string }) => c.assetId)).toEqual(["eth"]);
+    expect(onDisk.captures.map((c: { assetId: string }) => c.assetId)).toEqual(["eth"]);
+    expect(onDisk.captures[0].revisions).toBe(1); // first capture: revision 1 persisted
   });
 });
 
