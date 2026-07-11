@@ -322,21 +322,21 @@ describe("publish + persisted workspace restore (regression)", () => {
   it("a workspace restored from the same file shows the published pack reset and others untouched", async () => {
     const sessionPath = join(workDir, "session.json");
     const persisted = createPersistentWorkspace({ packs: PACKS, path: sessionPath });
-    persisted.workspace.capture("aapl", "t-aapl"); // another pack's work, must survive
+    persisted.capture("aapl", "t-aapl"); // another pack's work, must survive
     for (const assetId of ["btc", "eth"]) {
       const src = join(workDir, `p-${assetId}.png`);
       writeFileSync(src, `png:${assetId}`);
       staging.stage(assetId, src);
-      persisted.workspace.capture(assetId, `t-${assetId}`);
+      persisted.capture(assetId, `t-${assetId}`);
     }
 
-    const r = await publishPack(deps({ workspace: persisted.workspace }), "crypto", GO);
+    const r = await publishPack(deps({ workspace: persisted }), "crypto", GO);
     expect(r.ok).toBe(true);
 
     const restored = createPersistentWorkspace({ packs: PACKS, path: sessionPath });
-    expect(restored.workspace.packState("crypto")).toBe("empty"); // published pack reset, durably
-    expect(restored.workspace.captureOf("btc")).toBeNull();
-    expect(restored.workspace.captureOf("aapl")).not.toBeNull(); // other pack untouched
+    expect(restored.packState("crypto")).toBe("empty"); // published pack reset, durably
+    expect(restored.captureOf("btc")).toBeNull();
+    expect(restored.captureOf("aapl")).not.toBeNull(); // other pack untouched
   });
 });
 

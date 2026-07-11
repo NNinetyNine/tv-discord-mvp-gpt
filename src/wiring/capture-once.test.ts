@@ -150,7 +150,7 @@ describe("captureOnce — accept path (routing by identity)", () => {
 
   it("auto-persists through the persisted workspace surface", async () => {
     const sessionPath = join(srcDir, "session.json");
-    const { workspace } = createPersistentWorkspace({ packs, path: sessionPath });
+    const workspace = createPersistentWorkspace({ packs, path: sessionPath });
     const r = await captureOnce(
       deps(fakeSource({ filename: "BTCUSD_2026-06-25_01-18-55.png", imagePath, capturedAt: "T-CAP" }), passValidator, workspace),
     );

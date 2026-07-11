@@ -119,7 +119,7 @@ describe("captureFromFile — end-to-end through captureOnce", () => {
 
   it("auto-persists through the persisted workspace surface", async () => {
     const sessionPath = join(outDir, "session.json");
-    const { workspace } = createPersistentWorkspace({ packs, path: sessionPath });
+    const workspace = createPersistentWorkspace({ packs, path: sessionPath });
     const r = await captureFromFile({
       filePath: makeExport("ETHUSD_2026-06-25_01-18-55.png"),
       resolver,

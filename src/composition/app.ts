@@ -93,7 +93,7 @@ export function buildApp(opts: BuildAppOptions): App {
   // --- shared infrastructure (constructed once; app instance state) ---
   const registry = loadRegistry();
   const resolver = createResolver(registry);
-  const { workspace } = createPersistentWorkspace({
+  const workspace = createPersistentWorkspace({
     packs: loadPacks(),
     path: opts.sessionPath,
   });
