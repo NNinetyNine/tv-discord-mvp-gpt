@@ -59,7 +59,7 @@ never below, and never sideways into the legacy runtime.
 | Layer | Current members | Owns | Must never |
 |---|---|---|---|
 | **Domain definitions & stores** | `registry/`, `packs/packs.ts`, `release/release-store.ts` | Loading/persisting the operator's definitions and historical truth; record integrity | Contain workflow policy; know about Discord, sessions, or staging as concepts |
-| **Domain state** | `packs/session.ts`, `packs/persistence.ts` | Working-state lifecycle (capture, completeness, advance) and its durability | Perform I/O beyond its own file; know how images move |
+| **Domain state** | `packs/workspace.ts`, `packs/persistence.ts` | Working-state facts (asset-attached captures, revision counts), derived pack views, per-pack reset, and Workspace durability | Perform I/O beyond its own file; know how images move |
 | **Adapters** | `publish/discord-session.ts`, `validation/validate-image.ts`, `wiring/staging.ts`, `wiring/channels.ts` | One external reality each (gateway, image bytes, staged files, channel config) | Decide *when* they are used; import from wiring or above |
 | **Wiring (orchestration)** | `wiring/capture-once.ts`, `wiring/publish-pack.ts` | Sequencing and workflow policy: gates, ordering, supersession, resume | Read clocks, env, or config directly — all reality is injected |
 | **Application** | `application/capture-from-file.ts` | Use-case composition over wiring | Own state |
@@ -79,7 +79,7 @@ concept; see §6 below for what still does).
 |---|---|---|---|
 | `config/registry.json`, `config/packs.json` | Assets and Packs | Domain definitions | Domain stores (see Known Fossils: the `config/` home is a recorded misclassification) |
 | `config/channels.json` | Pack→channel assignment | Domain definition (channel assignment is Pack metadata, §5.3) | Channels adapter |
-| `session.json` | The single-active session's captures | Working state | `packs/persistence.ts` |
+| `session.json` | The persisted Workspace: capture facts only (version 3; no cursor, no session model) | Working state | `packs/persistence.ts` |
 | `staging/` | Staged chart images awaiting publish | Working state | Staging adapter |
 | `archive/` | Releases: records + image custody | Historical truth | Release store — **separate root from staging by ratified decision: opposite lifecycles never share a root** (Constitution §8.2) |
 | `.env` | Discord token | Installation configuration | Publisher adapter |
