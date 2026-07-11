@@ -1,6 +1,6 @@
 # VisionX Architecture
 
-**Version:** 1.0 · **Recorded:** 2026-07-10 · **Subordinate to:** `docs/CONSTITUTION.md`
+**Version:** 1.1 · **Recorded:** 2026-07-10 · **Amended:** 2026-07-11 (session evolution phase close) · **Subordinate to:** `docs/CONSTITUTION.md`
 
 > The Constitution governs what VisionX must do. This document records how the
 > current implementation satisfies it. Where they conflict, the Constitution is
@@ -136,24 +136,19 @@ names refer to Constitution §10.
   and derived-lifecycle discipline. The format is v1 and load-bearing forever.
 - The archive layout and its separation from staging.
 - `resumeInterruptedRelease`'s *contract* (pack-scoped) — born constitutional;
-  session evolution changes its internals, never its signature.
+  session evolution changed its internals, never its signature.
 - The layer map's dependency direction.
-
-**Evolving — with the *session evolution* phase:**
-- `packs/session.ts` / `packs/persistence.ts` — the single-active session is
-  replaced by per-pack capture state (Constitution §4.1); persistence is
-  redesigned catalog-tolerant (see Known Fossils).
-- `publishActivePack` — loses its "active pack" shape and vocabulary; becomes
-  pack-scoped like resume.
-- The invariant assert inside resume (pack must be the session's in-flight
-  pack) — exists *because* of the single-active session; **dissolves** when
-  per-pack reset arrives. A future reader must not preserve it past that
-  phase.
-- `no_active_pack` in the publish result — session vocabulary; leaves with
-  the session that produced it.
 
 **Evolving — with the *definition editing* phase:**
 - `config/` as the home of `registry.json` / `packs.json` (Constitution §8.8).
+
+**Scheduled for demolition — when the production working-state file is
+confirmed version 3:**
+- The v1→v3 and v2→v3 persistence migrations in `packs/persistence.ts` (and
+  their test blocks). Evidence that licenses deletion: the operator confirms
+  the live `session.json` reads `"version": 3` (any post-Step-6 tool run
+  rewrites it) and that no other machine or backup holds an older file.
+  Hard deadline regardless: the runtime flip.
 
 **Scheduled for demolition — at the runtime flip:**
 - The legacy runtime in its entirety, including `publish/discord.ts`.
@@ -165,22 +160,15 @@ names refer to Constitution §10.
 
 Deliberate, ratified implementation debt. Each entry names the phase that
 removes it; none may be "fixed" outside that phase without a front-door
-decision.
+decision. (Fossils 1 and 3 of v1.0 — persistence failing closed on
+legitimate definition change, and "active pack" vocabulary in the publish
+path — were removed by the session evolution phase and are struck.)
 
-1. **`packs/persistence.ts` fails closed on legitimate definition change**
-   (Constitution §8.6). A positional restore turns lawful Pack edits into
-   corruption errors — a protection-axis violation (a coherence mechanism
-   firing on a definitions change). *Removed by:* session evolution. Until
-   then, definition editing must not ship.
-2. **`config/` misclassifies domain data as installation configuration**
+1. **`config/` misclassifies domain data as installation configuration**
    (Constitution §8.8, §2.2). `registry.json` and `packs.json` are
    operator-owned domain definitions living in a directory named for
    plumbing. *Removed by:* definition editing, the first phase that writes
    to them.
-3. **"Active pack" vocabulary in the publish path.** The Constitution
-   contains no such concept; the shipped `publishActivePack` predates the
-   multi-pack amendment and carries the legacy session's shape. Resume was
-   deliberately built without it. *Removed by:* session evolution.
 
 ## 8. Maintenance
 

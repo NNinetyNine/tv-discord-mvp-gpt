@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -160,58 +160,5 @@ describe("list ignores non-png files", () => {
     store.stage("btc", makeSource("btc.png"));
     writeFileSync(join(base, "active", "stray.tmp"), "junk", "utf8");
     expect(store.list().map((s) => s.assetId)).toEqual(["btc"]);
-  });
-});
-
-describe("legacy layout migration (TRANSITIONAL — DEMOLITION-SCHEDULED)", () => {
-  function writeLegacy(packId: string, assetId: string, contents: string): void {
-    const dir = join(base, "active", packId);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${assetId}.png`), contents, "utf8");
-  }
-
-  it("migrates pack-keyed files to the flat layout once, at construction", () => {
-    writeLegacy("crypto", "btc", "BTC-BYTES");
-    writeLegacy("crypto", "eth", "ETH-BYTES");
-    writeLegacy("stocks", "aapl", "AAPL-BYTES");
-
-    const store = createStagingStore(base);
-
-    expect(store.list().map((s) => s.assetId)).toEqual(["aapl", "btc", "eth"]);
-    expect(readFileSync(join(base, "active", "btc.png"), "utf8")).toBe("BTC-BYTES");
-    // Old pack directories are gone.
-    expect(existsSync(join(base, "active", "crypto"))).toBe(false);
-    expect(existsSync(join(base, "active", "stocks"))).toBe(false);
-  });
-
-  it("stray non-png files inside a legacy pack dir are removed with the dir", () => {
-    writeLegacy("crypto", "btc", "BTC-BYTES");
-    writeFileSync(join(base, "active", "crypto", ".btc.123.tmp"), "junk", "utf8");
-
-    const store = createStagingStore(base);
-
-    expect(store.has("btc")).toBe(true);
-    expect(existsSync(join(base, "active", "crypto"))).toBe(false);
-  });
-
-  it("fails LOUD when two legacy paths would collide on the same assetId", () => {
-    writeLegacy("morning", "btc", "A");
-    writeLegacy("evening", "btc", "B");
-    expect(() => createStagingStore(base)).toThrow(StagingError);
-    expect(() => createStagingStore(base)).toThrow(/collision/);
-  });
-
-  it("fails LOUD when a legacy file collides with an already-flat file", () => {
-    writeLegacy("crypto", "btc", "LEGACY"); // creates active/ as a side effect
-    writeFileSync(join(base, "active", "btc.png"), "FLAT", "utf8");
-    expect(() => createStagingStore(base)).toThrow(/collision/);
-  });
-
-  it("a fresh (or already-flat) tree is untouched", () => {
-    const store = createStagingStore(base);
-    store.stage("btc", makeSource("btc.png"));
-    // Re-constructing over the flat tree is a no-op.
-    const again = createStagingStore(base);
-    expect(again.list().map((s) => s.assetId)).toEqual(["btc"]);
   });
 });

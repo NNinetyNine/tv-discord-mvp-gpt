@@ -39,15 +39,6 @@ import { join, resolve } from "node:path";
  * The store is stateless: `stagedAt` is derived from the staged file's mtime,
  * so it survives process restarts and never drifts from what is actually on
  * disk.
- *
- * TRANSITIONAL — DEMOLITION-SCHEDULED: migrateLegacyPackLayout() migrates the
- * old pack-keyed layout (active/<packId>/<assetId>.png) to the flat layout
- * once, at construction. Collisions (the same assetId under two pack dirs, or
- * an already-flat file) are impossible for any tree the old system wrote
- * (disjoint packs; single-active staging) and therefore fail LOUD as
- * corruption. Deletable once the production staging/ tree is confirmed flat;
- * at the latest, at the runtime flip. Its removal is the deletion of that one
- * function, its call, and its test block.
  */
 
 export class StagingError extends Error {
@@ -93,39 +84,11 @@ function assertSafeId(kind: "assetId", value: string): void {
 }
 
 /**
- * TRANSITIONAL — DEMOLITION-SCHEDULED (see module header). One-time layout
- * migration: move active/<packId>/<assetId>.png up to active/<assetId>.png,
- * then remove the emptied pack directories. Fail LOUD on any collision.
- */
-function migrateLegacyPackLayout(activeRoot: string): void {
-  if (!existsSync(activeRoot)) return;
-  for (const entry of readdirSync(activeRoot)) {
-    const legacyDir = join(activeRoot, entry);
-    if (!statSync(legacyDir).isDirectory()) continue; // already-flat files
-    for (const file of readdirSync(legacyDir)) {
-      if (!file.endsWith(".png")) continue; // stray temp files go with the dir
-      const dest = join(activeRoot, file);
-      if (existsSync(dest)) {
-        throw new StagingError(
-          `legacy staging migration collision: "${file}" exists both under pack dir "${entry}" and at the staging root — ` +
-            `this tree could not have been written by the system; resolve it manually before continuing`,
-        );
-      }
-      renameSync(join(legacyDir, file), dest);
-    }
-    rmSync(legacyDir, { recursive: true, force: true });
-  }
-}
-
-/**
  * Create a staging store rooted at `baseDir`. The base directory is injected
  * so tests can use a temp directory and never touch the real staging tree.
- * Migrates any legacy pack-keyed layout once, at construction.
  */
 export function createStagingStore(baseDir: string): StagingStore {
   const activeRoot = resolve(baseDir, "active");
-
-  migrateLegacyPackLayout(activeRoot);
 
   function assetPath(assetId: string): string {
     assertSafeId("assetId", assetId);
