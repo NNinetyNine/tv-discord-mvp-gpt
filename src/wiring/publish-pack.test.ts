@@ -17,8 +17,8 @@ import { createReleaseStore, type ReleaseStore } from "../release/release-store.
 import type { Pack } from "../packs/packs.ts";
 
 const PACKS: readonly Pack[] = [
-  { id: "crypto", display: "Crypto", assets: ["btc", "eth"] },
-  { id: "stocks", display: "Stocks", assets: ["aapl"] },
+  { id: "crypto", display: "Crypto", channel: "crypto-room", assets: ["btc", "eth"] },
+  { id: "stocks", display: "Stocks", channel: "stocks-room", assets: ["aapl"] },
 ];
 
 let workDir: string;
@@ -143,6 +143,23 @@ describe("gates", () => {
     const r = await publishPack(deps({ resolveChannel: () => null }), "crypto", GO);
     expect(r).toMatchObject({ ok: false, outcome: "channel_unresolved", packId: "crypto" });
     expect(releases.listReleases("crypto")).toHaveLength(0);
+  });
+
+  it("resolves the channel from the Pack's OWN assignment, never the pack id", async () => {
+    captureAll("crypto");
+    const asked: string[] = [];
+    const r = await publishPack(
+      deps({
+        resolveChannel: (name) => {
+          asked.push(name);
+          return "chan-1";
+        },
+      }),
+      "crypto",
+      GO,
+    );
+    expect(r.ok).toBe(true);
+    expect(asked).toEqual(["crypto-room"]); // pack.channel — the id coincidence is retired
   });
 
   it("publisher_connect_failed leaves ZERO durable state (open precedes create)", async () => {

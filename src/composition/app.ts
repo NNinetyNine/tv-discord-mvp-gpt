@@ -4,7 +4,7 @@ import { loadPacks } from "../packs/packs.ts";
 import { createPersistentWorkspace } from "../packs/persistence.ts";
 import type { Workspace } from "../packs/workspace.ts";
 import { createStagingStore, type StagingStore } from "../wiring/staging.ts";
-import { loadChannelResolver } from "../wiring/channels.ts";
+import { loadChannelResolver, loadChannels } from "../wiring/channels.ts";
 import { createReleaseStore, type ReleaseStore } from "../release/release-store.ts";
 import { openPublisherSession } from "../publish/discord-session.ts";
 import {
@@ -100,8 +100,12 @@ export function buildApp(opts: BuildAppOptions): App {
   // --- shared infrastructure (constructed once; app instance state) ---
   const registry = loadRegistry(opts.registryPath, opts.channelsPath);
   const resolver = createResolver(registry);
+  // Channel-NAME universe for pack-definition coherence (Pack owns its channel
+  // assignment; a pack naming an unknown channel fails loud HERE, at load —
+  // whether a known name has a provisioned ID stays publish's concern).
+  const channelNames = new Set(Object.keys(loadChannels(opts.channelsPath)));
   const workspace = createPersistentWorkspace({
-    packs: loadPacks(opts.packsPath, new Set(registry.all().map((a) => a.id))),
+    packs: loadPacks(opts.packsPath, new Set(registry.all().map((a) => a.id)), channelNames),
     path: opts.sessionPath,
   });
   const staging = createStagingStore(opts.stagingDir);

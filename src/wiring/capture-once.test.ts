@@ -24,8 +24,8 @@ const registryData = {
 const resolver = createResolver(buildRegistry(registryData, channels));
 
 const packs: Pack[] = [
-  { id: "crypto", display: "Crypto", assets: ["btc", "eth"] },
-  { id: "stocks", display: "Stocks", assets: ["aapl"] },
+  { id: "crypto", display: "Crypto", channel: "crypto", assets: ["btc", "eth"] },
+  { id: "stocks", display: "Stocks", channel: "stocks", assets: ["aapl"] },
 ];
 
 const passValidator: CaptureOnceDeps["validate"] = () => ({ ok: true, checks: { notBlank: true } });

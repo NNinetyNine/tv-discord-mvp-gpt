@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolve as resolvePath } from "node:path";
 
-import { buildChannelResolver, loadChannelResolver, ChannelsError } from "./channels.ts";
+import { buildChannelResolver, loadChannelResolver, loadChannels, ChannelsError } from "./channels.ts";
 
 describe("buildChannelResolver — pure resolution", () => {
   it("resolves a configured channel name to its id", () => {
@@ -41,6 +41,21 @@ describe("loadChannelResolver — real config", () => {
     const resolve = loadChannelResolver(resolvePath(process.cwd(), "config", "channels.json"));
     expect(typeof resolve).toBe("function");
     expect(resolve("crypto")).toBe("1519158079302664302");
+  });
+});
+
+describe("loadChannels — the channel-NAME universe", () => {
+  it("exposes the parsed channels map (keys are the installation's channel names)", () => {
+    const channels = loadChannels(resolvePath(process.cwd(), "config", "channels.json"));
+    const names = new Set(Object.keys(channels));
+    expect(names.has("crypto")).toBe(true);
+    expect(names.has("stocks")).toBe(true);
+  });
+
+  it("fails loud on an unreadable file", () => {
+    expect(() => loadChannels(resolvePath(process.cwd(), "config", "no-such.json"))).toThrow(
+      ChannelsError,
+    );
   });
 });
 

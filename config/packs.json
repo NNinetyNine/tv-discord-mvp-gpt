@@ -2,26 +2,31 @@
   {
     "id": "crypto",
     "display": "Crypto",
+    "channel": "crypto",
     "assets": ["akt", "zec", "pepe", "doge", "fet", "xlm", "xrp", "sui", "tao", "trx", "link", "sol", "hype", "eth", "btc", "total3"]
   },
   {
     "id": "stocks",
     "display": "Stocks",
+    "channel": "stocks",
     "assets": ["moh", "mrna", "msft", "meta", "mbg", "mc", "lulu", "or", "lac", "lisn", "jpm", "jnj", "intc", "ilmn", "googl", "regn", "rddt", "phm", "p911", "pfe", "ri", "paas", "pltr", "oxy", "nvda", "novob", "nem", "nflx", "nesn", "hims", "1810", "wday", "vsxy", "unh", "tsco", "tsla", "tme", "700", "tmus", "scco", "1928", "sndk", "rhm", "rgti", "bayn", "bas", "b", "asts", "aapl", "axp", "amzn", "amd", "baba", "alb", "aem", "adbe", "ads", "gs", "fres", "fcx", "ag", "race", "el", "qbts", "dow", "dis", "coin", "crcl", "cvx", "bmw", "brkb"]
   },
   {
     "id": "indices",
     "display": "Indices",
+    "channel": "indices",
     "assets": ["iwm", "es1", "nq1", "ym1", "mdax", "dax", "hsi"]
   },
   {
     "id": "commodities",
     "display": "Commodities",
+    "channel": "commodities",
     "assets": ["palladium", "hg1", "silver", "platinum", "gold", "lit", "urnm", "cl1", "ali1"]
   },
   {
     "id": "etfs",
     "display": "ETFs",
+    "channel": "etfs",
     "assets": ["acwi", "cssx5eeur", "eem", "xle", "ixn", "mchi", "ni225", "sxrt", "vxus", "xlc", "xlb", "xlre", "xlu", "xli", "xlp", "xly", "xlf", "ita", "shy", "igf", "gld", "vig", "qqq", "urth", "voo", "vwra", "xlk", "xlv"]
   }
 ]

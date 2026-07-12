@@ -34,8 +34,15 @@ export function buildChannelResolver(channels: Record<string, unknown>): Channel
   };
 }
 
-/** Load the supplied channels file and build a resolver from it. Throws on read/parse failure. */
-export function loadChannelResolver(channelsPath: string): ChannelResolver {
+/**
+ * Load + parse the supplied channels file: channel name -> Discord channel ID.
+ * Throws ChannelsError on read/parse/shape failure. This module owns channel
+ * config as its one external reality; the parsed map serves resolver
+ * construction and supplies the channel-NAME universe that definition
+ * validation checks assignments against (name membership is definition
+ * COHERENCE; whether a name has a provisioned ID is publish's concern).
+ */
+export function loadChannels(channelsPath: string): Record<string, unknown> {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(channelsPath, "utf8"));
@@ -45,5 +52,10 @@ export function loadChannelResolver(channelsPath: string): ChannelResolver {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new ChannelsError("channels.json must be a JSON object keyed by channel name");
   }
-  return buildChannelResolver(raw as Record<string, unknown>);
+  return raw as Record<string, unknown>;
+}
+
+/** Load the supplied channels file and build a resolver from it. Throws on read/parse failure. */
+export function loadChannelResolver(channelsPath: string): ChannelResolver {
+  return buildChannelResolver(loadChannels(channelsPath));
 }

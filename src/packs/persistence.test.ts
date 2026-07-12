@@ -7,9 +7,9 @@ import type { Pack } from "./packs.ts";
 import { createPersistentWorkspace, PersistenceError } from "./persistence.ts";
 
 const packs: Pack[] = [
-  { id: "crypto", display: "Crypto", assets: ["btc", "eth", "sol"] },
-  { id: "stocks", display: "Stocks", assets: ["aapl", "nvda"] },
-  { id: "indices", display: "Indices", assets: ["spx"] },
+  { id: "crypto", display: "Crypto", channel: "crypto", assets: ["btc", "eth", "sol"] },
+  { id: "stocks", display: "Stocks", channel: "stocks", assets: ["aapl", "nvda"] },
+  { id: "indices", display: "Indices", channel: "indices", assets: ["spx"] },
 ];
 
 let dir: string;

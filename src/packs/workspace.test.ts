@@ -4,8 +4,8 @@ import { createWorkspace, WorkspaceError, type AssetCapture } from "./workspace.
 import type { Pack } from "./packs.ts";
 
 const PACKS: readonly Pack[] = [
-  { id: "crypto", display: "Crypto", assets: ["btc", "eth"] },
-  { id: "stocks", display: "Stocks", assets: ["aapl"] },
+  { id: "crypto", display: "Crypto", channel: "crypto", assets: ["btc", "eth"] },
+  { id: "stocks", display: "Stocks", channel: "stocks", assets: ["aapl"] },
 ];
 
 /** Compare capture sets without asserting any ordering (none is guaranteed). */
@@ -16,8 +16,8 @@ function byAssetId(captures: readonly AssetCapture[]): Map<string, AssetCapture>
 describe("construction — §9.1 disjointness asserted once, loudly", () => {
   it("rejects overlapping pack definitions, naming the asset and both packs", () => {
     const overlapping: readonly Pack[] = [
-      { id: "morning", display: "Morning", assets: ["btc", "eth"] },
-      { id: "evening", display: "Evening", assets: ["btc"] },
+      { id: "morning", display: "Morning", channel: "crypto", assets: ["btc", "eth"] },
+      { id: "evening", display: "Evening", channel: "crypto", assets: ["btc"] },
     ];
     expect(() => createWorkspace(overlapping)).toThrow(WorkspaceError);
     expect(() => createWorkspace(overlapping)).toThrow(/btc/);

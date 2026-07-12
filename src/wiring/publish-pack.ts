@@ -243,8 +243,9 @@ export async function publishPack(
     return path;
   };
 
-  // 5. Channel.
-  const channelId = resolveChannel(packId);
+  // 5. Channel: the Pack owns its assignment (a channel NAME); the resolver
+  //    maps the name to the installation-provisioned ID, null when unwired.
+  const channelId = resolveChannel(pack.channel);
   if (channelId === null) {
     return { ok: false, outcome: "channel_unresolved", packId };
   }
