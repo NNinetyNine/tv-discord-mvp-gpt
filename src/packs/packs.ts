@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 /**
  * Pack loader + validator.
  *
- * Packs are defined as an ORDERED array in config/packs.json; the array order
+ * Packs are defined as an ORDERED array in definitions/packs.json; the array order
  * IS the publishing/workflow order. Each pack lists internal asset IDs (e.g.
  * "btc"), NOT TradingView symbols — so packs are insulated from filename
  * reconciliation. Every asset ID is validated against the registry on load.
@@ -29,10 +29,8 @@ import { readFileSync } from "node:fs";
  * future use. We therefore do NOT check for the same asset id across different
  * packs; only duplicates *within a single pack* are rejected.
  *
- * This module owns Pack definition loading and validation. The validated Pack
- * definitions are assembled by the composition root and consumed by the
- * Workspace and publish orchestration; this module itself remains free of
- * workflow policy, working-state persistence, staging, and publishing I/O.
+ * Phase 2A scope: loader/validator only. Nothing here is wired into the running
+ * app, the session model, persistence, the UI, staging, or publishing.
  */
 
 export interface Pack {
@@ -122,20 +120,13 @@ export function buildPacks(
         throw new PackError(`pack "${entry.id}" lists duplicate asset id "${assetId}"`);
       }
       if (!validIds.has(assetId)) {
-        throw new PackError(
-          `pack "${entry.id}" references unknown asset id "${assetId}" (not in registry)`,
-        );
+        throw new PackError(`pack "${entry.id}" references unknown asset id "${assetId}" (not in registry)`);
       }
       seenAssets.add(assetId);
     }
 
     seenPackIds.add(entry.id);
-    packs.push({
-      id: entry.id,
-      display: entry.display,
-      channel: entry.channel,
-      assets: [...entry.assets],
-    });
+    packs.push({ id: entry.id, display: entry.display, channel: entry.channel, assets: [...entry.assets] });
   });
 
   return packs;
@@ -158,9 +149,7 @@ export function loadPacks(
   try {
     raw = JSON.parse(readFileSync(packsPath, "utf8"));
   } catch (e) {
-    throw new PackError(
-      `could not read/parse ${packsPath}: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    throw new PackError(`could not read/parse ${packsPath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   return buildPacks(raw, validIds, channelNames);

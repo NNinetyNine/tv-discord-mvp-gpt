@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
 import { buildRegistry, RegistryError, loadRegistry } from "./registry.ts";
-// Tests inject their own fixtures — they do NOT depend on config/registry.json.
+// Tests inject their own fixtures — they do NOT depend on definitions/registry.json.
 const channels = { crypto: "", stocks: "", indices: "" };
 const good = {
   btc:  { tradingView: "BTCUSD", display: "Bitcoin",  channel: "crypto" },
@@ -66,9 +66,9 @@ describe("registry — validation (fails loudly)", () => {
   });
 });
 describe("registry — real config loads and validates", () => {
-  it("loads config/registry.json without throwing", () => {
+  it("loads definitions/registry.json without throwing", () => {
     const reg = loadRegistry(
-      resolve(process.cwd(), "config", "registry.json"),
+      resolve(process.cwd(), "definitions", "registry.json"),
       resolve(process.cwd(), "config", "channels.json"),
     );
     expect(reg.all().length).toBeGreaterThan(0);

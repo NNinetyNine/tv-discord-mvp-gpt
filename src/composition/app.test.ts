@@ -47,8 +47,8 @@ function makeApp(): App {
     sessionPath: join(sessionDir, "session.json"),
     stagingDir,
     archiveDir,
-    registryPath: join(process.cwd(), "config", "registry.json"),
-    packsPath: join(process.cwd(), "config", "packs.json"),
+    registryPath: join(process.cwd(), "definitions", "registry.json"),
+    packsPath: join(process.cwd(), "definitions", "packs.json"),
     channelsPath: join(process.cwd(), "config", "channels.json"),
     validationPolicy: TEST_POLICY,
   });

@@ -5,7 +5,7 @@ import { buildPacks, PackError, loadPacks } from "./packs.ts";
 import { loadRegistry } from "../registry/registry.ts";
 import { loadChannels } from "../wiring/channels.ts";
 
-// Injected valid-id set — independent of config/registry.json.
+// Injected valid-id set — independent of definitions/registry.json.
 const validIds = new Set(["btc", "eth", "aapl", "nvda", "spx", "gold"]);
 
 // Injected channel-NAME universe — independent of config/channels.json.
@@ -148,16 +148,16 @@ describe("buildPacks — validation fails loudly", () => {
 });
 
 describe("loadPacks — real config loads and validates", () => {
-  it("loads config/packs.json without throwing and preserves order", () => {
+  it("loads definitions/packs.json without throwing and preserves order", () => {
     const registry = loadRegistry(
-      resolve(process.cwd(), "config", "registry.json"),
+      resolve(process.cwd(), "definitions", "registry.json"),
       resolve(process.cwd(), "config", "channels.json"),
     );
     const realChannelNames = new Set(
       Object.keys(loadChannels(resolve(process.cwd(), "config", "channels.json"))),
     );
     const packs = loadPacks(
-      resolve(process.cwd(), "config", "packs.json"),
+      resolve(process.cwd(), "definitions", "packs.json"),
       new Set(registry.all().map((a) => a.id)),
       realChannelNames,
     );

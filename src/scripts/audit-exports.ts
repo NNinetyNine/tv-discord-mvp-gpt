@@ -185,7 +185,7 @@ function main(): void {
 
   const resolver = createResolver(
     loadRegistry(
-      resolve(process.cwd(), "config", "registry.json"),
+      resolve(process.cwd(), "definitions", "registry.json"),
       resolve(process.cwd(), "config", "channels.json"),
     ),
   );
