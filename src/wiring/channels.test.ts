@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { resolve as resolvePath } from "node:path";
 
 import { buildChannelResolver, loadChannelResolver, ChannelsError } from "./channels.ts";
 
@@ -37,7 +38,7 @@ describe("buildChannelResolver — pure resolution", () => {
 
 describe("loadChannelResolver — real config", () => {
   it("loads config/channels.json and builds a working resolver", () => {
-    const resolve = loadChannelResolver();
+    const resolve = loadChannelResolver(resolvePath(process.cwd(), "config", "channels.json"));
     expect(typeof resolve).toBe("function");
     expect(resolve("crypto")).toBe("1519158079302664302");
   });

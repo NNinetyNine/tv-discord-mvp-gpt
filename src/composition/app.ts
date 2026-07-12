@@ -33,10 +33,11 @@ import {
  * layer (Constitution §4.5: the operator chooses).
  *
  * Pure assembly: buildApp() does NOT decide filesystem locations or read
- * process.env. sessionPath, stagingDir and archiveDir are required inputs —
- * each caller (tests, the CLI scripts, the eventual runtime) supplies the
- * locations. The one env read on the publish path (DISCORD_BOT_TOKEN) lives
- * inside the publisher adapter, which owns that installation concern.
+ * process.env. sessionPath, stagingDir, archiveDir, registryPath, packsPath
+ * and channelsPath are required inputs — each caller (tests, the CLI scripts,
+ * the eventual runtime) supplies the locations. The one env read on the
+ * publish path (DISCORD_BOT_TOKEN) lives inside the publisher adapter, which
+ * owns that installation concern.
  *
  * The composition root is also the ONLY place the real clock is bound
  * (now: () => new Date().toISOString()); orchestration receives time as a
@@ -65,6 +66,12 @@ export interface BuildAppOptions {
   readonly stagingDir: string;
   /** Root directory of the release archive (required — no default). */
   readonly archiveDir: string;
+  /** Location of the registry definition file (required — no default). */
+  readonly registryPath: string;
+  /** Location of the packs definition file (required — no default). */
+  readonly packsPath: string;
+  /** Location of the channels configuration file (required — no default). */
+  readonly channelsPath: string;
   /**
    * Complete validation policy for the file-ingest path. Defaults to
    * DEFAULT_VALIDATION_POLICY (expectedDimensions: null — dimensions are not
@@ -91,10 +98,10 @@ export interface App {
 
 export function buildApp(opts: BuildAppOptions): App {
   // --- shared infrastructure (constructed once; app instance state) ---
-  const registry = loadRegistry();
+  const registry = loadRegistry(opts.registryPath, opts.channelsPath);
   const resolver = createResolver(registry);
   const workspace = createPersistentWorkspace({
-    packs: loadPacks(),
+    packs: loadPacks(opts.packsPath, new Set(registry.all().map((a) => a.id))),
     path: opts.sessionPath,
   });
   const staging = createStagingStore(opts.stagingDir);
@@ -105,7 +112,7 @@ export function buildApp(opts: BuildAppOptions): App {
   const validate = (imagePath: string) => validateImage(imagePath, policy);
 
   // --- channel resolution (real config; empty IDs -> null, fail closed) ---
-  const resolveChannel = loadChannelResolver();
+  const resolveChannel = loadChannelResolver(opts.channelsPath);
 
   // --- display names (registry-owned; injected into orchestration honestly) ---
   const assetDisplay = (assetId: string): string => {

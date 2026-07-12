@@ -37,6 +37,9 @@ import type { Asset } from "../types.ts";
 const SESSION_PATH = resolve(process.cwd(), "session.json");
 const STAGING_DIR = resolve(process.cwd(), "staging");
 const ARCHIVE_DIR = resolve(process.cwd(), "archive");
+const REGISTRY_PATH = resolve(process.cwd(), "config", "registry.json");
+const PACKS_PATH = resolve(process.cwd(), "config", "packs.json");
+const CHANNELS_PATH = resolve(process.cwd(), "config", "channels.json");
 
 /** How many pending assets to name before summarizing the remainder. */
 const PENDING_PREVIEW = 10;
@@ -127,6 +130,9 @@ function main(): void {
     sessionPath: SESSION_PATH,
     stagingDir: STAGING_DIR,
     archiveDir: ARCHIVE_DIR,
+    registryPath: REGISTRY_PATH,
+    packsPath: PACKS_PATH,
+    channelsPath: CHANNELS_PATH,
   });
 
   // The ordered pack list for the board — the workspace's own definitions.

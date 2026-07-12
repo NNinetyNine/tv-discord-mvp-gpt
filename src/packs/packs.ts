@@ -1,7 +1,4 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-
-import { loadRegistry } from "../registry/registry.ts";
 
 /**
  * Pack loader + validator.
@@ -110,10 +107,14 @@ export function buildPacks(raw: unknown, validIds: ReadonlySet<string>): readonl
   return packs;
 }
 
-/** Load + validate packs from disk, checking asset IDs against the registry. */
-export function loadPacks(): readonly Pack[] {
-  const packsPath = resolve(process.cwd(), "config", "packs.json");
-
+/**
+ * Load + validate packs from the supplied file on disk, checking asset IDs
+ * against the supplied registry-derived valid-id set. Location and registry
+ * dependency are injected — this store reads only its own file, decides no
+ * filesystem paths, and performs no hidden registry load (the composition
+ * root supplies both; the dependency shape is the one buildPacks declares).
+ */
+export function loadPacks(packsPath: string, validIds: ReadonlySet<string>): readonly Pack[] {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(packsPath, "utf8"));
@@ -121,6 +122,5 @@ export function loadPacks(): readonly Pack[] {
     throw new PackError(`could not read/parse ${packsPath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  const validIds = new Set(loadRegistry().all().map((a) => a.id));
   return buildPacks(raw, validIds);
 }

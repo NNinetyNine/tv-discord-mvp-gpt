@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import type { Asset } from "../types.ts";
 /**
  * Asset registry. Keyed by stable internal id (e.g. "btc"); the `tradingView`
@@ -142,10 +141,15 @@ export function buildRegistry(
     },
   };
 }
-/** Load + validate the registry from config files on disk. Throws on any problem. */
-export function loadRegistry(): Registry {
-  const registryPath = resolve(process.cwd(), "config", "registry.json");
-  const channelsPath = resolve(process.cwd(), "config", "channels.json");
+/**
+ * Load + validate the registry from the supplied files on disk. Throws on any
+ * problem. Locations are injected — this store decides no filesystem paths
+ * (delivery owns location choice; the composition root routes it here).
+ *
+ * @param registryPath  location of the registry file (asset id -> entry)
+ * @param channelsPath  location of the channels file (channel name -> discord id)
+ */
+export function loadRegistry(registryPath: string, channelsPath: string): Registry {
   let rawRegistry: unknown;
   let rawChannels: unknown;
   try {

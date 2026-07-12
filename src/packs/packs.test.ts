@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { resolve } from "node:path";
 
 import { buildPacks, PackError, loadPacks } from "./packs.ts";
+import { loadRegistry } from "../registry/registry.ts";
 
 // Injected valid-id set — independent of config/registry.json.
 const validIds = new Set(["btc", "eth", "aapl", "nvda", "spx", "gold"]);
@@ -88,7 +90,14 @@ describe("buildPacks — validation fails loudly", () => {
 
 describe("loadPacks — real config loads and validates", () => {
   it("loads config/packs.json without throwing and preserves order", () => {
-    const packs = loadPacks();
+    const registry = loadRegistry(
+      resolve(process.cwd(), "config", "registry.json"),
+      resolve(process.cwd(), "config", "channels.json"),
+    );
+    const packs = loadPacks(
+      resolve(process.cwd(), "config", "packs.json"),
+      new Set(registry.all().map((a) => a.id)),
+    );
     expect(packs.length).toBeGreaterThan(0);
     for (const p of packs) {
       expect(p.assets.length).toBeGreaterThan(0);

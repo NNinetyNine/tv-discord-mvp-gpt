@@ -183,7 +183,12 @@ function main(): void {
     return;
   }
 
-  const resolver = createResolver(loadRegistry());
+  const resolver = createResolver(
+    loadRegistry(
+      resolve(process.cwd(), "config", "registry.json"),
+      resolve(process.cwd(), "config", "channels.json"),
+    ),
+  );
   const audit = auditDirectory(dir, resolver);
   printReport(dir, audit, verbose);
   process.exitCode = 0;

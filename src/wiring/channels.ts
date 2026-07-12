@@ -1,9 +1,8 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 /**
  * Channel resolution companion. Maps a channel name to its Discord channel ID
- * using config/channels.json. Fails closed: an empty or missing ID resolves to
+ * using the channels file supplied by the caller. Fails closed: an empty or missing ID resolves to
  * null, never an empty string, so the publish orchestration can refuse to
  * publish to an unconfigured channel.
  *
@@ -35,9 +34,8 @@ export function buildChannelResolver(channels: Record<string, unknown>): Channel
   };
 }
 
-/** Load config/channels.json and build a resolver from it. Throws on read/parse failure. */
-export function loadChannelResolver(): ChannelResolver {
-  const channelsPath = resolve(process.cwd(), "config", "channels.json");
+/** Load the supplied channels file and build a resolver from it. Throws on read/parse failure. */
+export function loadChannelResolver(channelsPath: string): ChannelResolver {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(channelsPath, "utf8"));

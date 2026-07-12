@@ -41,6 +41,9 @@ import type { Asset } from "../types.ts";
 const SESSION_PATH = resolve(process.cwd(), "session.json");
 const STAGING_DIR = resolve(process.cwd(), "staging");
 const ARCHIVE_DIR = resolve(process.cwd(), "archive");
+const REGISTRY_PATH = resolve(process.cwd(), "config", "registry.json");
+const PACKS_PATH = resolve(process.cwd(), "config", "packs.json");
+const CHANNELS_PATH = resolve(process.cwd(), "config", "channels.json");
 
 /** Human-readable "id (Display)" for an asset id, via the registry catalog. */
 function label(app: App, assetId: string): string {
@@ -148,6 +151,9 @@ async function main(): Promise<void> {
     sessionPath: SESSION_PATH,
     stagingDir: STAGING_DIR,
     archiveDir: ARCHIVE_DIR,
+    registryPath: REGISTRY_PATH,
+    packsPath: PACKS_PATH,
+    channelsPath: CHANNELS_PATH,
   });
 
   const result = await app.captureFromFile(filePath);
