@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resolve, join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { buildRegistry, RegistryError, loadRegistry, createAsset, retireAsset, amendAssetDisplay } from "./registry.ts";
+import { buildRegistry, RegistryError, loadRegistry, createAsset, retireAsset, amendAssetDisplay, addAssetAlias } from "./registry.ts";
 // Tests inject their own fixtures — they do NOT depend on definitions/registry.json.
 const channels = { crypto: "", stocks: "", indices: "" };
 const good = {
@@ -478,5 +478,105 @@ describe("amendAssetDisplay — registry-owned persistence (§2.4 metadata amend
     expect(parsed.eth.display).toBe("Ethereum");
     // still a valid, complete registry
     expect(Object.keys(parsed).sort()).toEqual(["aapl", "btc", "eth"]);
+  });
+});
+
+describe("addAssetAlias — registry-owned persistence (§5 additive resolution amendment)", () => {
+  let dir: string;
+  let registryPath: string;
+  let channelsPath: string;
+
+  const INITIAL_REGISTRY =
+    "{\n" +
+    '  "btc":  { "tradingView": "BTC",  "tradingViewAliases": ["BTCUSD"], "display": "Bitcoin", "channel": "crypto" },\n' +
+    '  "eth":  { "tradingView": "ETH",  "display": "Ethereum", "channel": "crypto" },\n' +
+    '  "aapl": { "tradingView": "AAPL", "display": "Apple", "channel": "stocks" }\n' +
+    "}";
+  const CHANNELS = JSON.stringify({ crypto: "111", stocks: "", indices: "" });
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-addalias-"));
+    registryPath = join(dir, "registry.json");
+    channelsPath = join(dir, "channels.json");
+    writeFileSync(registryPath, INITIAL_REGISTRY);
+    writeFileSync(channelsPath, CHANNELS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("appends an alias to an entry that already has aliases (resolves by it)", () => {
+    const amended = addAssetAlias(registryPath, channelsPath, "btc", "BTCUSDT");
+    expect(amended.tradingViewAliases).toEqual(["BTCUSD", "BTCUSDT"]);
+    const reg = loadRegistry(registryPath, channelsPath);
+    expect(reg.lookupByTradingView("BTCUSDT")?.id).toBe("btc");
+    expect(reg.lookupByTradingView("BTCUSD")?.id).toBe("btc"); // prior alias still resolves
+  });
+
+  it("adds the FIRST alias to an entry that had none (inserts the field)", () => {
+    const amended = addAssetAlias(registryPath, channelsPath, "eth", "ETHUSD");
+    expect(amended.tradingViewAliases).toEqual(["ETHUSD"]);
+    const reg = loadRegistry(registryPath, channelsPath);
+    expect(reg.lookupByTradingView("ETHUSD")?.id).toBe("eth");
+    expect(reg.lookupByTradingView("ETH")?.id).toBe("eth"); // canonical still resolves
+  });
+
+  it("changes ONLY the target entry; all others byte-identical", () => {
+    const before = readFileSync(registryPath, "utf8");
+    addAssetAlias(registryPath, channelsPath, "eth", "ETHUSD");
+    const after = readFileSync(registryPath, "utf8");
+    const beforeLines = before.split("\n");
+    const afterLines = after.split("\n");
+    const btcIdx = beforeLines.findIndex((l) => l.trimStart().startsWith('"btc":'));
+    const aaplIdx = beforeLines.findIndex((l) => l.trimStart().startsWith('"aapl":'));
+    expect(afterLines[btcIdx]).toBe(beforeLines[btcIdx]);
+    expect(afterLines[aaplIdx]).toBe(beforeLines[aaplIdx]);
+  });
+
+  it("preserves the target entry's other fields (id/tradingView/display/channel)", () => {
+    addAssetAlias(registryPath, channelsPath, "btc", "XBTUSD");
+    const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
+    expect(parsed.btc.tradingView).toBe("BTC");
+    expect(parsed.btc.display).toBe("Bitcoin");
+    expect(parsed.btc.channel).toBe("crypto");
+    expect(parsed.btc.tradingViewAliases).toEqual(["BTCUSD", "XBTUSD"]);
+  });
+
+  it("refuses an alias colliding with another asset's canonical token; writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => addAssetAlias(registryPath, channelsPath, "btc", "AAPL")).toThrow(RegistryError);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses an alias colliding with an existing alias (case-insensitive); writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => addAssetAlias(registryPath, channelsPath, "eth", "btcusd")).toThrow(/duplicate TradingView symbol/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses an alias equal to the asset's own canonical token (self-alias); writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => addAssetAlias(registryPath, channelsPath, "eth", "ETH")).toThrow(RegistryError);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses an unknown id; writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => addAssetAlias(registryPath, channelsPath, "nope", "NOPEUSD")).toThrow(/does not exist/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a blank alias; writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => addAssetAlias(registryPath, channelsPath, "eth", "   ")).toThrow(/alias must be a non-empty string/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("result remains a valid, complete registry loadable end to end", () => {
+    addAssetAlias(registryPath, channelsPath, "eth", "ETHUSD");
+    addAssetAlias(registryPath, channelsPath, "aapl", "AAPL.US");
+    const reg = loadRegistry(registryPath, channelsPath);
+    expect(reg.all().map((a) => a.id).sort()).toEqual(["aapl", "btc", "eth"]);
+    expect(reg.lookupByTradingView("AAPL.US")?.id).toBe("aapl");
   });
 });
