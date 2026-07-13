@@ -1,6 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { resolve } from "node:path";
-import { buildRegistry, RegistryError, loadRegistry } from "./registry.ts";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { resolve, join } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { buildRegistry, RegistryError, loadRegistry, createAsset } from "./registry.ts";
 // Tests inject their own fixtures — they do NOT depend on definitions/registry.json.
 const channels = { crypto: "", stocks: "", indices: "" };
 const good = {
@@ -164,5 +166,135 @@ describe("registry — tradingViewAliases validation (fails loudly)", () => {
         channels,
       ),
     ).toThrow(/tradingViewAliases must contain only non-empty strings/);
+  });
+});
+describe("createAsset — registry-owned persistence (§5.1 Create Asset)", () => {
+  let dir: string;
+  let registryPath: string;
+  let channelsPath: string;
+
+  // A small real-shaped registry with BOTH field orderings present, plus an
+  // alias-bearing entry, so byte-preservation is exercised against variety.
+  const INITIAL_REGISTRY =
+    "{\n" +
+    '  "btc":  { "tradingView": "BTC",  "tradingViewAliases": ["BTCUSD"], "display": "Bitcoin", "channel": "crypto" },\n' +
+    '  "aapl": { "tradingView": "AAPL", "display": "Apple", "channel": "stocks" }\n' +
+    "}";
+  const CHANNELS = JSON.stringify({ crypto: "111", stocks: "", indices: "" });
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-createasset-"));
+    registryPath = join(dir, "registry.json");
+    channelsPath = join(dir, "channels.json");
+    writeFileSync(registryPath, INITIAL_REGISTRY);
+    writeFileSync(channelsPath, CHANNELS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("persists a valid new asset (readable back through loadRegistry)", () => {
+    const created = createAsset(registryPath, channelsPath, {
+      id: "eth",
+      tradingView: "ETH",
+      display: "Ethereum",
+      channel: "crypto",
+    });
+    expect(created.id).toBe("eth");
+
+    const reg = loadRegistry(registryPath, channelsPath);
+    expect(reg.all().map((a) => a.id).sort()).toEqual(["aapl", "btc", "eth"]);
+    expect(reg.lookupByTradingView("ETH")?.id).toBe("eth");
+  });
+
+  it("preserves every existing byte and appends within the same object", () => {
+    const before = readFileSync(registryPath, "utf8");
+    createAsset(registryPath, channelsPath, {
+      id: "eth",
+      tradingView: "ETH",
+      display: "Ethereum",
+      channel: "crypto",
+    });
+    const after = readFileSync(registryPath, "utf8");
+    // The entire prior body (minus its closing brace) is retained verbatim.
+    const priorBody = before.replace(/\s+$/u, "").slice(0, -1).replace(/\s+$/u, "");
+    expect(after.startsWith(priorBody)).toBe(true);
+    // Still one valid JSON object; existing entries are untouched in content.
+    const parsed = JSON.parse(after);
+    expect(parsed.btc).toEqual({ tradingView: "BTC", tradingViewAliases: ["BTCUSD"], display: "Bitcoin", channel: "crypto" });
+    expect(parsed.aapl).toEqual({ tradingView: "AAPL", display: "Apple", channel: "stocks" });
+  });
+
+  it("persists aliases when supplied", () => {
+    createAsset(registryPath, channelsPath, {
+      id: "eth",
+      tradingView: "ETH",
+      display: "Ethereum",
+      channel: "crypto",
+      tradingViewAliases: ["ETHUSD", "ETHUSDT"],
+    });
+    const reg = loadRegistry(registryPath, channelsPath);
+    expect(reg.lookupByTradingView("ethusdt")?.id).toBe("eth");
+    expect(reg.lookupByTradingView("ETH")?.tradingViewAliases).toEqual(["ETHUSD", "ETHUSDT"]);
+  });
+
+  it("refuses a duplicate id and leaves the file byte-for-byte unchanged", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() =>
+      createAsset(registryPath, channelsPath, { id: "btc", tradingView: "XXX", display: "X", channel: "crypto" }),
+    ).toThrow(/already exists/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a duplicate TradingView symbol (whole-candidate validation) and writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() =>
+      // collides case-insensitively with existing aapl -> AAPL
+      createAsset(registryPath, channelsPath, { id: "aapl2", tradingView: "aapl", display: "Apple II", channel: "stocks" }),
+    ).toThrow(/duplicate TradingView symbol/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses an alias colliding with an existing symbol and writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() =>
+      createAsset(registryPath, channelsPath, {
+        id: "eth",
+        tradingView: "ETH",
+        display: "Ethereum",
+        channel: "crypto",
+        tradingViewAliases: ["BTCUSD"], // already claimed by btc
+      }),
+    ).toThrow(RegistryError);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses an unknown channel and writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() =>
+      createAsset(registryPath, channelsPath, { id: "spx", tradingView: "SPX", display: "S&P 500", channel: "nope" }),
+    ).toThrow(/channel "nope" not found/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a malformed field (blank display) and writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() =>
+      createAsset(registryPath, channelsPath, { id: "spx", tradingView: "SPX", display: "  ", channel: "crypto" }),
+    ).toThrow(/display/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("allows creation onto a channel with no provisioned ID (coherence, not provisioning)", () => {
+    // "indices" exists as a name but has a blank id — a valid definition; the
+    // asset persists, and publish provisioning is a separate concern.
+    const created = createAsset(registryPath, channelsPath, {
+      id: "spx",
+      tradingView: "SPX",
+      display: "S&P 500",
+      channel: "indices",
+    });
+    expect(created.channel).toBe("indices");
+    expect(loadRegistry(registryPath, channelsPath).lookupByTradingView("SPX")?.id).toBe("spx");
   });
 });

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import type { Asset } from "../types.ts";
 /**
  * Asset registry. Keyed by stable internal id (e.g. "btc"); the `tradingView`
@@ -172,4 +172,137 @@ export function loadRegistry(registryPath: string, channelsPath: string): Regist
     rawRegistry as Record<string, RawEntry>,
     rawChannels as Record<string, unknown>,
   );
+}
+/**
+ * Input for createAsset: the new definition's id plus its entry fields.
+ * Mirrors the Asset shape the operator owns; tradingViewAliases is optional.
+ */
+export interface CreateAssetInput {
+  readonly id: string;
+  readonly tradingView: string;
+  readonly display: string;
+  readonly channel: string;
+  readonly tradingViewAliases?: readonly string[];
+}
+
+/**
+ * Create a new Asset definition through registry-owned persistence
+ * (Constitution §5.1: "Create Asset — any time, ungated"). This store owns the
+ * registry file; creation is validate-before-write over the WHOLE candidate.
+ *
+ * VALIDATE-BEFORE-WRITE: the complete candidate registry (every existing entry
+ * plus the new one) is validated with buildRegistry — the SAME validator the
+ * load path trusts — before a single byte is written. Any failure throws
+ * RegistryError and leaves the registry file byte-for-byte unchanged. Duplicate
+ * ids, duplicate/aliased TradingView symbols, unknown channels, and malformed
+ * entries therefore all fail loudly here exactly as they would on load.
+ *
+ * BYTE-PRESERVING APPEND: the registry is operator-owned data whose recovery
+ * mechanism is version control (Constitution §2.2.1), and Asset.channel is a
+ * ratified-unresolved field. So the writer never re-serializes the file: it
+ * appends exactly one entry and leaves every existing byte — each entry's
+ * field order, channel, and any field this code does not model — verbatim,
+ * preserving the file's own trailing-newline convention. As a final guard the
+ * new text is re-parsed and compared to the validated candidate; on ANY
+ * divergence it throws with nothing written.
+ *
+ * Locations are injected — this store decides no filesystem paths (delivery
+ * owns location choice).
+ *
+ * @param registryPath  location of the registry file (asset id -> entry)
+ * @param channelsPath  location of the channels file (for channel validation)
+ * @param input         the new asset definition
+ * @returns the created Asset as validated within the candidate registry
+ */
+export function createAsset(
+  registryPath: string,
+  channelsPath: string,
+  input: CreateAssetInput,
+): Asset {
+  // Read the current definition of record: raw TEXT (for the byte-preserving
+  // append) and parsed object (for validation), plus the channels config.
+  let registryText: string;
+  let rawRegistry: unknown;
+  let rawChannels: unknown;
+  try {
+    registryText = readFileSync(registryPath, "utf8");
+    rawRegistry = JSON.parse(registryText);
+  } catch (e) {
+    throw new RegistryError(`could not read/parse ${registryPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    rawChannels = JSON.parse(readFileSync(channelsPath, "utf8"));
+  } catch (e) {
+    throw new RegistryError(`could not read/parse ${channelsPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (typeof rawRegistry !== "object" || rawRegistry === null || Array.isArray(rawRegistry)) {
+    throw new RegistryError("registry.json must be a JSON object keyed by asset id");
+  }
+  if (typeof rawChannels !== "object" || rawChannels === null || Array.isArray(rawChannels)) {
+    throw new RegistryError("channels.json must be a JSON object keyed by channel name");
+  }
+  const current = rawRegistry as Record<string, RawEntry>;
+  const channels = rawChannels as Record<string, unknown>;
+
+  // Creation-specific identity guard: a JSON object key would silently
+  // overwrite, so an existing id is refused loudly BEFORE building the
+  // candidate (buildRegistry sees one key and could not detect the clash).
+  if (Object.prototype.hasOwnProperty.call(current, input.id)) {
+    throw new RegistryError(`asset id "${input.id}" already exists`);
+  }
+  if (!isNonEmptyString(input.id)) {
+    throw new RegistryError("asset id must be a non-empty string");
+  }
+
+  // The new entry, fields in the file's canonical order. The COMPLETE candidate
+  // registry is current ∪ { new } — validated as a whole below.
+  const entry: RawEntry = {
+    tradingView: input.tradingView,
+    ...(input.tradingViewAliases !== undefined
+      ? { tradingViewAliases: [...input.tradingViewAliases] }
+      : {}),
+    display: input.display,
+    channel: input.channel,
+  };
+  const candidate: Record<string, RawEntry> = { ...current, [input.id]: entry };
+
+  // Validate-before-write: the whole candidate through the load-path validator.
+  const validated = buildRegistry(candidate, channels);
+
+  // Byte-preserving append. Keep everything up to the final closing brace
+  // verbatim; insert one entry; restore the file's own trailing convention.
+  const hadTrailingNewline = /\n$/.test(registryText);
+  const trimmedEnd = registryText.replace(/\s+$/u, "");
+  if (!trimmedEnd.endsWith("}")) {
+    throw new RegistryError(`registry file at ${registryPath} does not end with "}" — refusing to write`);
+  }
+  const body = trimmedEnd.slice(0, -1).replace(/\s+$/u, "");
+  const isEmptyObject = body.replace(/\s+$/u, "").endsWith("{");
+  const separator = isEmptyObject ? "\n" : ",\n";
+  const aliasPart =
+    input.tradingViewAliases !== undefined
+      ? ` "tradingViewAliases": ${JSON.stringify([...input.tradingViewAliases])},`
+      : "";
+  const entryLine =
+    `  ${JSON.stringify(input.id)}: { "tradingView": ${JSON.stringify(input.tradingView)},` +
+    `${aliasPart} "display": ${JSON.stringify(input.display)},` +
+    ` "channel": ${JSON.stringify(input.channel)} }`;
+  const newText = `${body}${separator}${entryLine}\n}${hadTrailingNewline ? "\n" : ""}`;
+
+  // Final guard: the appended text must re-parse to EXACTLY the validated
+  // candidate. Any divergence (key order aside — compared as parsed values)
+  // means the textual splice was unsafe; throw with nothing written.
+  if (JSON.stringify(JSON.parse(newText)) !== JSON.stringify(candidate)) {
+    throw new RegistryError(
+      "internal: appended registry text does not match the validated candidate — nothing written",
+    );
+  }
+
+  writeFileSync(registryPath, newText);
+
+  const created = validated.all().find((a) => a.id === input.id);
+  if (created === undefined) {
+    throw new RegistryError(`internal: created asset "${input.id}" missing from validated registry`);
+  }
+  return created;
 }
