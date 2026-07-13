@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resolve, join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { buildRegistry, RegistryError, loadRegistry, createAsset, retireAsset } from "./registry.ts";
+import { buildRegistry, RegistryError, loadRegistry, createAsset, retireAsset, amendAssetDisplay } from "./registry.ts";
 // Tests inject their own fixtures — they do NOT depend on definitions/registry.json.
 const channels = { crypto: "", stocks: "", indices: "" };
 const good = {
@@ -386,5 +386,97 @@ describe("retireAsset — registry-owned persistence (§5.1 Retire Asset)", () =
     // ETH symbol is now free; a new asset may claim it
     createAsset(registryPath, channelsPath, { id: "eth2", tradingView: "ETH", display: "Ether Classic", channel: "crypto" });
     expect(loadRegistry(registryPath, channelsPath).lookupByTradingView("ETH")?.id).toBe("eth2");
+  });
+});
+
+describe("amendAssetDisplay — registry-owned persistence (§2.4 metadata amendment)", () => {
+  let dir: string;
+  let registryPath: string;
+  let channelsPath: string;
+
+  // Real-shaped registry: an alias-bearing entry (display NOT last on its line)
+  // and two plain entries (display in the middle of the line). Exercises the
+  // field-edit against both field orderings.
+  const INITIAL_REGISTRY =
+    "{\n" +
+    '  "btc":  { "tradingView": "BTC",  "tradingViewAliases": ["BTCUSD"], "display": "Bitcoin", "channel": "crypto" },\n' +
+    '  "eth":  { "tradingView": "ETH",  "display": "Ethereum", "channel": "crypto" },\n' +
+    '  "aapl": { "tradingView": "AAPL", "display": "Apple", "channel": "stocks" }\n' +
+    "}";
+  const CHANNELS = JSON.stringify({ crypto: "111", stocks: "", indices: "" });
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-amenddisplay-"));
+    registryPath = join(dir, "registry.json");
+    channelsPath = join(dir, "channels.json");
+    writeFileSync(registryPath, INITIAL_REGISTRY);
+    writeFileSync(channelsPath, CHANNELS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("amends a display name (readable back through loadRegistry)", () => {
+    const amended = amendAssetDisplay(registryPath, channelsPath, "eth", "Ether");
+    expect(amended.display).toBe("Ether");
+    const reg = loadRegistry(registryPath, channelsPath);
+    expect(reg.lookupByTradingView("ETH")?.display).toBe("Ether");
+  });
+
+  it("changes ONLY the display; id, tradingView, channel, aliases untouched", () => {
+    amendAssetDisplay(registryPath, channelsPath, "btc", "BTC (renamed)");
+    const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
+    expect(parsed.btc).toEqual({
+      tradingView: "BTC",
+      tradingViewAliases: ["BTCUSD"],
+      display: "BTC (renamed)",
+      channel: "crypto",
+    });
+  });
+
+  it("leaves all OTHER entries byte-identical", () => {
+    const before = readFileSync(registryPath, "utf8");
+    amendAssetDisplay(registryPath, channelsPath, "eth", "Ether");
+    const after = readFileSync(registryPath, "utf8");
+    const beforeLines = before.split("\n");
+    const afterLines = after.split("\n");
+    // btc and aapl lines identical; only the eth line differs.
+    const btcIdx = beforeLines.findIndex((l) => l.trimStart().startsWith('"btc":'));
+    const aaplIdx = beforeLines.findIndex((l) => l.trimStart().startsWith('"aapl":'));
+    expect(afterLines[btcIdx]).toBe(beforeLines[btcIdx]);
+    expect(afterLines[aaplIdx]).toBe(beforeLines[aaplIdx]);
+  });
+
+  it("preserves aliases when amending an alias-bearing entry's display", () => {
+    amendAssetDisplay(registryPath, channelsPath, "btc", "Bitcoin XL");
+    const reg = loadRegistry(registryPath, channelsPath);
+    expect(reg.lookupByTradingView("BTCUSD")?.id).toBe("btc"); // alias still resolves
+    expect(reg.lookupByTradingView("BTC")?.tradingViewAliases).toEqual(["BTCUSD"]);
+  });
+
+  it("handles a new display containing quotes (escaped safely, round-trips)", () => {
+    amendAssetDisplay(registryPath, channelsPath, "aapl", 'Apple "Inc."');
+    const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
+    expect(parsed.aapl.display).toBe('Apple "Inc."');
+  });
+
+  it("refuses an unknown id; writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => amendAssetDisplay(registryPath, channelsPath, "nope", "X")).toThrow(/does not exist/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a blank display (whole-candidate validation); writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => amendAssetDisplay(registryPath, channelsPath, "eth", "   ")).toThrow(/display/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("amending to the SAME display is a valid no-op-equivalent write (idempotent content)", () => {
+    amendAssetDisplay(registryPath, channelsPath, "eth", "Ethereum");
+    const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
+    expect(parsed.eth.display).toBe("Ethereum");
+    // still a valid, complete registry
+    expect(Object.keys(parsed).sort()).toEqual(["aapl", "btc", "eth"]);
   });
 });

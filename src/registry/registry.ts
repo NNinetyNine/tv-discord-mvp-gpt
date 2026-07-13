@@ -454,3 +454,145 @@ export function retireAsset(
 
   writeFileSync(registryPath, newText);
 }
+
+/**
+ * Amend the display metadata of an existing Asset (Constitution §2.4: "Display
+ * names… are metadata"; §5 preamble: definitions are "fully editable"). This
+ * store owns the registry file; amendment is validate-before-write over the
+ * WHOLE candidate.
+ *
+ * SCOPE: display ONLY. This is deliberately the smallest metadata amendment.
+ * Identity (id) is opaque and never renamed (§2.4); tradingView/aliases are
+ * resolution identifiers entangled with the deferred filename-reconciliation
+ * phase; Asset.channel is the ratified-unresolved field. None of those is
+ * amended here — each is its own future boundary.
+ *
+ * VALIDATE-BEFORE-WRITE: the complete candidate registry (every entry, with
+ * the target's display replaced) is validated with buildRegistry — the SAME
+ * validator the load path trusts — before a byte is written. A blank display
+ * fails there, exactly as on load; an unknown id is refused first.
+ *
+ * BYTE-PRESERVING FIELD EDIT: the registry is operator-owned data recovered
+ * via version control (Constitution §2.2.1). The writer never re-serializes
+ * the file: it locates the single line defining the target asset (the registry
+ * is one entry per line) and replaces only that line's "display" value,
+ * leaving every other byte — other entries, this entry's id/tradingView/
+ * channel/aliases, and the file's trailing-newline convention — verbatim. As a
+ * final guard the new text is re-parsed and compared to the validated
+ * candidate; on ANY divergence it throws with nothing written.
+ *
+ * Locations are injected — this store decides no filesystem paths (delivery
+ * owns location choice).
+ *
+ * @param registryPath  location of the registry file (asset id -> entry)
+ * @param channelsPath  location of the channels file (for revalidation)
+ * @param id            the asset id whose display to amend
+ * @param newDisplay    the new display name
+ * @returns the amended Asset as validated within the candidate registry
+ */
+export function amendAssetDisplay(
+  registryPath: string,
+  channelsPath: string,
+  id: string,
+  newDisplay: string,
+): Asset {
+  // Read the current definition of record (raw TEXT for the byte-preserving
+  // edit, parsed object for validation) and the channels config.
+  let registryText: string;
+  let rawRegistry: unknown;
+  let rawChannels: unknown;
+  try {
+    registryText = readFileSync(registryPath, "utf8");
+    rawRegistry = JSON.parse(registryText);
+  } catch (e) {
+    throw new RegistryError(`could not read/parse ${registryPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    rawChannels = JSON.parse(readFileSync(channelsPath, "utf8"));
+  } catch (e) {
+    throw new RegistryError(`could not read/parse ${channelsPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (typeof rawRegistry !== "object" || rawRegistry === null || Array.isArray(rawRegistry)) {
+    throw new RegistryError("registry.json must be a JSON object keyed by asset id");
+  }
+  if (typeof rawChannels !== "object" || rawChannels === null || Array.isArray(rawChannels)) {
+    throw new RegistryError("channels.json must be a JSON object keyed by channel name");
+  }
+  const current = rawRegistry as Record<string, RawEntry>;
+  const channels = rawChannels as Record<string, unknown>;
+
+  // The amended asset must exist.
+  if (!Object.prototype.hasOwnProperty.call(current, id)) {
+    throw new RegistryError(`asset id "${id}" does not exist`);
+  }
+
+  // The COMPLETE candidate registry, with only this entry's display replaced.
+  // The existing entry's other fields (and field order) are preserved by
+  // spreading the parsed entry.
+  const existing = current[id] as RawEntry;
+  const candidate: Record<string, RawEntry> = {
+    ...current,
+    [id]: { ...existing, display: newDisplay },
+  };
+
+  // Validate-before-write: the whole candidate through the load-path validator
+  // (also enforces the non-empty-display rule).
+  const validated = buildRegistry(candidate, channels);
+
+  // Byte-preserving field edit. The registry is one entry per line; find the
+  // unique line whose parsed key is the target id and replace only its
+  // "display" value. Any structural surprise throws with nothing written.
+  const eol = registryText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = registryText.split(eol);
+  const idToken = `${JSON.stringify(id)}:`;
+  const matches: number[] = [];
+  lines.forEach((line, i) => {
+    if (line.trimStart().startsWith(idToken)) matches.push(i);
+  });
+  if (matches.length !== 1) {
+    throw new RegistryError(
+      `could not locate a unique line for asset "${id}" (found ${matches.length}) — refusing to write`,
+    );
+  }
+  const lineIdx = matches[0]!;
+  const original = lines[lineIdx]!;
+
+  // Replace only the "display": "<value>" token on this line. The value is
+  // emitted with JSON.stringify so quotes/backslashes escape correctly. The
+  // pattern matches a JSON string value (no unescaped quotes/backslashes),
+  // which is exactly what buildRegistry has already accepted for this file.
+  const displayRe = /("display"\s*:\s*)"(?:[^"\\]|\\.)*"/u;
+  if (!displayRe.test(original)) {
+    throw new RegistryError(
+      `could not locate a "display" value on the line for asset "${id}" — refusing to write`,
+    );
+  }
+  lines[lineIdx] = original.replace(displayRe, `$1${JSON.stringify(newDisplay)}`);
+
+  const newText = lines.join(eol);
+
+  // Final guard: the edited text must re-parse to EXACTLY the validated
+  // candidate. Any divergence means the field edit was unsafe; throw with
+  // nothing written.
+  let reparsed: unknown;
+  try {
+    reparsed = JSON.parse(newText);
+  } catch (e) {
+    throw new RegistryError(
+      `internal: registry text after amend is not valid JSON — nothing written (${e instanceof Error ? e.message : String(e)})`,
+    );
+  }
+  if (JSON.stringify(reparsed) !== JSON.stringify(candidate)) {
+    throw new RegistryError(
+      "internal: registry text after amend does not match the validated candidate — nothing written",
+    );
+  }
+
+  writeFileSync(registryPath, newText);
+
+  const amended = validated.all().find((a) => a.id === id);
+  if (amended === undefined) {
+    throw new RegistryError(`internal: amended asset "${id}" missing from validated registry`);
+  }
+  return amended;
+}
