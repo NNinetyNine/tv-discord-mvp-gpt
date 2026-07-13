@@ -3,7 +3,7 @@ import { resolve, join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { buildPacks, PackError, loadPacks, createPack } from "./packs.ts";
+import { buildPacks, PackError, loadPacks, createPack, removePackAsset } from "./packs.ts";
 import { loadRegistry } from "../registry/registry.ts";
 import { loadChannels } from "../wiring/channels.ts";
 
@@ -293,5 +293,83 @@ describe("createPack — Pack-owned persistence (§5.3 Create Pack, with initial
     });
     expect(created.assets).toEqual(["btc"]);
     expect(loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES)).toHaveLength(3);
+  });
+});
+
+describe("removePackAsset — Pack-owned persistence (§5.2 membership removal; pure definition persistence)", () => {
+  let dir: string;
+  let packsPath: string;
+
+  const VALID_IDS: ReadonlySet<string> = new Set(["btc", "eth", "sol", "aapl", "nvda"]);
+  const CHANNEL_NAMES: ReadonlySet<string> = new Set(["crypto", "stocks", "indices"]);
+
+  const INITIAL_PACKS =
+    "[\n" +
+    '  {\n    "id": "crypto",\n    "display": "Crypto",\n    "channel": "crypto",\n    "assets": ["btc", "eth", "sol"]\n  },\n' +
+    '  {\n    "id": "stocks",\n    "display": "Stocks",\n    "channel": "stocks",\n    "assets": ["aapl"]\n  }\n' +
+    "]";
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-removepackasset-"));
+    packsPath = join(dir, "packs.json");
+    writeFileSync(packsPath, INITIAL_PACKS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("removes an asset from a pack's membership (readable back, order preserved)", () => {
+    const amended = removePackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "eth");
+    expect(amended.assets).toEqual(["btc", "sol"]); // eth gone, order of survivors preserved
+    const packs = loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES);
+    expect(packs.find((p) => p.id === "crypto")?.assets).toEqual(["btc", "sol"]);
+  });
+
+  it("leaves OTHER packs byte-identical and preserves the target pack's other fields", () => {
+    const before = readFileSync(packsPath, "utf8");
+    removePackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "sol");
+    const after = readFileSync(packsPath, "utf8");
+    const parsed = JSON.parse(after);
+    // stocks pack untouched
+    expect(parsed[1]).toEqual({ id: "stocks", display: "Stocks", channel: "stocks", assets: ["aapl"] });
+    // crypto pack: only assets changed
+    expect(parsed[0]).toEqual({ id: "crypto", display: "Crypto", channel: "crypto", assets: ["btc", "eth"] });
+    // the stocks block's exact lines survive verbatim
+    const stocksLine = before.split("\n").find((l) => l.includes('"id": "stocks"'))!;
+    expect(after).toContain(stocksLine);
+  });
+
+  it("refuses to remove the LAST asset (asset-less pack invalid — buildPacks unchanged); writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => removePackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "stocks", "aapl")).toThrow(/non-empty array/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses an unknown pack; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => removePackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "nope", "btc")).toThrow(/pack "nope" does not exist/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses removing an asset the pack does not contain; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => removePackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "aapl")).toThrow(/does not contain asset "aapl"/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("removing then via createPack round-trips membership (definition-level)", () => {
+    removePackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "eth");
+    expect(loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES).find((p) => p.id === "crypto")?.assets).toEqual(["btc", "sol"]);
+    // remove another; still valid, still non-empty
+    removePackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "sol");
+    expect(loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES).find((p) => p.id === "crypto")?.assets).toEqual(["btc"]);
+  });
+
+  it("does not read or require workspace state (pure definition persistence)", () => {
+    // The function signature takes only definition inputs — no session/workspace
+    // path. This test documents that the Empty-only gate is NOT in the store:
+    // removal succeeds here with no workspace present at all.
+    const amended = removePackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "btc");
+    expect(amended.assets).toEqual(["eth", "sol"]);
   });
 });
