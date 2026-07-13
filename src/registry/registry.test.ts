@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resolve, join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { buildRegistry, RegistryError, loadRegistry, createAsset } from "./registry.ts";
+import { buildRegistry, RegistryError, loadRegistry, createAsset, retireAsset } from "./registry.ts";
 // Tests inject their own fixtures — they do NOT depend on definitions/registry.json.
 const channels = { crypto: "", stocks: "", indices: "" };
 const good = {
@@ -296,5 +296,95 @@ describe("createAsset — registry-owned persistence (§5.1 Create Asset)", () =
     });
     expect(created.channel).toBe("indices");
     expect(loadRegistry(registryPath, channelsPath).lookupByTradingView("SPX")?.id).toBe("spx");
+  });
+});
+
+describe("retireAsset — registry-owned persistence (§5.1 Retire Asset)", () => {
+  let dir: string;
+  let registryPath: string;
+  let channelsPath: string;
+
+  // Real-shaped registry: an alias-bearing entry, a plain entry, and a third
+  // so the survivor set stays non-empty after a removal. Both field orderings.
+  const INITIAL_REGISTRY =
+    "{\n" +
+    '  "btc":  { "tradingView": "BTC",  "tradingViewAliases": ["BTCUSD"], "display": "Bitcoin", "channel": "crypto" },\n' +
+    '  "eth":  { "tradingView": "ETH",  "display": "Ethereum", "channel": "crypto" },\n' +
+    '  "aapl": { "tradingView": "AAPL", "display": "Apple", "channel": "stocks" }\n' +
+    "}";
+  const CHANNELS = JSON.stringify({ crypto: "111", stocks: "", indices: "" });
+  const NONE: ReadonlySet<string> = new Set();
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-retireasset-"));
+    registryPath = join(dir, "registry.json");
+    channelsPath = join(dir, "channels.json");
+    writeFileSync(registryPath, INITIAL_REGISTRY);
+    writeFileSync(channelsPath, CHANNELS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("retires an unreferenced asset (gone from loadRegistry)", () => {
+    retireAsset(registryPath, channelsPath, "eth", NONE);
+    const reg = loadRegistry(registryPath, channelsPath);
+    expect(reg.all().map((a) => a.id).sort()).toEqual(["aapl", "btc"]);
+    expect(reg.lookupByTradingView("ETH")).toBeNull();
+  });
+
+  it("retiring the LAST entry keeps valid JSON (comma repair) and preserves others", () => {
+    retireAsset(registryPath, channelsPath, "aapl", NONE);
+    const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
+    expect(Object.keys(parsed)).toEqual(["btc", "eth"]);
+    // survivors' bytes/content intact, including the alias entry
+    expect(parsed.btc).toEqual({ tradingView: "BTC", tradingViewAliases: ["BTCUSD"], display: "Bitcoin", channel: "crypto" });
+  });
+
+  it("retiring a MIDDLE entry leaves neighbours byte-identical", () => {
+    const before = readFileSync(registryPath, "utf8");
+    retireAsset(registryPath, channelsPath, "eth", NONE);
+    const after = readFileSync(registryPath, "utf8");
+    // btc and aapl lines are preserved verbatim (present in both)
+    const btcLine = before.split("\n").find((l) => l.trimStart().startsWith('"btc":'))!;
+    const aaplLine = before.split("\n").find((l) => l.trimStart().startsWith('"aapl":'))!;
+    expect(after).toContain(btcLine);
+    expect(after).toContain(aaplLine.replace(/,\s*$/, "")); // aapl now last: trailing comma trimmed if it had one
+  });
+
+  it("refuses to retire an asset still referenced by a pack; writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() =>
+      retireAsset(registryPath, channelsPath, "btc", new Set(["btc", "sol"])),
+    ).toThrow(/still referenced by a pack/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses to retire a non-existent id; writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => retireAsset(registryPath, channelsPath, "nope", NONE)).toThrow(/does not exist/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses to retire the final remaining asset (surviving registry would be empty); writes nothing", () => {
+    // reduce to a single-entry registry, then attempt to retire it
+    writeFileSync(registryPath, '{\n  "only": { "tradingView": "ONLY", "display": "Only", "channel": "crypto" }\n}');
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => retireAsset(registryPath, channelsPath, "only", NONE)).toThrow(/empty/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("round-trips: create then retire returns to the original catalogue", () => {
+    createAsset(registryPath, channelsPath, { id: "sol", tradingView: "SOL", display: "Solana", channel: "crypto" });
+    expect(loadRegistry(registryPath, channelsPath).all().map((a) => a.id).sort()).toEqual(["aapl", "btc", "eth", "sol"]);
+    retireAsset(registryPath, channelsPath, "sol", NONE);
+    expect(loadRegistry(registryPath, channelsPath).all().map((a) => a.id).sort()).toEqual(["aapl", "btc", "eth"]);
+  });
+
+  it("frees the retired asset's TradingView symbol for reuse", () => {
+    retireAsset(registryPath, channelsPath, "eth", NONE);
+    // ETH symbol is now free; a new asset may claim it
+    createAsset(registryPath, channelsPath, { id: "eth2", tradingView: "ETH", display: "Ether Classic", channel: "crypto" });
+    expect(loadRegistry(registryPath, channelsPath).lookupByTradingView("ETH")?.id).toBe("eth2");
   });
 });

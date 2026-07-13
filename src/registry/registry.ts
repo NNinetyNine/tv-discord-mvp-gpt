@@ -306,3 +306,151 @@ export function createAsset(
   }
   return created;
 }
+
+/**
+ * Retire (delete) an Asset definition through registry-owned persistence
+ * (Constitution §5.1: "Retire Asset — an ordinary definition edit; archived
+ * Releases referencing it are untouched"). This store owns the registry file;
+ * retirement is validate-before-write over the WHOLE surviving registry.
+ *
+ * CROSS-DEFINITION COHERENCE IS INJECTED: an asset still referenced by a Pack
+ * must not be retired (it would orphan that pack's membership). Pack membership
+ * lives in the pack store, which this module must not import; so the caller
+ * supplies `referencingAssetIds` — the set of asset ids any Pack currently
+ * references — exactly as createAsset receives channel names and buildPacks
+ * receives valid ids (consumer-owned dependency contract). If the target id is
+ * in that set, retirement is refused with nothing written. Delivery reads the
+ * packs definition to build this set.
+ *
+ * VALIDATE-BEFORE-WRITE: the surviving registry (every entry except the
+ * retired one) is validated with buildRegistry — the SAME validator the load
+ * path trusts — before a byte is written. The retired id must exist; the
+ * surviving registry must still be non-empty and valid.
+ *
+ * BYTE-PRESERVING REMOVAL: the registry is operator-owned data recovered via
+ * version control (Constitution §2.2.1), so the writer never re-serializes the
+ * file. It removes exactly the one line defining the retired asset and leaves
+ * every surviving byte — field order, channel, unmodeled fields, and the
+ * file's trailing-newline convention — verbatim, repairing only the JSON
+ * comma structure the removal requires. As a final guard the new text is
+ * re-parsed and compared to the validated surviving registry; on ANY
+ * divergence it throws with nothing written.
+ *
+ * Locations are injected — this store decides no filesystem paths (delivery
+ * owns location choice).
+ *
+ * @param registryPath        location of the registry file (asset id -> entry)
+ * @param channelsPath        location of the channels file (for revalidation)
+ * @param id                  the asset id to retire
+ * @param referencingAssetIds asset ids any Pack currently references
+ */
+export function retireAsset(
+  registryPath: string,
+  channelsPath: string,
+  id: string,
+  referencingAssetIds: ReadonlySet<string>,
+): void {
+  // Read the current definition of record (raw TEXT for the byte-preserving
+  // removal, parsed object for validation) and the channels config.
+  let registryText: string;
+  let rawRegistry: unknown;
+  let rawChannels: unknown;
+  try {
+    registryText = readFileSync(registryPath, "utf8");
+    rawRegistry = JSON.parse(registryText);
+  } catch (e) {
+    throw new RegistryError(`could not read/parse ${registryPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    rawChannels = JSON.parse(readFileSync(channelsPath, "utf8"));
+  } catch (e) {
+    throw new RegistryError(`could not read/parse ${channelsPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (typeof rawRegistry !== "object" || rawRegistry === null || Array.isArray(rawRegistry)) {
+    throw new RegistryError("registry.json must be a JSON object keyed by asset id");
+  }
+  if (typeof rawChannels !== "object" || rawChannels === null || Array.isArray(rawChannels)) {
+    throw new RegistryError("channels.json must be a JSON object keyed by channel name");
+  }
+  const current = rawRegistry as Record<string, RawEntry>;
+  const channels = rawChannels as Record<string, unknown>;
+
+  // The retired asset must exist.
+  if (!Object.prototype.hasOwnProperty.call(current, id)) {
+    throw new RegistryError(`asset id "${id}" does not exist`);
+  }
+  // Cross-definition coherence: refuse to orphan a Pack's membership.
+  if (referencingAssetIds.has(id)) {
+    throw new RegistryError(
+      `asset "${id}" is still referenced by a pack — remove it from all packs before retiring`,
+    );
+  }
+
+  // The COMPLETE surviving registry (everything except the retired id).
+  const survivors: Record<string, RawEntry> = { ...current };
+  delete survivors[id];
+
+  // Validate-before-write: the surviving registry through the load-path
+  // validator (also enforces "registry is not empty").
+  buildRegistry(survivors, channels);
+
+  // Byte-preserving removal. The registry is one entry per line; find the
+  // unique line whose parsed key is the retired id, drop it, and repair the
+  // trailing-comma structure so the result is valid JSON. Any structural
+  // surprise (id not found on exactly one line, or mismatch after removal)
+  // throws with nothing written.
+  const hadTrailingNewline = /\n$/.test(registryText);
+  const eol = registryText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = registryText.split(eol);
+
+  const idToken = `${JSON.stringify(id)}:`;
+  const matches: number[] = [];
+  lines.forEach((line, i) => {
+    if (line.trimStart().startsWith(idToken)) matches.push(i);
+  });
+  if (matches.length !== 1) {
+    throw new RegistryError(
+      `could not locate a unique line for asset "${id}" (found ${matches.length}) — refusing to write`,
+    );
+  }
+  const removeIdx = matches[0]!;
+  const wasLastEntry = /,\s*$/.test(lines[removeIdx]!) === false;
+
+  const kept = lines.filter((_, i) => i !== removeIdx);
+
+  // Repair comma structure: after removing the last entry, the new last entry
+  // line must not end with a comma; after removing a non-last entry, nothing
+  // changes (each remaining entry keeps its own terminator).
+  if (wasLastEntry) {
+    // Find the new final entry line (the line before the closing "}").
+    for (let i = kept.length - 1; i >= 0; i--) {
+      const t = kept[i]!.trim();
+      if (t === "" || t === "}" || t === "},") continue;
+      kept[i] = kept[i]!.replace(/,(\s*)$/u, "$1");
+      break;
+    }
+  }
+
+  let newText = kept.join(eol);
+  if (hadTrailingNewline && !newText.endsWith(eol)) newText += eol;
+  if (!hadTrailingNewline && newText.endsWith(eol)) newText = newText.replace(/\r?\n$/u, "");
+
+  // Final guard: the removed-line text must re-parse to EXACTLY the validated
+  // survivors. Any divergence means the line surgery was unsafe; throw with
+  // nothing written.
+  let reparsed: unknown;
+  try {
+    reparsed = JSON.parse(newText);
+  } catch (e) {
+    throw new RegistryError(
+      `internal: registry text after removal is not valid JSON — nothing written (${e instanceof Error ? e.message : String(e)})`,
+    );
+  }
+  if (JSON.stringify(reparsed) !== JSON.stringify(survivors)) {
+    throw new RegistryError(
+      "internal: registry text after removal does not match the validated survivors — nothing written",
+    );
+  }
+
+  writeFileSync(registryPath, newText);
+}
