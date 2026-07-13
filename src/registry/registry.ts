@@ -764,3 +764,172 @@ export function addAssetAlias(
   }
   return amended;
 }
+
+/**
+ * Remove one alternate TradingView symbol (alias) from an existing Asset
+ * (Constitution §5 preamble: definitions are "fully editable"; aliases are
+ * declared resolution DATA). This store owns the registry file; the operation
+ * is validate-before-write over the WHOLE candidate.
+ *
+ * SCOPE: remove a single alias, ONLY. This is the subtractive inverse of
+ * addAssetAlias and is the natural correction when a wrong alias was declared.
+ * When the removed alias is the entry's LAST, the tradingViewAliases field is
+ * DROPPED entirely — matching the canonical alias-less shape that buildRegistry
+ * and createAsset produce (an empty array is never written). Not done here,
+ * each its own boundary: rewriting the canonical `tradingView` token
+ * (reconciliation-entangled), amending `channel` (ratified-unresolved field),
+ * or `id` (opaque identity, never renamed).
+ *
+ * VALIDATE-BEFORE-WRITE: the complete candidate registry (the target entry with
+ * the alias removed) is validated with buildRegistry — the SAME validator the
+ * load path trusts — before a byte is written. The alias must currently be
+ * present on the named asset; an unknown id or absent alias is refused with
+ * nothing written.
+ *
+ * BYTE-PRESERVING FIELD EDIT: the registry is operator-owned data recovered via
+ * version control (Constitution §2.2.1). The writer never re-serializes the
+ * file: it locates the single line defining the target asset (the registry is
+ * one entry per line) and rewrites ONLY that line from the parsed-and-amended
+ * entry (canonical field order; the alias field dropped when it empties;
+ * unmodeled fields preserved), leaving every other byte — other entries and
+ * the file's trailing-newline convention — verbatim. As a final guard the new
+ * text is re-parsed and compared to the validated candidate; on ANY divergence
+ * it throws with nothing written.
+ *
+ * Locations are injected — this store decides no filesystem paths (delivery
+ * owns location choice).
+ *
+ * @param registryPath  location of the registry file (asset id -> entry)
+ * @param channelsPath  location of the channels file (for revalidation)
+ * @param id            the asset id to remove an alias from
+ * @param alias         the alternate TradingView symbol to remove (exact, case-sensitive)
+ * @returns the amended Asset as validated within the candidate registry
+ */
+export function removeAssetAlias(
+  registryPath: string,
+  channelsPath: string,
+  id: string,
+  alias: string,
+): Asset {
+  // Read the current definition of record (raw TEXT for the byte-preserving
+  // edit, parsed object for validation) and the channels config.
+  let registryText: string;
+  let rawRegistry: unknown;
+  let rawChannels: unknown;
+  try {
+    registryText = readFileSync(registryPath, "utf8");
+    rawRegistry = JSON.parse(registryText);
+  } catch (e) {
+    throw new RegistryError(`could not read/parse ${registryPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    rawChannels = JSON.parse(readFileSync(channelsPath, "utf8"));
+  } catch (e) {
+    throw new RegistryError(`could not read/parse ${channelsPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (typeof rawRegistry !== "object" || rawRegistry === null || Array.isArray(rawRegistry)) {
+    throw new RegistryError("registry.json must be a JSON object keyed by asset id");
+  }
+  if (typeof rawChannels !== "object" || rawChannels === null || Array.isArray(rawChannels)) {
+    throw new RegistryError("channels.json must be a JSON object keyed by channel name");
+  }
+  const current = rawRegistry as Record<string, RawEntry>;
+  const channels = rawChannels as Record<string, unknown>;
+
+  // The amended asset must exist.
+  if (!Object.prototype.hasOwnProperty.call(current, id)) {
+    throw new RegistryError(`asset id "${id}" does not exist`);
+  }
+
+  const existing = current[id] as RawEntry;
+  const priorAliases = Array.isArray(existing.tradingViewAliases)
+    ? [...(existing.tradingViewAliases as unknown[])]
+    : [];
+  // The alias must currently be present on this asset (exact match).
+  if (!priorAliases.includes(alias)) {
+    throw new RegistryError(`asset "${id}" has no alias "${alias}"`);
+  }
+  const remaining = priorAliases.filter((a) => a !== alias);
+
+  // Build the amended entry in CANONICAL field order. When no aliases remain,
+  // the field is DROPPED (canonical alias-less shape — never an empty array).
+  // The emitted line below uses this same order, so the re-parse-and-compare
+  // guard (JSON.stringify, key-order-sensitive) agrees. Unmodeled fields are
+  // preserved (appended after the modeled ones).
+  const amendedEntry: Record<string, unknown> = {
+    tradingView: existing.tradingView,
+    ...(remaining.length > 0 ? { tradingViewAliases: remaining } : {}),
+    display: existing.display,
+    channel: existing.channel,
+  };
+  for (const [k, v] of Object.entries(existing as Record<string, unknown>)) {
+    if (k === "tradingView" || k === "tradingViewAliases" || k === "display" || k === "channel") continue;
+    amendedEntry[k] = v;
+  }
+  const candidate: Record<string, RawEntry> = {
+    ...current,
+    [id]: amendedEntry as RawEntry,
+  };
+
+  // Validate-before-write: the whole candidate through the load-path validator.
+  const validated = buildRegistry(candidate, channels);
+
+  // Byte-preserving field edit. The registry is one entry per line; find the
+  // unique line whose parsed key is the target id and rewrite ONLY that line
+  // from the amended entry. Any structural surprise throws with nothing written.
+  const eol = registryText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = registryText.split(eol);
+  const idToken = `${JSON.stringify(id)}:`;
+  const matches: number[] = [];
+  lines.forEach((line, i) => {
+    if (line.trimStart().startsWith(idToken)) matches.push(i);
+  });
+  if (matches.length !== 1) {
+    throw new RegistryError(
+      `could not locate a unique line for asset "${id}" (found ${matches.length}) — refusing to write`,
+    );
+  }
+  const lineIdx = matches[0]!;
+  const original = lines[lineIdx]!;
+
+  // Preserve leading indentation and any trailing comma from the original line.
+  const indentMatch = /^(\s*)/u.exec(original);
+  const indent = indentMatch ? indentMatch[1]! : "";
+  const hasTrailingComma = /,\s*$/u.test(original);
+
+  // Serialize the amended entry's fields in the object's own order (canonical,
+  // set above) with the file's " key: value " spacing. Values use
+  // JSON.stringify (safe escaping); braces carry single inner spaces.
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(amendedEntry)) {
+    parts.push(`${JSON.stringify(k)}: ${JSON.stringify(v)}`);
+  }
+  lines[lineIdx] = `${indent}${JSON.stringify(id)}: { ${parts.join(", ")} }${hasTrailingComma ? "," : ""}`;
+
+  const newText = lines.join(eol);
+
+  // Final guard: the edited text must re-parse to EXACTLY the validated
+  // candidate. Any divergence means the field edit was unsafe; throw with
+  // nothing written.
+  let reparsed: unknown;
+  try {
+    reparsed = JSON.parse(newText);
+  } catch (e) {
+    throw new RegistryError(
+      `internal: registry text after alias remove is not valid JSON — nothing written (${e instanceof Error ? e.message : String(e)})`,
+    );
+  }
+  if (JSON.stringify(reparsed) !== JSON.stringify(candidate)) {
+    throw new RegistryError(
+      "internal: registry text after alias remove does not match the validated candidate — nothing written",
+    );
+  }
+
+  writeFileSync(registryPath, newText);
+
+  const amended = validated.all().find((a) => a.id === id);
+  if (amended === undefined) {
+    throw new RegistryError(`internal: amended asset "${id}" missing from validated registry`);
+  }
+  return amended;
+}

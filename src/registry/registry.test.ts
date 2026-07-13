@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resolve, join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { buildRegistry, RegistryError, loadRegistry, createAsset, retireAsset, amendAssetDisplay, addAssetAlias } from "./registry.ts";
+import { buildRegistry, RegistryError, loadRegistry, createAsset, retireAsset, amendAssetDisplay, addAssetAlias, removeAssetAlias } from "./registry.ts";
 // Tests inject their own fixtures — they do NOT depend on definitions/registry.json.
 const channels = { crypto: "", stocks: "", indices: "" };
 const good = {
@@ -578,5 +578,116 @@ describe("addAssetAlias — registry-owned persistence (§5 additive resolution 
     const reg = loadRegistry(registryPath, channelsPath);
     expect(reg.all().map((a) => a.id).sort()).toEqual(["aapl", "btc", "eth"]);
     expect(reg.lookupByTradingView("AAPL.US")?.id).toBe("aapl");
+  });
+});
+
+describe("removeAssetAlias — registry-owned persistence (§5 subtractive resolution amendment)", () => {
+  let dir: string;
+  let registryPath: string;
+  let channelsPath: string;
+
+  const INITIAL_REGISTRY =
+    "{\n" +
+    '  "btc":  { "tradingView": "BTC",  "tradingViewAliases": ["BTCUSD", "BTCUSDT"], "display": "Bitcoin", "channel": "crypto" },\n' +
+    '  "eth":  { "tradingView": "ETH",  "tradingViewAliases": ["ETHUSD"], "display": "Ethereum", "channel": "crypto" },\n' +
+    '  "aapl": { "tradingView": "AAPL", "display": "Apple", "channel": "stocks" }\n' +
+    "}";
+  const CHANNELS = JSON.stringify({ crypto: "111", stocks: "", indices: "" });
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-removealias-"));
+    registryPath = join(dir, "registry.json");
+    channelsPath = join(dir, "channels.json");
+    writeFileSync(registryPath, INITIAL_REGISTRY);
+    writeFileSync(channelsPath, CHANNELS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("removes one alias from a multi-alias entry (others remain)", () => {
+    const amended = removeAssetAlias(registryPath, channelsPath, "btc", "BTCUSD");
+    expect(amended.tradingViewAliases).toEqual(["BTCUSDT"]);
+    const reg = loadRegistry(registryPath, channelsPath);
+    expect(reg.lookupByTradingView("BTCUSD")).toBeNull(); // removed alias no longer resolves
+    expect(reg.lookupByTradingView("BTCUSDT")?.id).toBe("btc"); // kept alias still resolves
+    expect(reg.lookupByTradingView("BTC")?.id).toBe("btc"); // canonical still resolves
+  });
+
+  it("removing the LAST alias DROPS the field (canonical alias-less shape)", () => {
+    const amended = removeAssetAlias(registryPath, channelsPath, "eth", "ETHUSD");
+    expect(amended.tradingViewAliases).toBeUndefined();
+    expect("tradingViewAliases" in (amended as object)).toBe(false);
+    const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
+    expect("tradingViewAliases" in parsed.eth).toBe(false); // field gone from the file
+    expect(parsed.eth).toEqual({ tradingView: "ETH", display: "Ethereum", channel: "crypto" });
+    // reloads and the removed alias no longer resolves; canonical still does
+    const reg = loadRegistry(registryPath, channelsPath);
+    expect(reg.lookupByTradingView("ETHUSD")).toBeNull();
+    expect(reg.lookupByTradingView("ETH")?.id).toBe("eth");
+  });
+
+  it("changes ONLY the target entry; all others byte-identical", () => {
+    const before = readFileSync(registryPath, "utf8");
+    removeAssetAlias(registryPath, channelsPath, "eth", "ETHUSD");
+    const after = readFileSync(registryPath, "utf8");
+    const beforeLines = before.split("\n");
+    const afterLines = after.split("\n");
+    const btcIdx = beforeLines.findIndex((l) => l.trimStart().startsWith('"btc":'));
+    const aaplIdx = beforeLines.findIndex((l) => l.trimStart().startsWith('"aapl":'));
+    expect(afterLines[btcIdx]).toBe(beforeLines[btcIdx]);
+    expect(afterLines[aaplIdx]).toBe(beforeLines[aaplIdx]);
+  });
+
+  it("preserves the target entry's other fields when removing from a multi-alias entry", () => {
+    removeAssetAlias(registryPath, channelsPath, "btc", "BTCUSDT");
+    const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
+    expect(parsed.btc).toEqual({
+      tradingView: "BTC",
+      tradingViewAliases: ["BTCUSD"],
+      display: "Bitcoin",
+      channel: "crypto",
+    });
+  });
+
+  it("refuses to remove an alias the asset does not have; writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => removeAssetAlias(registryPath, channelsPath, "btc", "NOPE")).toThrow(/has no alias "NOPE"/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses when the asset has no aliases at all; writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => removeAssetAlias(registryPath, channelsPath, "aapl", "AAPLUSD")).toThrow(/has no alias/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("refuses an unknown id; writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => removeAssetAlias(registryPath, channelsPath, "nope", "X")).toThrow(/does not exist/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("is exact/case-sensitive: a case-mismatched alias is refused; writes nothing", () => {
+    const before = readFileSync(registryPath, "utf8");
+    expect(() => removeAssetAlias(registryPath, channelsPath, "btc", "btcusd")).toThrow(/has no alias "btcusd"/);
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  it("round-trips with add: add then remove returns to the alias-less shape", () => {
+    addAssetAlias(registryPath, channelsPath, "aapl", "AAPLUSD");
+    expect(loadRegistry(registryPath, channelsPath).lookupByTradingView("AAPLUSD")?.id).toBe("aapl");
+    const amended = removeAssetAlias(registryPath, channelsPath, "aapl", "AAPLUSD");
+    expect(amended.tradingViewAliases).toBeUndefined();
+    const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
+    expect(parsed.aapl).toEqual({ tradingView: "AAPL", display: "Apple", channel: "stocks" });
+  });
+
+  it("frees the removed alias for reuse by another asset", () => {
+    removeAssetAlias(registryPath, channelsPath, "btc", "BTCUSD");
+    // BTCUSD is now free; eth may claim it
+    const amended = addAssetAlias(registryPath, channelsPath, "eth", "BTCUSD");
+    expect(amended.tradingViewAliases).toEqual(["ETHUSD", "BTCUSD"]);
+    expect(loadRegistry(registryPath, channelsPath).lookupByTradingView("BTCUSD")?.id).toBe("eth");
   });
 });
