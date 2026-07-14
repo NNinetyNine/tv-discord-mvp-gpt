@@ -3,7 +3,7 @@ import { resolve, join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { buildPacks, PackError, loadPacks, createPack, removePackAsset, renamePackDisplay, reassignPackChannel, reorderPacks, reorderPackAssets } from "./packs.ts";
+import { buildPacks, PackError, loadPacks, createPack, removePackAsset, renamePackDisplay, reassignPackChannel, reorderPacks, reorderPackAssets, addPackAsset } from "./packs.ts";
 import { loadRegistry } from "../registry/registry.ts";
 import { loadChannels } from "../wiring/channels.ts";
 
@@ -713,3 +713,96 @@ describe("reorderPackAssets — Pack-owned persistence (§5.2 asset reorder; pur
     expect(amended.assets).toEqual(["eth", "sol", "btc"]);
   });
 });
+
+describe("addPackAsset — Pack-owned persistence (§5.2 add held asset; global disjointness preserved)", () => {
+  let dir: string;
+  let packsPath: string;
+
+  const VALID_IDS: ReadonlySet<string> = new Set(["btc", "eth", "sol", "aapl", "held1", "held2"]);
+  const CHANNEL_NAMES: ReadonlySet<string> = new Set(["crypto", "stocks"]);
+
+  const INITIAL_PACKS =
+    "[\n" +
+    '  {\n    "id": "crypto",\n    "display": "Crypto",\n    "channel": "crypto",\n    "assets": ["btc", "eth"]\n  },\n' +
+    '  {\n    "id": "stocks",\n    "display": "Stocks",\n    "channel": "stocks",\n    "assets": ["aapl"]\n  }\n' +
+    "]";
+  // held1, held2 are in VALID_IDS (registry) but in NO pack — held assets.
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-addpackasset-"));
+    packsPath = join(dir, "packs.json");
+    writeFileSync(packsPath, INITIAL_PACKS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("adds a held asset to a pack (appended last; readable back through loadPacks)", () => {
+    const amended = addPackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "held1");
+    expect(amended.assets).toEqual(["btc", "eth", "held1"]);
+    const loaded = loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES);
+    expect(loaded.find((p) => p.id === "crypto")?.assets).toEqual(["btc", "eth", "held1"]);
+  });
+
+  it("changes ONLY the target pack's assets; other packs + fields intact", () => {
+    addPackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "held1");
+    const parsed = JSON.parse(readFileSync(packsPath, "utf8"));
+    expect(parsed[0]).toEqual({ id: "crypto", display: "Crypto", channel: "crypto", assets: ["btc", "eth", "held1"] });
+    expect(parsed[1]).toEqual({ id: "stocks", display: "Stocks", channel: "stocks", assets: ["aapl"] });
+  });
+
+  it("leaves OTHER packs byte-identical", () => {
+    const before = readFileSync(packsPath, "utf8");
+    addPackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "held1");
+    const after = readFileSync(packsPath, "utf8");
+    const stocksBlock = before.substring(before.indexOf('{\n    "id": "stocks"'));
+    expect(after).toContain(stocksBlock);
+  });
+
+  it("REFUSES an asset already in ANOTHER pack (disjointness); writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    // aapl belongs to stocks; adding it to crypto must be refused
+    expect(() => addPackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "aapl")).toThrow(/already belongs to pack "stocks"/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("REFUSES an asset already in the SAME pack; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => addPackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "btc")).toThrow(/pack "crypto" already contains asset "btc"/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses an unknown pack; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => addPackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "nope", "held1")).toThrow(/pack "nope" does not exist/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses an asset unknown to the registry (buildPacks, unchanged); writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => addPackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "ghost")).toThrow(/unknown asset id "ghost"/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("preserves global disjointness: each asset in exactly one pack after add", () => {
+    addPackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "held1");
+    addPackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "stocks", "held2");
+    const parsed = JSON.parse(readFileSync(packsPath, "utf8"));
+    const all = parsed.flatMap((p: { assets: string[] }) => p.assets);
+    expect(new Set(all).size).toBe(all.length); // no asset appears twice
+    expect(all).toContain("held1");
+    expect(all).toContain("held2");
+  });
+
+  it("add then remove returns byte-identical to the original", () => {
+    const before = readFileSync(packsPath, "utf8");
+    addPackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "held1");
+    removePackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "held1");
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("does not read or require workspace state (pure definition persistence)", () => {
+    const amended = addPackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "stocks", "held1");
+    expect(amended.assets).toEqual(["aapl", "held1"]);
+  });
+})

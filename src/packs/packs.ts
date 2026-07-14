@@ -30,14 +30,16 @@ import { readFileSync, writeFileSync } from "node:fs";
  * packs; only duplicates *within a single pack* are rejected.
  *
  * WRITE SIDE: createPack (Constitution §5.3) persists a new Pack with its
- * initial membership; removePackAsset (§5.2) removes one asset from a Pack's
- * membership; reorderPackAssets (§5.2) reorders a Pack's members; renamePackDisplay
- * (§5.3) renames a Pack's display; reassignPackChannel (§5.3) changes a Pack's
- * channel; reorderPacks (§5.3) permutes the Pack array order. All validate-before-
- * write through buildPacks (reused unchanged), byte-preservingly, and are PURE
- * definition persistence — the §5.2 "Empty-only" gate is a WORKSPACE fact enforced
- * by the delivery layer, never by this store; §5.3 edits are ungated. The
- * remaining §5.2/§5.4 Pack edits are separate concerns, not implemented here.
+ * initial membership; addPackAsset (§5.2) adds a HELD asset to a Pack (global
+ * disjointness preserved — an already-membered asset is refused); removePackAsset
+ * (§5.2) removes one asset from a Pack's membership; reorderPackAssets (§5.2)
+ * reorders a Pack's members; renamePackDisplay (§5.3) renames a Pack's display;
+ * reassignPackChannel (§5.3) changes a Pack's channel; reorderPacks (§5.3)
+ * permutes the Pack array order. All validate-before-write through buildPacks
+ * (reused unchanged), byte-preservingly, and are PURE definition persistence —
+ * the §5.2 "Empty-only" gate is a WORKSPACE fact enforced by the delivery layer,
+ * never by this store; §5.3 edits are ungated. The remaining §5.4 Pack edit
+ * (deletion) is a separate concern, not implemented here.
  */
 
 export interface Pack {
@@ -1053,6 +1055,173 @@ export function reorderPackAssets(
   if (JSON.stringify(reparsed) !== JSON.stringify(candidate)) {
     throw new PackError(
       "internal: packs text after asset reorder does not match the validated candidate — nothing written",
+    );
+  }
+
+  writeFileSync(packsPath, newText);
+
+  const amended = validated.find((p) => p.id === packId);
+  if (amended === undefined) {
+    throw new PackError(`internal: amended pack "${packId}" missing from validated packs`);
+  }
+  return amended;
+}
+
+/**
+ * Add a currently HELD Asset to a Pack's membership through Pack-owned
+ * persistence (Constitution §5.2: "Pack membership and order (within a Pack).
+ * Add, remove, and reorder Assets: Empty-only."; §4.6: a held Asset "counts
+ * toward no Pack's completeness until the operator adds the Asset to a Pack
+ * definition at an Empty moment").
+ *
+ * GLOBAL DISJOINTNESS PRESERVED (accepted §9.1 ruling: an Asset belongs to
+ * exactly one Pack). This operation assigns a HELD asset — one in NO pack — to
+ * exactly one pack. An asset already belonging to ANY pack is refused, so every
+ * produced definition remains disjoint and the workspace's disjointness
+ * assertion continues to hold. Multi-pack membership is NOT introduced here.
+ *
+ * The disjointness guard lives in this store because the store already reads the
+ * WHOLE packs file: refusing an already-membered asset is enforced atomically
+ * with the write, not via a separate delivery read that could diverge. (The
+ * §5.2 Empty-only GATE is a WORKSPACE fact and remains the delivery layer's
+ * responsibility — this store never reads workspace state.)
+ *
+ * PURE DEFINITION PERSISTENCE. Beyond the disjointness guard (a pack-definition
+ * fact), this performs only the definition edit and its definition-level
+ * validation; it reads no workspace state.
+ *
+ * VALIDATE-BEFORE-WRITE: the complete candidate pack array (the target pack with
+ * the asset appended) is validated with buildPacks — the SAME validator the load
+ * path trusts, reused UNCHANGED — before a byte is written. An unknown asset id
+ * (not in the registry) is refused by buildPacks; an unknown pack and an
+ * already-membered asset are refused first.
+ *
+ * BYTE-PRESERVING FIELD EDIT: packs.json is operator-owned data recovered via
+ * version control (Constitution §2.2.1). The writer never re-serializes the
+ * file: it rewrites ONLY the target pack's single-line `assets` array in place
+ * (mirroring removePackAsset), appending the new member and leaving every other
+ * byte — other packs, this pack's id/display/channel, and the file's trailing
+ * convention — verbatim. As a final guard the new text is re-parsed and compared
+ * to the validated candidate; on ANY divergence it throws with nothing written.
+ *
+ * @param packsPath     location of the packs file (array of pack objects)
+ * @param validIds      set of asset ids known to the registry
+ * @param channelNames  set of channel names known to the channels config
+ * @param packId        the pack to add the asset to
+ * @param assetId       the held asset id to add (must be in no pack)
+ * @returns the amended Pack as validated within the candidate array
+ */
+export function addPackAsset(
+  packsPath: string,
+  validIds: ReadonlySet<string>,
+  channelNames: ReadonlySet<string>,
+  packId: string,
+  assetId: string,
+): Pack {
+  // Read the current definition of record: raw TEXT (for the byte-preserving
+  // edit) and parsed array (for validation).
+  let packsText: string;
+  let rawPacks: unknown;
+  try {
+    packsText = readFileSync(packsPath, "utf8");
+    rawPacks = JSON.parse(packsText);
+  } catch (e) {
+    throw new PackError(`could not read/parse ${packsPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!Array.isArray(rawPacks)) {
+    throw new PackError("packs.json must be a JSON array (array order = publishing order)");
+  }
+  const current = rawPacks as RawPack[];
+
+  // Locate the target pack.
+  const targetIndex = current.findIndex(
+    (p) => p !== null && typeof p === "object" && (p as RawPack).id === packId,
+  );
+  if (targetIndex === -1) {
+    throw new PackError(`pack "${packId}" does not exist`);
+  }
+
+  // DISJOINTNESS GUARD (accepted §9.1 ruling): the asset must be HELD — in no
+  // pack at all. Refuse an asset already belonging to ANY pack (including the
+  // target), preserving global disjointness. Checked over the whole packs file,
+  // atomically with the write below.
+  for (const p of current) {
+    if (p === null || typeof p !== "object") continue;
+    const assets = (p as RawPack).assets;
+    if (Array.isArray(assets) && (assets as unknown[]).includes(assetId)) {
+      const ownerId = (p as RawPack).id;
+      if (ownerId === packId) {
+        throw new PackError(`pack "${packId}" already contains asset "${assetId}"`);
+      }
+      throw new PackError(
+        `asset "${assetId}" already belongs to pack "${ownerId}" — an asset belongs to exactly one pack (§9.1); ` +
+          `remove it from "${ownerId}" first`,
+      );
+    }
+  }
+
+  const target = current[targetIndex] as RawPack;
+  const targetAssets = Array.isArray(target.assets) ? [...(target.assets as unknown[])] : [];
+
+  // The COMPLETE candidate, with the asset appended to the target pack's
+  // membership (existing order preserved; new member last).
+  const nextAssets = [...targetAssets, assetId];
+  const amendedPack: RawPack = { ...target, assets: nextAssets };
+  const candidate: unknown[] = current.map((p, i) => (i === targetIndex ? amendedPack : p));
+
+  // Validate-before-write: the whole candidate through the load-path validator
+  // (reused unchanged — refuses an unknown asset id not in the registry).
+  const validated = buildPacks(candidate, validIds, channelNames);
+
+  // Byte-preserving edit. Rewrite ONLY the target pack's `assets` line. Each
+  // pack is a multi-line object with `assets` on its own line; find the unique
+  // "assets": line within the target pack's block and replace its array value.
+  const eol = packsText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = packsText.split(eol);
+
+  const idToken = `"id": ${JSON.stringify(packId)}`;
+  const idLineIdx = lines.findIndex((l) => l.includes(idToken));
+  if (idLineIdx === -1) {
+    throw new PackError(`could not locate the line for pack "${packId}" — refusing to write`);
+  }
+  let assetsLineIdx = -1;
+  for (let i = idLineIdx; i < lines.length; i++) {
+    if (/^\s*"assets"\s*:/u.test(lines[i]!)) {
+      assetsLineIdx = i;
+      break;
+    }
+    if (i > idLineIdx && /^\s*"id"\s*:/u.test(lines[i]!)) break;
+  }
+  if (assetsLineIdx === -1) {
+    throw new PackError(`could not locate the "assets" line for pack "${packId}" — refusing to write`);
+  }
+
+  const original = lines[assetsLineIdx]!;
+  const assetsRe = /("assets"\s*:\s*)\[[^\]]*\](\s*,?\s*)$/u;
+  if (!assetsRe.test(original)) {
+    throw new PackError(
+      `the "assets" line for pack "${packId}" is not a single-line array — refusing to write`,
+    );
+  }
+  const newArray = `[${nextAssets.map((a) => JSON.stringify(a)).join(", ")}]`;
+  lines[assetsLineIdx] = original.replace(assetsRe, `$1${newArray}$2`);
+
+  const newText = lines.join(eol);
+
+  // Final guard: the edited text must re-parse to EXACTLY the validated
+  // candidate. Any divergence means the line surgery was unsafe; throw with
+  // nothing written.
+  let reparsed: unknown;
+  try {
+    reparsed = JSON.parse(newText);
+  } catch (e) {
+    throw new PackError(
+      `internal: packs text after add is not valid JSON — nothing written (${e instanceof Error ? e.message : String(e)})`,
+    );
+  }
+  if (JSON.stringify(reparsed) !== JSON.stringify(candidate)) {
+    throw new PackError(
+      "internal: packs text after add does not match the validated candidate — nothing written",
     );
   }
 
