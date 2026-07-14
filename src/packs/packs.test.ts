@@ -59,11 +59,17 @@ describe("buildPacks — valid input", () => {
     expect(packs[0]?.channel).toBe("unwired");
   });
 
-  it("allows an asset to appear in more than one pack (cross-pack reuse)", () => {
+  it("validates each pack independently and does not own global disjointness", () => {
+    // buildPacks is a PER-PACK validator: it rejects duplicates *within* a pack
+    // but intentionally does NOT reject the same asset appearing in two packs —
+    // global disjointness (an Asset belongs to exactly one Pack) is owned by the
+    // workspace assertion and the addPackAsset guard, not here. This input is
+    // therefore accepted by buildPacks (and would be rejected later at workspace
+    // construction). Documenting ownership; behaviour is unchanged.
     const packs = buildPacks(
       [
         { id: "morning", display: "Morning", channel: "crypto", assets: ["btc", "eth"] },
-        { id: "evening", display: "Evening", channel: "crypto", assets: ["btc"] }, // btc reused — allowed
+        { id: "evening", display: "Evening", channel: "crypto", assets: ["btc"] },
       ],
       validIds,
       channelNames,
@@ -283,8 +289,14 @@ describe("createPack — Pack-owned persistence (§5.3 Create Pack, with initial
     expect(readFileSync(packsPath, "utf8")).toBe(before);
   });
 
-  it("allows an asset already used by another pack (cross-pack reuse)", () => {
-    // btc is in "crypto"; a new pack may also include it.
+  it("validates per-pack and does not own global disjointness", () => {
+    // createPack validates the new pack through buildPacks (per-pack) and does
+    // NOT own global disjointness — so a definition naming an asset already in
+    // another pack is accepted at this layer (it would be rejected later at
+    // workspace construction, and the addPackAsset editing guard refuses adding
+    // an already-membered asset). The disjointness-preserving operator path is
+    // create-asset (held) -> addPackAsset. Documenting ownership; behaviour is
+    // unchanged.
     const created = createPack(packsPath, VALID_IDS, CHANNEL_NAMES, {
       id: "evening",
       display: "Evening",

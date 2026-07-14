@@ -23,11 +23,13 @@ import { readFileSync, writeFileSync } from "node:fs";
  *   - duplicate asset id WITHIN a pack
  *   - asset id not found in the registry
  *
- * CROSS-PACK REUSE: an asset MAY appear in more than one pack. This is allowed
- * deliberately — packs are published one at a time, so the same asset belonging
- * to (say) both a "Morning Crypto" and an "Evening Crypto" pack is a valid
- * future use. We therefore do NOT check for the same asset id across different
- * packs; only duplicates *within a single pack* are rejected.
+ * WITHIN-PACK SCOPE: buildPacks validates each pack independently and rejects
+ * duplicate asset ids *within a single pack*. It does NOT check for the same
+ * asset id across different packs — not because cross-pack reuse is endorsed,
+ * but because global disjointness (an Asset belongs to exactly one Pack, the
+ * accepted §9.1 invariant) is owned elsewhere: the workspace asserts it once at
+ * construction, and addPackAsset refuses assigning an already-membered asset.
+ * Keeping buildPacks per-pack avoids duplicating that ownership here.
  *
  * WRITE SIDE: createPack (Constitution §5.3) persists a new Pack with its
  * initial membership; addPackAsset (§5.2) adds a HELD asset to a Pack (global
