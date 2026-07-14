@@ -37,11 +37,12 @@ import { readFileSync, writeFileSync } from "node:fs";
  * (§5.2) removes one asset from a Pack's membership; reorderPackAssets (§5.2)
  * reorders a Pack's members; renamePackDisplay (§5.3) renames a Pack's display;
  * reassignPackChannel (§5.3) changes a Pack's channel; reorderPacks (§5.3)
- * permutes the Pack array order. All validate-before-write through buildPacks
- * (reused unchanged), byte-preservingly, and are PURE definition persistence —
- * the §5.2 "Empty-only" gate is a WORKSPACE fact enforced by the delivery layer,
- * never by this store; §5.3 edits are ungated. The remaining §5.4 Pack edit
- * (deletion) is a separate concern, not implemented here.
+ * permutes the Pack array order; deletePack (§5.4) removes a Pack. All validate-
+ * before-write through buildPacks (reused unchanged), byte-preservingly, and are
+ * PURE definition persistence — the §5.2 "Empty-only" gate and the §5.4 consent
+ * (cost-naming for a Pack with in-flight work) are DELIVERY-layer concerns backed
+ * by WORKSPACE facts, never by this store; §5.3 edits are ungated. The full Pack
+ * edit surface (§5.2–§5.4) is now present.
  */
 
 export interface Pack {
@@ -1234,4 +1235,156 @@ export function addPackAsset(
     throw new PackError(`internal: amended pack "${packId}" missing from validated packs`);
   }
   return amended;
+}
+
+/**
+ * Delete a Pack through Pack-owned persistence (Constitution §5.4: "One
+ * operation on one object: the removal of a definition from the operator's
+ * coverage."). This store owns the packs file; deletion is validate-before-write
+ * over the WHOLE candidate (the surviving packs).
+ *
+ * PURE DEFINITION PERSISTENCE — NO CONSENT, NO WORKSPACE AWARENESS. §5.4 is
+ * "consent-gated, never state-gated": deleting a Pack WITH in-flight work must
+ * confirm by naming the cost, while deleting an Empty Pack is direct. Both the
+ * cost fact (a WORKSPACE fact, capturedFor) and the consent are the DELIVERY
+ * layer's responsibility; this store neither reads workspace state nor prompts.
+ * It performs only the definition removal and its definition-level validation.
+ *
+ * The in-flight instance ceasing to exist is an ENTAILMENT of removing the
+ * definition (§5.4), not a second act here: with the pack gone, the workspace
+ * simply has no instance for it. Archived Releases for the deleted Pack are
+ * untouched (they live in the release store, self-describing snapshots).
+ *
+ * VALIDATE-BEFORE-WRITE: the complete candidate pack array (the survivors) is
+ * validated with buildPacks — the SAME validator the load path trusts, reused
+ * UNCHANGED — before a byte is written. Deleting the LAST pack yields an empty
+ * array, which buildPacks refuses ("at least one pack is required"); that refusal
+ * stands, with nothing written. An unknown pack is refused first.
+ *
+ * BYTE-PRESERVING BLOCK REMOVAL: packs.json is operator-owned data recovered via
+ * version control (Constitution §2.2.1). The writer never re-serializes a
+ * surviving pack: it splits the file into the array framing plus each pack's
+ * verbatim block text, drops the target block, and reassembles the survivors in
+ * their existing order (re-inserting the inter-block separators), leaving every
+ * surviving block's bytes untouched and preserving the file's trailing
+ * convention. As a final guard the new text is re-parsed and compared to the
+ * validated candidate; on ANY divergence it throws with nothing written.
+ *
+ * @param packsPath     location of the packs file (array of pack objects)
+ * @param validIds      set of asset ids known to the registry
+ * @param channelNames  set of channel names known to the channels config
+ * @param packId        the pack to delete
+ * @returns the surviving Packs as validated
+ */
+export function deletePack(
+  packsPath: string,
+  validIds: ReadonlySet<string>,
+  channelNames: ReadonlySet<string>,
+  packId: string,
+): readonly Pack[] {
+  // Read the current definition of record: raw TEXT (for the byte-preserving
+  // removal) and parsed array (for validation).
+  let packsText: string;
+  let rawPacks: unknown;
+  try {
+    packsText = readFileSync(packsPath, "utf8");
+    rawPacks = JSON.parse(packsText);
+  } catch (e) {
+    throw new PackError(`could not read/parse ${packsPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!Array.isArray(rawPacks)) {
+    throw new PackError("packs.json must be a JSON array (array order = publishing order)");
+  }
+  const current = rawPacks as RawPack[];
+
+  // Locate the target pack.
+  const targetIndex = current.findIndex(
+    (p) => p !== null && typeof p === "object" && (p as RawPack).id === packId,
+  );
+  if (targetIndex === -1) {
+    throw new PackError(`pack "${packId}" does not exist`);
+  }
+
+  // The COMPLETE candidate: every pack except the target, order preserved.
+  const candidate: unknown[] = current.filter((_, i) => i !== targetIndex);
+
+  // Validate-before-write: the surviving packs through the load-path validator
+  // (reused unchanged). Deleting the last pack yields an empty array, which
+  // buildPacks refuses — the model requires at least one pack.
+  const validated = buildPacks(candidate, validIds, channelNames);
+
+  // Byte-preserving block removal. Split the file into array framing plus each
+  // pack's verbatim block text; drop the target block; reassemble the survivors.
+  const eol = packsText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = packsText.split(eol);
+
+  // A pack block runs from a line that is exactly "  {" to the next line that is
+  // "  }" or "  },". Collect (blockLines, packId) pairs in file order.
+  const blocks: { body: string[]; id: string }[] = [];
+  let openIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (l === "  {") {
+      openIdx = i;
+    } else if ((l === "  }" || l === "  },") && openIdx !== -1) {
+      const body = lines.slice(openIdx, i);
+      body.push("  }"); // normalize closing line; comma re-inserted on join
+      const idLine = body.find((bl) => /^\s*"id"\s*:/u.test(bl));
+      if (idLine === undefined) {
+        throw new PackError('a pack block has no "id" line — refusing to write');
+      }
+      const m = idLine.match(/"id"\s*:\s*"((?:[^"\\]|\\.)*)"/u);
+      if (m === null) {
+        throw new PackError('could not read a pack block id — refusing to write');
+      }
+      blocks.push({ body, id: m[1]! });
+      openIdx = -1;
+    }
+  }
+  if (blocks.length !== current.length) {
+    throw new PackError(
+      `could not delimit all pack blocks (found ${blocks.length}, expected ${current.length}) — refusing to write`,
+    );
+  }
+
+  const survivors = blocks.filter((b) => b.id !== packId);
+  if (survivors.length !== blocks.length - 1) {
+    throw new PackError(`internal: expected to drop exactly one block for "${packId}" — refusing to write`);
+  }
+
+  // Reassemble: "[", each surviving block in order joined by "," between blocks,
+  // then "]", restoring the original trailing convention.
+  const hadTrailingNewline = /\n$/.test(packsText);
+  const bodyLines: string[] = [];
+  survivors.forEach((block, bi) => {
+    block.body.forEach((bl, li) => {
+      if (li === block.body.length - 1 && bi < survivors.length - 1) {
+        bodyLines.push("  },");
+      } else {
+        bodyLines.push(bl);
+      }
+    });
+  });
+  const newText = `[${eol}${bodyLines.join(eol)}${eol}]${hadTrailingNewline ? eol : ""}`;
+
+  // Final guard: the reassembled text must re-parse to EXACTLY the validated
+  // candidate. Any divergence means the removal was unsafe; throw with nothing
+  // written.
+  let reparsed: unknown;
+  try {
+    reparsed = JSON.parse(newText);
+  } catch (e) {
+    throw new PackError(
+      `internal: packs text after deletion is not valid JSON — nothing written (${e instanceof Error ? e.message : String(e)})`,
+    );
+  }
+  if (JSON.stringify(reparsed) !== JSON.stringify(candidate)) {
+    throw new PackError(
+      "internal: packs text after deletion does not match the validated candidate — nothing written",
+    );
+  }
+
+  writeFileSync(packsPath, newText);
+
+  return validated;
 }

@@ -3,7 +3,7 @@ import { resolve, join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { buildPacks, PackError, loadPacks, createPack, removePackAsset, renamePackDisplay, reassignPackChannel, reorderPacks, reorderPackAssets, addPackAsset } from "./packs.ts";
+import { buildPacks, PackError, loadPacks, createPack, removePackAsset, renamePackDisplay, reassignPackChannel, reorderPacks, reorderPackAssets, addPackAsset, deletePack } from "./packs.ts";
 import { loadRegistry } from "../registry/registry.ts";
 import { loadChannels } from "../wiring/channels.ts";
 
@@ -818,3 +818,96 @@ describe("addPackAsset — Pack-owned persistence (§5.2 add held asset; global 
     expect(amended.assets).toEqual(["aapl", "held1"]);
   });
 })
+
+describe("deletePack — Pack-owned persistence (§5.4 deletion; pure definition persistence, no consent in store)", () => {
+  let dir: string;
+  let packsPath: string;
+
+  const VALID_IDS: ReadonlySet<string> = new Set(["btc", "eth", "sol", "aapl", "spx"]);
+  const CHANNEL_NAMES: ReadonlySet<string> = new Set(["crypto", "stocks", "indices"]);
+
+  const INITIAL_PACKS =
+    "[\n" +
+    '  {\n    "id": "crypto",\n    "display": "Crypto",\n    "channel": "crypto",\n    "assets": ["btc", "eth", "sol"]\n  },\n' +
+    '  {\n    "id": "stocks",\n    "display": "Stocks",\n    "channel": "stocks",\n    "assets": ["aapl"]\n  },\n' +
+    '  {\n    "id": "indices",\n    "display": "Indices",\n    "channel": "indices",\n    "assets": ["spx"]\n  }\n' +
+    "]";
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-deletepack-"));
+    packsPath = join(dir, "packs.json");
+    writeFileSync(packsPath, INITIAL_PACKS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("deletes a pack (removed from loadPacks; survivors keep order)", () => {
+    const survivors = deletePack(packsPath, VALID_IDS, CHANNEL_NAMES, "stocks");
+    expect(survivors.map((p) => p.id)).toEqual(["crypto", "indices"]);
+    const loaded = loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES);
+    expect(loaded.map((p) => p.id)).toEqual(["crypto", "indices"]);
+  });
+
+  it("removes ONLY the target pack; survivors byte-identical", () => {
+    const before = readFileSync(packsPath, "utf8");
+    deletePack(packsPath, VALID_IDS, CHANNEL_NAMES, "stocks");
+    const after = readFileSync(packsPath, "utf8");
+    // crypto block (first) survives verbatim
+    const cryptoBlock = before.substring(before.indexOf('  {\n    "id": "crypto"'), before.indexOf('  },'));
+    expect(after).toContain(cryptoBlock);
+    const parsed = JSON.parse(after);
+    expect(parsed).toEqual([
+      { id: "crypto", display: "Crypto", channel: "crypto", assets: ["btc", "eth", "sol"] },
+      { id: "indices", display: "Indices", channel: "indices", assets: ["spx"] },
+    ]);
+  });
+
+  it("can delete the FIRST pack (survivors reassemble correctly)", () => {
+    deletePack(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto");
+    const parsed = JSON.parse(readFileSync(packsPath, "utf8"));
+    expect(parsed.map((p: { id: string }) => p.id)).toEqual(["stocks", "indices"]);
+  });
+
+  it("can delete the LAST pack in the array (trailing convention preserved)", () => {
+    deletePack(packsPath, VALID_IDS, CHANNEL_NAMES, "indices");
+    const text = readFileSync(packsPath, "utf8");
+    expect(text.endsWith("]")).toBe(true);
+    const parsed = JSON.parse(text);
+    expect(parsed.map((p: { id: string }) => p.id)).toEqual(["crypto", "stocks"]);
+  });
+
+  it("refuses an unknown pack; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => deletePack(packsPath, VALID_IDS, CHANNEL_NAMES, "nope")).toThrow(/pack "nope" does not exist/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses deleting the last remaining pack (buildPacks: at least one pack); writes nothing", () => {
+    // reduce to a single pack, then attempt to delete it
+    deletePack(packsPath, VALID_IDS, CHANNEL_NAMES, "stocks");
+    deletePack(packsPath, VALID_IDS, CHANNEL_NAMES, "indices");
+    const before = readFileSync(packsPath, "utf8"); // only crypto remains
+    expect(() => deletePack(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto")).toThrow(/at least one pack is required/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("does not read or require workspace state (consent/cost is a delivery concern)", () => {
+    // The store deletes regardless of any in-flight work — the §5.4 consent gate
+    // lives in delivery, not here.
+    const survivors = deletePack(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto");
+    expect(survivors.map((p) => p.id)).toEqual(["stocks", "indices"]);
+  });
+
+  it("delete then (re)create restores an equivalent definition", () => {
+    deletePack(packsPath, VALID_IDS, CHANNEL_NAMES, "indices");
+    const recreated = createPack(packsPath, VALID_IDS, CHANNEL_NAMES, {
+      id: "indices",
+      display: "Indices",
+      channel: "indices",
+      assets: ["spx"],
+    });
+    expect(recreated.id).toBe("indices");
+    expect(loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES).map((p) => p.id)).toEqual(["crypto", "stocks", "indices"]);
+  });
+});
