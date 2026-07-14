@@ -31,13 +31,13 @@ import { readFileSync, writeFileSync } from "node:fs";
  *
  * WRITE SIDE: createPack (Constitution §5.3) persists a new Pack with its
  * initial membership; removePackAsset (§5.2) removes one asset from a Pack's
- * membership; renamePackDisplay (§5.3) renames a Pack's display;
- * reassignPackChannel (§5.3) changes a Pack's channel; reorderPacks (§5.3)
- * permutes the Pack array order. All validate-before-write through buildPacks
- * (reused unchanged), byte-preservingly, and are PURE definition persistence —
- * the §5.2 "Empty-only" gate is a WORKSPACE fact enforced by the delivery layer,
- * never by this store; §5.3 edits are ungated. The remaining §5.2/§5.4 Pack
- * edits are separate concerns, not implemented here.
+ * membership; reorderPackAssets (§5.2) reorders a Pack's members; renamePackDisplay
+ * (§5.3) renames a Pack's display; reassignPackChannel (§5.3) changes a Pack's
+ * channel; reorderPacks (§5.3) permutes the Pack array order. All validate-before-
+ * write through buildPacks (reused unchanged), byte-preservingly, and are PURE
+ * definition persistence — the §5.2 "Empty-only" gate is a WORKSPACE fact enforced
+ * by the delivery layer, never by this store; §5.3 edits are ungated. The
+ * remaining §5.2/§5.4 Pack edits are separate concerns, not implemented here.
  */
 
 export interface Pack {
@@ -897,4 +897,170 @@ export function reorderPacks(
   writeFileSync(packsPath, newText);
 
   return validated;
+}
+
+/**
+ * Reorder the Assets within a Pack through Pack-owned persistence (Constitution
+ * §5.2: "Pack membership and order (within a Pack). Add, remove, and reorder
+ * Assets: Empty-only."). This store owns the packs file; the reorder is
+ * validate-before-write over the WHOLE candidate.
+ *
+ * PURE DEFINITION PERSISTENCE — NO WORKSPACE AWARENESS. §5.2 editing is
+ * "Empty-only", but "Empty" is a WORKSPACE fact owned solely by the workspace.
+ * This store must not know about workspace state: the Empty-only GATE is the
+ * delivery layer's responsibility (it consults the workspace before invoking
+ * this function), exactly as for removePackAsset. This function performs only
+ * the definition edit and its definition-level validation.
+ *
+ * WHOLE-ORDERING INPUT: `orderedAssetIds` must be a permutation of exactly the
+ * pack's current members — every existing member id, each once, no unknowns,
+ * none missing. This is a total reordering (not a move-one primitive); the
+ * delivery layer composes the desired order and this store applies it.
+ *
+ * VALIDATE-BEFORE-WRITE: the complete candidate pack array (the target pack with
+ * its assets permuted) is validated with buildPacks — the SAME validator the
+ * load path trusts, reused UNCHANGED — before a byte is written. buildPacks is
+ * order-agnostic: any permutation of a pack's already-valid members is valid, so
+ * no validator change is part of this boundary. The MEMBERSHIP SET is unchanged;
+ * only order changes.
+ *
+ * BYTE-PRESERVING FIELD EDIT: packs.json is operator-owned data recovered via
+ * version control (Constitution §2.2.1). The writer never re-serializes the
+ * file: it rewrites ONLY the target pack's single-line `assets` array in place
+ * (mirroring removePackAsset), leaving every other byte — other packs, this
+ * pack's id/display/channel, and the file's trailing convention — verbatim. As
+ * a final guard the new text is re-parsed and compared to the validated
+ * candidate; on ANY divergence it throws with nothing written.
+ *
+ * @param packsPath        location of the packs file (array of pack objects)
+ * @param validIds         set of asset ids known to the registry
+ * @param channelNames     set of channel names known to the channels config
+ * @param packId           the pack whose assets to reorder
+ * @param orderedAssetIds  the desired full order — a permutation of the pack's members
+ * @returns the amended Pack as validated within the candidate array
+ */
+export function reorderPackAssets(
+  packsPath: string,
+  validIds: ReadonlySet<string>,
+  channelNames: ReadonlySet<string>,
+  packId: string,
+  orderedAssetIds: readonly string[],
+): Pack {
+  // Read the current definition of record: raw TEXT (for the byte-preserving
+  // edit) and parsed array (for validation).
+  let packsText: string;
+  let rawPacks: unknown;
+  try {
+    packsText = readFileSync(packsPath, "utf8");
+    rawPacks = JSON.parse(packsText);
+  } catch (e) {
+    throw new PackError(`could not read/parse ${packsPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!Array.isArray(rawPacks)) {
+    throw new PackError("packs.json must be a JSON array (array order = publishing order)");
+  }
+  const current = rawPacks as RawPack[];
+
+  // Locate the target pack.
+  const targetIndex = current.findIndex(
+    (p) => p !== null && typeof p === "object" && (p as RawPack).id === packId,
+  );
+  if (targetIndex === -1) {
+    throw new PackError(`pack "${packId}" does not exist`);
+  }
+  const target = current[targetIndex] as RawPack;
+  const currentAssets = Array.isArray(target.assets) ? [...(target.assets as unknown[])] : [];
+
+  // orderedAssetIds must be a permutation of exactly the pack's current members.
+  if (orderedAssetIds.length !== currentAssets.length) {
+    throw new PackError(
+      `reorder must list every asset in pack "${packId}" exactly once: got ${orderedAssetIds.length} ids for ${currentAssets.length} members`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const id of orderedAssetIds) {
+    if (seen.has(id)) {
+      throw new PackError(`reorder lists duplicate asset id "${id}"`);
+    }
+    if (!currentAssets.includes(id)) {
+      throw new PackError(`reorder lists asset id "${id}" not in pack "${packId}"`);
+    }
+    seen.add(id);
+  }
+  // (equal length + no duplicates + all members) implies every current member present.
+
+  // If the order is unchanged, this is a no-op: refuse loudly rather than
+  // rewrite the file to identical bytes.
+  const unchanged = currentAssets.every((id, i) => id === orderedAssetIds[i]);
+  if (unchanged) {
+    throw new PackError(`reorder is a no-op: the given order matches pack "${packId}"'s current asset order`);
+  }
+
+  // The COMPLETE candidate, with only the target pack's assets permuted.
+  const amendedPack: RawPack = { ...target, assets: [...orderedAssetIds] };
+  const candidate: unknown[] = current.map((p, i) => (i === targetIndex ? amendedPack : p));
+
+  // Validate-before-write: the whole candidate through the load-path validator
+  // (reused unchanged — order-agnostic; membership set is unchanged).
+  const validated = buildPacks(candidate, validIds, channelNames);
+
+  // Byte-preserving edit. Rewrite ONLY the target pack's `assets` line. Each
+  // pack is a multi-line object; find the "assets": line within the target
+  // pack's block and replace its array value (mirrors removePackAsset).
+  const eol = packsText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = packsText.split(eol);
+
+  const idToken = `"id": ${JSON.stringify(packId)}`;
+  const idLineIdx = lines.findIndex((l) => l.includes(idToken));
+  if (idLineIdx === -1) {
+    throw new PackError(`could not locate the line for pack "${packId}" — refusing to write`);
+  }
+  let assetsLineIdx = -1;
+  for (let i = idLineIdx; i < lines.length; i++) {
+    if (/^\s*"assets"\s*:/u.test(lines[i]!)) {
+      assetsLineIdx = i;
+      break;
+    }
+    if (i > idLineIdx && /^\s*"id"\s*:/u.test(lines[i]!)) break;
+  }
+  if (assetsLineIdx === -1) {
+    throw new PackError(`could not locate the "assets" line for pack "${packId}" — refusing to write`);
+  }
+
+  const original = lines[assetsLineIdx]!;
+  const assetsRe = /("assets"\s*:\s*)\[[^\]]*\](\s*,?\s*)$/u;
+  if (!assetsRe.test(original)) {
+    throw new PackError(
+      `the "assets" line for pack "${packId}" is not a single-line array — refusing to write`,
+    );
+  }
+  const newArray = `[${orderedAssetIds.map((a) => JSON.stringify(a)).join(", ")}]`;
+  lines[assetsLineIdx] = original.replace(assetsRe, `$1${newArray}$2`);
+
+  const newText = lines.join(eol);
+
+  // Final guard: the edited text must re-parse to EXACTLY the validated
+  // candidate. Any divergence means the line surgery was unsafe; throw with
+  // nothing written.
+  let reparsed: unknown;
+  try {
+    reparsed = JSON.parse(newText);
+  } catch (e) {
+    throw new PackError(
+      `internal: packs text after asset reorder is not valid JSON — nothing written (${e instanceof Error ? e.message : String(e)})`,
+    );
+  }
+  if (JSON.stringify(reparsed) !== JSON.stringify(candidate)) {
+    throw new PackError(
+      "internal: packs text after asset reorder does not match the validated candidate — nothing written",
+    );
+  }
+
+  writeFileSync(packsPath, newText);
+
+  const amended = validated.find((p) => p.id === packId);
+  if (amended === undefined) {
+    throw new PackError(`internal: amended pack "${packId}" missing from validated packs`);
+  }
+  return amended;
 }

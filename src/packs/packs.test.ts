@@ -3,7 +3,7 @@ import { resolve, join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { buildPacks, PackError, loadPacks, createPack, removePackAsset, renamePackDisplay, reassignPackChannel, reorderPacks } from "./packs.ts";
+import { buildPacks, PackError, loadPacks, createPack, removePackAsset, renamePackDisplay, reassignPackChannel, reorderPacks, reorderPackAssets } from "./packs.ts";
 import { loadRegistry } from "../registry/registry.ts";
 import { loadChannels } from "../wiring/channels.ts";
 
@@ -621,5 +621,95 @@ describe("reorderPacks — Pack-owned persistence (§5.3 Pack reordering; ungate
   it("does not read or require workspace state (pure definition persistence)", () => {
     const packs = reorderPacks(packsPath, VALID_IDS, CHANNEL_NAMES, ["indices", "crypto", "stocks"]);
     expect(packs.map((p) => p.id)).toEqual(["indices", "crypto", "stocks"]);
+  });
+});
+
+describe("reorderPackAssets — Pack-owned persistence (§5.2 asset reorder; pure definition persistence)", () => {
+  let dir: string;
+  let packsPath: string;
+
+  const VALID_IDS: ReadonlySet<string> = new Set(["btc", "eth", "sol", "aapl"]);
+  const CHANNEL_NAMES: ReadonlySet<string> = new Set(["crypto", "stocks"]);
+
+  const INITIAL_PACKS =
+    "[\n" +
+    '  {\n    "id": "crypto",\n    "display": "Crypto",\n    "channel": "crypto",\n    "assets": ["btc", "eth", "sol"]\n  },\n' +
+    '  {\n    "id": "stocks",\n    "display": "Stocks",\n    "channel": "stocks",\n    "assets": ["aapl"]\n  }\n' +
+    "]";
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-reorderassets-"));
+    packsPath = join(dir, "packs.json");
+    writeFileSync(packsPath, INITIAL_PACKS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reorders a pack's assets (readable back through loadPacks)", () => {
+    const amended = reorderPackAssets(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", ["eth", "sol", "btc"]);
+    expect(amended.assets).toEqual(["eth", "sol", "btc"]);
+    const loaded = loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES);
+    expect(loaded.find((p) => p.id === "crypto")?.assets).toEqual(["eth", "sol", "btc"]);
+  });
+
+  it("changes ONLY order — membership set preserved, other fields intact", () => {
+    reorderPackAssets(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", ["sol", "btc", "eth"]);
+    const parsed = JSON.parse(readFileSync(packsPath, "utf8"));
+    expect(parsed[0]).toEqual({ id: "crypto", display: "Crypto", channel: "crypto", assets: ["sol", "btc", "eth"] });
+    // membership set unchanged
+    expect(new Set(parsed[0].assets)).toEqual(new Set(["btc", "eth", "sol"]));
+  });
+
+  it("leaves OTHER packs byte-identical", () => {
+    const before = readFileSync(packsPath, "utf8");
+    reorderPackAssets(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", ["eth", "btc", "sol"]);
+    const after = readFileSync(packsPath, "utf8");
+    const stocksBlock = before.substring(before.indexOf('{\n    "id": "stocks"'));
+    expect(after).toContain(stocksBlock);
+  });
+
+  it("refuses an unknown pack; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reorderPackAssets(packsPath, VALID_IDS, CHANNEL_NAMES, "nope", ["btc"])).toThrow(/pack "nope" does not exist/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses an asset not in the pack; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reorderPackAssets(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", ["btc", "eth", "aapl"])).toThrow(/not in pack "crypto"/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a duplicate asset id; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reorderPackAssets(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", ["btc", "btc", "eth"])).toThrow(/duplicate asset id "btc"/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a wrong count (missing a member); writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reorderPackAssets(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", ["btc", "eth"])).toThrow(/every asset in pack "crypto" exactly once/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a no-op (order identical to current); writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reorderPackAssets(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", ["btc", "eth", "sol"])).toThrow(/no-op/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("reorder then reorder back is byte-identical to the original", () => {
+    const before = readFileSync(packsPath, "utf8");
+    reorderPackAssets(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", ["sol", "eth", "btc"]);
+    reorderPackAssets(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", ["btc", "eth", "sol"]);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("does not read or require workspace state (pure definition persistence)", () => {
+    // The Empty-only gate is NOT in the store: reorder succeeds here with no
+    // workspace present at all.
+    const amended = reorderPackAssets(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", ["eth", "sol", "btc"]);
+    expect(amended.assets).toEqual(["eth", "sol", "btc"]);
   });
 });
