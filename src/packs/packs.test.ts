@@ -3,7 +3,7 @@ import { resolve, join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { buildPacks, PackError, loadPacks, createPack, removePackAsset } from "./packs.ts";
+import { buildPacks, PackError, loadPacks, createPack, removePackAsset, renamePackDisplay } from "./packs.ts";
 import { loadRegistry } from "../registry/registry.ts";
 import { loadChannels } from "../wiring/channels.ts";
 
@@ -371,5 +371,82 @@ describe("removePackAsset — Pack-owned persistence (§5.2 membership removal; 
     // removal succeeds here with no workspace present at all.
     const amended = removePackAsset(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "btc");
     expect(amended.assets).toEqual(["eth", "sol"]);
+  });
+});
+describe("renamePackDisplay — Pack-owned persistence (§5.3 display rename; ungated)", () => {
+  let dir: string;
+  let packsPath: string;
+
+  const VALID_IDS: ReadonlySet<string> = new Set(["btc", "eth", "sol", "aapl"]);
+  const CHANNEL_NAMES: ReadonlySet<string> = new Set(["crypto", "stocks"]);
+
+  const INITIAL_PACKS =
+    "[\n" +
+    '  {\n    "id": "crypto",\n    "display": "Crypto",\n    "channel": "crypto",\n    "assets": ["btc", "eth", "sol"]\n  },\n' +
+    '  {\n    "id": "stocks",\n    "display": "Stocks",\n    "channel": "stocks",\n    "assets": ["aapl"]\n  }\n' +
+    "]";
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-renamepack-"));
+    packsPath = join(dir, "packs.json");
+    writeFileSync(packsPath, INITIAL_PACKS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("renames a pack's display (readable back through loadPacks)", () => {
+    const amended = renamePackDisplay(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "Crypto Majors");
+    expect(amended.display).toBe("Crypto Majors");
+    const packs = loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES);
+    expect(packs.find((p) => p.id === "crypto")?.display).toBe("Crypto Majors");
+  });
+
+  it("changes ONLY the display field of the target pack", () => {
+    renamePackDisplay(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "Renamed");
+    const parsed = JSON.parse(readFileSync(packsPath, "utf8"));
+    expect(parsed[0]).toEqual({ id: "crypto", display: "Renamed", channel: "crypto", assets: ["btc", "eth", "sol"] });
+  });
+
+  it("leaves OTHER packs byte-identical", () => {
+    const before = readFileSync(packsPath, "utf8");
+    renamePackDisplay(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "Renamed");
+    const after = readFileSync(packsPath, "utf8");
+    const stocksBlock = before.substring(before.indexOf('{\n    "id": "stocks"'));
+    expect(after).toContain(stocksBlock);
+  });
+
+  it("preserves this pack's other fields (id, channel, assets)", () => {
+    renamePackDisplay(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "Renamed");
+    const parsed = JSON.parse(readFileSync(packsPath, "utf8"));
+    expect(parsed[0].id).toBe("crypto");
+    expect(parsed[0].channel).toBe("crypto");
+    expect(parsed[0].assets).toEqual(["btc", "eth", "sol"]);
+  });
+
+  it("handles a display containing quotes (escaped correctly)", () => {
+    renamePackDisplay(packsPath, VALID_IDS, CHANNEL_NAMES, "stocks", 'Stocks "A-List"');
+    const parsed = JSON.parse(readFileSync(packsPath, "utf8"));
+    expect(parsed[1].display).toBe('Stocks "A-List"');
+    expect(parsed[1].assets).toEqual(["aapl"]);
+  });
+
+  it("refuses an unknown pack; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => renamePackDisplay(packsPath, VALID_IDS, CHANNEL_NAMES, "nope", "X")).toThrow(/pack "nope" does not exist/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a blank display (buildPacks non-empty rule, unchanged); writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => renamePackDisplay(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "   ")).toThrow(/display must be a non-empty string/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("rename then rename back is byte-identical to the original", () => {
+    const before = readFileSync(packsPath, "utf8");
+    renamePackDisplay(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "Temporarily Renamed");
+    renamePackDisplay(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "Crypto");
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
   });
 });

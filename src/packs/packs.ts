@@ -31,9 +31,10 @@ import { readFileSync, writeFileSync } from "node:fs";
  *
  * WRITE SIDE: createPack (Constitution §5.3) persists a new Pack with its
  * initial membership; removePackAsset (§5.2) removes one asset from a Pack's
- * membership. Both validate-before-write through buildPacks (reused unchanged),
- * byte-preservingly, and are PURE definition persistence — the §5.2 "Empty-only"
- * gate is a WORKSPACE fact enforced by the delivery layer, never by this store.
+ * membership; renamePackDisplay (§5.3) renames a Pack's display. All validate-
+ * before-write through buildPacks (reused unchanged), byte-preservingly, and are
+ * PURE definition persistence — the §5.2 "Empty-only" gate is a WORKSPACE fact
+ * enforced by the delivery layer, never by this store; §5.3 edits are ungated.
  * The other §5.2/§5.3/§5.4 Pack edits are separate concerns, not implemented here.
  */
 
@@ -425,6 +426,140 @@ export function removePackAsset(
   if (JSON.stringify(reparsed) !== JSON.stringify(candidate)) {
     throw new PackError(
       "internal: packs text after removal does not match the validated candidate — nothing written",
+    );
+  }
+
+  writeFileSync(packsPath, newText);
+
+  const amended = validated.find((p) => p.id === packId);
+  if (amended === undefined) {
+    throw new PackError(`internal: amended pack "${packId}" missing from validated packs`);
+  }
+  return amended;
+}
+/**
+ * Rename a Pack's display name through Pack-owned persistence (Constitution
+ * §5.3: "Pack ... display rename ... Ungated, in any state, unconfirmed. None
+ * of these touches any instance's membership or completeness."). This store
+ * owns the packs file; the rename is validate-before-write over the WHOLE
+ * candidate.
+ *
+ * UNGATED, PURE DEFINITION PERSISTENCE. §5.3 edits touch no instance state, so
+ * this reads NO workspace state and needs no gate — unlike §5.2 membership
+ * editing. It performs only the definition edit and its definition-level
+ * validation.
+ *
+ * VALIDATE-BEFORE-WRITE: the complete candidate pack array (the target pack with
+ * its display replaced) is validated with buildPacks — the SAME validator the
+ * load path trusts, reused UNCHANGED — before a byte is written. A blank display
+ * is refused by buildPacks' existing non-empty rule; an unknown pack is refused
+ * first. No validator change is part of this boundary.
+ *
+ * BYTE-PRESERVING FIELD EDIT: packs.json is operator-owned data recovered via
+ * version control (Constitution §2.2.1). The writer never re-serializes the
+ * file: it rewrites ONLY the target pack's `display` line's value in place (the
+ * pack is a multi-line object; its `display` line's string value is replaced),
+ * leaving every other byte — other packs, this pack's id/channel/assets, and
+ * the file's trailing convention — verbatim. As a final guard the new text is
+ * re-parsed and compared to the validated candidate; on ANY divergence it
+ * throws with nothing written.
+ *
+ * @param packsPath     location of the packs file (array of pack objects)
+ * @param validIds      set of asset ids known to the registry
+ * @param channelNames  set of channel names known to the channels config
+ * @param packId        the pack to rename
+ * @param newDisplay    the new display name
+ * @returns the amended Pack as validated within the candidate array
+ */
+export function renamePackDisplay(
+  packsPath: string,
+  validIds: ReadonlySet<string>,
+  channelNames: ReadonlySet<string>,
+  packId: string,
+  newDisplay: string,
+): Pack {
+  // Read the current definition of record: raw TEXT (for the byte-preserving
+  // edit) and parsed array (for validation).
+  let packsText: string;
+  let rawPacks: unknown;
+  try {
+    packsText = readFileSync(packsPath, "utf8");
+    rawPacks = JSON.parse(packsText);
+  } catch (e) {
+    throw new PackError(`could not read/parse ${packsPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!Array.isArray(rawPacks)) {
+    throw new PackError("packs.json must be a JSON array (array order = publishing order)");
+  }
+  const current = rawPacks as RawPack[];
+
+  // Locate the target pack.
+  const targetIndex = current.findIndex(
+    (p) => p !== null && typeof p === "object" && (p as RawPack).id === packId,
+  );
+  if (targetIndex === -1) {
+    throw new PackError(`pack "${packId}" does not exist`);
+  }
+  const target = current[targetIndex] as RawPack;
+
+  // The COMPLETE candidate, with only the target pack's display replaced.
+  const amendedPack: RawPack = { ...target, display: newDisplay };
+  const candidate: unknown[] = current.map((p, i) => (i === targetIndex ? amendedPack : p));
+
+  // Validate-before-write: the whole candidate through the load-path validator
+  // (reused unchanged — enforces the non-empty-display rule).
+  const validated = buildPacks(candidate, validIds, channelNames);
+
+  // Byte-preserving edit. Rewrite ONLY the target pack's `display` line. Each
+  // pack is a multi-line object; find its "id": line, then the "display": line
+  // within that pack's block, and replace only that line's string value.
+  const eol = packsText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = packsText.split(eol);
+
+  const idToken = `"id": ${JSON.stringify(packId)}`;
+  const idLineIdx = lines.findIndex((l) => l.includes(idToken));
+  if (idLineIdx === -1) {
+    throw new PackError(`could not locate the line for pack "${packId}" — refusing to write`);
+  }
+  let displayLineIdx = -1;
+  for (let i = idLineIdx; i < lines.length; i++) {
+    if (i > idLineIdx && /^\s*"id"\s*:/u.test(lines[i]!)) break; // next pack; stop
+    if (/^\s*"display"\s*:/u.test(lines[i]!)) {
+      displayLineIdx = i;
+      break;
+    }
+  }
+  if (displayLineIdx === -1) {
+    throw new PackError(`could not locate the "display" line for pack "${packId}" — refusing to write`);
+  }
+
+  const original = lines[displayLineIdx]!;
+  // Replace only the quoted string VALUE after "display":, preserving the
+  // trailing comma/whitespace. Mirrors amendAssetDisplay's display-value regex.
+  const displayRe = /("display"\s*:\s*)"(?:[^"\\]|\\.)*"(\s*,?\s*)$/u;
+  if (!displayRe.test(original)) {
+    throw new PackError(
+      `the "display" line for pack "${packId}" is not a single-line string — refusing to write`,
+    );
+  }
+  lines[displayLineIdx] = original.replace(displayRe, `$1${JSON.stringify(newDisplay)}$2`);
+
+  const newText = lines.join(eol);
+
+  // Final guard: the edited text must re-parse to EXACTLY the validated
+  // candidate. Any divergence means the line surgery was unsafe; throw with
+  // nothing written.
+  let reparsed: unknown;
+  try {
+    reparsed = JSON.parse(newText);
+  } catch (e) {
+    throw new PackError(
+      `internal: packs text after rename is not valid JSON — nothing written (${e instanceof Error ? e.message : String(e)})`,
+    );
+  }
+  if (JSON.stringify(reparsed) !== JSON.stringify(candidate)) {
+    throw new PackError(
+      "internal: packs text after rename does not match the validated candidate — nothing written",
     );
   }
 
