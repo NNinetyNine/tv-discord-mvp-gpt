@@ -3,7 +3,7 @@ import { resolve, join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { buildPacks, PackError, loadPacks, createPack, removePackAsset, renamePackDisplay } from "./packs.ts";
+import { buildPacks, PackError, loadPacks, createPack, removePackAsset, renamePackDisplay, reassignPackChannel, reorderPacks } from "./packs.ts";
 import { loadRegistry } from "../registry/registry.ts";
 import { loadChannels } from "../wiring/channels.ts";
 
@@ -448,5 +448,178 @@ describe("renamePackDisplay — Pack-owned persistence (§5.3 display rename; un
     renamePackDisplay(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "Temporarily Renamed");
     renamePackDisplay(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "Crypto");
     expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+});
+
+describe("reassignPackChannel — Pack-owned persistence (§5.3 channel reassignment; ungated)", () => {
+  let dir: string;
+  let packsPath: string;
+
+  const VALID_IDS: ReadonlySet<string> = new Set(["btc", "eth", "sol", "aapl"]);
+  const CHANNEL_NAMES: ReadonlySet<string> = new Set(["crypto", "stocks", "indices"]);
+
+  const INITIAL_PACKS =
+    "[\n" +
+    '  {\n    "id": "crypto",\n    "display": "Crypto",\n    "channel": "crypto",\n    "assets": ["btc", "eth", "sol"]\n  },\n' +
+    '  {\n    "id": "stocks",\n    "display": "Stocks",\n    "channel": "stocks",\n    "assets": ["aapl"]\n  }\n' +
+    "]";
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-reassignchannel-"));
+    packsPath = join(dir, "packs.json");
+    writeFileSync(packsPath, INITIAL_PACKS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reassigns a pack's channel (readable back through loadPacks)", () => {
+    const amended = reassignPackChannel(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "indices");
+    expect(amended.channel).toBe("indices");
+    const packs = loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES);
+    expect(packs.find((p) => p.id === "crypto")?.channel).toBe("indices");
+  });
+
+  it("changes ONLY the channel field of the target pack", () => {
+    reassignPackChannel(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "indices");
+    const parsed = JSON.parse(readFileSync(packsPath, "utf8"));
+    expect(parsed[0]).toEqual({ id: "crypto", display: "Crypto", channel: "indices", assets: ["btc", "eth", "sol"] });
+  });
+
+  it("leaves OTHER packs byte-identical", () => {
+    const before = readFileSync(packsPath, "utf8");
+    reassignPackChannel(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "indices");
+    const after = readFileSync(packsPath, "utf8");
+    const stocksBlock = before.substring(before.indexOf('{\n    "id": "stocks"'));
+    expect(after).toContain(stocksBlock);
+  });
+
+  it("preserves this pack's other fields (id, display, assets)", () => {
+    reassignPackChannel(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "indices");
+    const parsed = JSON.parse(readFileSync(packsPath, "utf8"));
+    expect(parsed[0].id).toBe("crypto");
+    expect(parsed[0].display).toBe("Crypto");
+    expect(parsed[0].assets).toEqual(["btc", "eth", "sol"]);
+  });
+
+  it("refuses an unknown pack; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reassignPackChannel(packsPath, VALID_IDS, CHANNEL_NAMES, "nope", "crypto")).toThrow(/pack "nope" does not exist/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses an unknown channel name (buildPacks config check, unchanged); writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reassignPackChannel(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "nonexistent")).toThrow(/channel "nonexistent" not found/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a blank channel (buildPacks non-empty rule, unchanged); writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reassignPackChannel(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "   ")).toThrow(/channel/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("reassign then reassign back is byte-identical to the original", () => {
+    const before = readFileSync(packsPath, "utf8");
+    reassignPackChannel(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "indices");
+    reassignPackChannel(packsPath, VALID_IDS, CHANNEL_NAMES, "crypto", "crypto");
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("allows reassigning to the channel a DIFFERENT pack already uses (channels are not unique)", () => {
+    // stocks -> crypto's channel; both packs on 'crypto' channel is permitted
+    const amended = reassignPackChannel(packsPath, VALID_IDS, CHANNEL_NAMES, "stocks", "crypto");
+    expect(amended.channel).toBe("crypto");
+    const packs = loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES);
+    expect(packs.find((p) => p.id === "stocks")?.channel).toBe("crypto");
+    expect(packs.find((p) => p.id === "crypto")?.channel).toBe("crypto");
+  });
+});
+
+describe("reorderPacks — Pack-owned persistence (§5.3 Pack reordering; ungated, block permutation)", () => {
+  let dir: string;
+  let packsPath: string;
+
+  const VALID_IDS: ReadonlySet<string> = new Set(["btc", "eth", "sol", "aapl", "spx"]);
+  const CHANNEL_NAMES: ReadonlySet<string> = new Set(["crypto", "stocks", "indices"]);
+
+  const INITIAL_PACKS =
+    "[\n" +
+    '  {\n    "id": "crypto",\n    "display": "Crypto",\n    "channel": "crypto",\n    "assets": ["btc", "eth", "sol"]\n  },\n' +
+    '  {\n    "id": "stocks",\n    "display": "Stocks",\n    "channel": "stocks",\n    "assets": ["aapl"]\n  },\n' +
+    '  {\n    "id": "indices",\n    "display": "Indices",\n    "channel": "indices",\n    "assets": ["spx"]\n  }\n' +
+    "]";
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "visionx-reorderpacks-"));
+    packsPath = join(dir, "packs.json");
+    writeFileSync(packsPath, INITIAL_PACKS);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reorders the packs array (readable back through loadPacks)", () => {
+    const packs = reorderPacks(packsPath, VALID_IDS, CHANNEL_NAMES, ["stocks", "indices", "crypto"]);
+    expect(packs.map((p) => p.id)).toEqual(["stocks", "indices", "crypto"]);
+    const loaded = loadPacks(packsPath, VALID_IDS, CHANNEL_NAMES);
+    expect(loaded.map((p) => p.id)).toEqual(["stocks", "indices", "crypto"]);
+  });
+
+  it("changes ONLY order — every pack's fields, formatting, and asset order preserved", () => {
+    reorderPacks(packsPath, VALID_IDS, CHANNEL_NAMES, ["stocks", "indices", "crypto"]);
+    const parsed = JSON.parse(readFileSync(packsPath, "utf8"));
+    expect(parsed).toEqual([
+      { id: "stocks", display: "Stocks", channel: "stocks", assets: ["aapl"] },
+      { id: "indices", display: "Indices", channel: "indices", assets: ["spx"] },
+      { id: "crypto", display: "Crypto", channel: "crypto", assets: ["btc", "eth", "sol"] },
+    ]);
+  });
+
+  it("carries each block's exact bytes (crypto's multi-asset line survives verbatim)", () => {
+    const before = readFileSync(packsPath, "utf8");
+    const cryptoBlock = before.substring(before.indexOf('  {\n    "id": "crypto"'), before.indexOf('  },'));
+    reorderPacks(packsPath, VALID_IDS, CHANNEL_NAMES, ["stocks", "crypto", "indices"]);
+    const after = readFileSync(packsPath, "utf8");
+    // crypto's assets line, verbatim, still present
+    expect(after).toContain('"assets": ["btc", "eth", "sol"]');
+    expect(cryptoBlock.length).toBeGreaterThan(0);
+  });
+
+  it("refuses an unknown pack id; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reorderPacks(packsPath, VALID_IDS, CHANNEL_NAMES, ["stocks", "nope", "crypto"])).toThrow(/unknown pack id "nope"/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a duplicate pack id; writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reorderPacks(packsPath, VALID_IDS, CHANNEL_NAMES, ["crypto", "crypto", "stocks"])).toThrow(/duplicate pack id "crypto"/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a wrong count (missing a pack); writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reorderPacks(packsPath, VALID_IDS, CHANNEL_NAMES, ["crypto", "stocks"])).toThrow(/every pack exactly once/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("refuses a no-op (order identical to current); writes nothing", () => {
+    const before = readFileSync(packsPath, "utf8");
+    expect(() => reorderPacks(packsPath, VALID_IDS, CHANNEL_NAMES, ["crypto", "stocks", "indices"])).toThrow(/no-op/);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("reorder then reorder back is byte-identical to the original", () => {
+    const before = readFileSync(packsPath, "utf8");
+    reorderPacks(packsPath, VALID_IDS, CHANNEL_NAMES, ["indices", "stocks", "crypto"]);
+    reorderPacks(packsPath, VALID_IDS, CHANNEL_NAMES, ["crypto", "stocks", "indices"]);
+    expect(readFileSync(packsPath, "utf8")).toBe(before);
+  });
+
+  it("does not read or require workspace state (pure definition persistence)", () => {
+    const packs = reorderPacks(packsPath, VALID_IDS, CHANNEL_NAMES, ["indices", "crypto", "stocks"]);
+    expect(packs.map((p) => p.id)).toEqual(["indices", "crypto", "stocks"]);
   });
 });

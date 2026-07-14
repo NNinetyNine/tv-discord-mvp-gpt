@@ -31,11 +31,13 @@ import { readFileSync, writeFileSync } from "node:fs";
  *
  * WRITE SIDE: createPack (Constitution §5.3) persists a new Pack with its
  * initial membership; removePackAsset (§5.2) removes one asset from a Pack's
- * membership; renamePackDisplay (§5.3) renames a Pack's display. All validate-
- * before-write through buildPacks (reused unchanged), byte-preservingly, and are
- * PURE definition persistence — the §5.2 "Empty-only" gate is a WORKSPACE fact
- * enforced by the delivery layer, never by this store; §5.3 edits are ungated.
- * The other §5.2/§5.3/§5.4 Pack edits are separate concerns, not implemented here.
+ * membership; renamePackDisplay (§5.3) renames a Pack's display;
+ * reassignPackChannel (§5.3) changes a Pack's channel; reorderPacks (§5.3)
+ * permutes the Pack array order. All validate-before-write through buildPacks
+ * (reused unchanged), byte-preservingly, and are PURE definition persistence —
+ * the §5.2 "Empty-only" gate is a WORKSPACE fact enforced by the delivery layer,
+ * never by this store; §5.3 edits are ungated. The remaining §5.2/§5.4 Pack
+ * edits are separate concerns, not implemented here.
  */
 
 export interface Pack {
@@ -570,4 +572,329 @@ export function renamePackDisplay(
     throw new PackError(`internal: amended pack "${packId}" missing from validated packs`);
   }
   return amended;
+}
+
+/**
+ * Reassign a Pack's channel through Pack-owned persistence (Constitution §5.3:
+ * "Pack ... channel assignment. Ungated, in any state, unconfirmed. None of
+ * these touches any instance's membership or completeness. A Building Pack
+ * whose channel changes publishes to the new channel — which is precisely what
+ * the operator meant."). This store owns the packs file; the reassignment is
+ * validate-before-write over the WHOLE candidate.
+ *
+ * UNGATED, PURE DEFINITION PERSISTENCE. §5.3 edits touch no instance state, so
+ * this reads NO workspace state and needs no gate — and, per the clause above,
+ * it is deliberately ungated EVEN when the Pack has in-flight work: a channel
+ * change simply redirects the next publish. It performs only the definition
+ * edit and its definition-level validation.
+ *
+ * VALIDATE-BEFORE-WRITE: the complete candidate pack array (the target pack with
+ * its channel replaced) is validated with buildPacks — the SAME validator the
+ * load path trusts, reused UNCHANGED — before a byte is written. buildPacks
+ * already validates channel: non-empty AND present in the channels config; a
+ * blank or unknown channel name is therefore refused with nothing written. An
+ * unknown pack is refused first. No validator change is part of this boundary.
+ *
+ * BYTE-PRESERVING FIELD EDIT: packs.json is operator-owned data recovered via
+ * version control (Constitution §2.2.1). The writer never re-serializes the
+ * file: it rewrites ONLY the target pack's `channel` line's value in place (the
+ * pack is a multi-line object; its `channel` line's string value is replaced),
+ * leaving every other byte — other packs, this pack's id/display/assets, and
+ * the file's trailing convention — verbatim. As a final guard the new text is
+ * re-parsed and compared to the validated candidate; on ANY divergence it
+ * throws with nothing written.
+ *
+ * @param packsPath     location of the packs file (array of pack objects)
+ * @param validIds      set of asset ids known to the registry
+ * @param channelNames  set of channel names known to the channels config
+ * @param packId        the pack to reassign
+ * @param newChannel    the new channel NAME (must exist in the channels config)
+ * @returns the amended Pack as validated within the candidate array
+ */
+export function reassignPackChannel(
+  packsPath: string,
+  validIds: ReadonlySet<string>,
+  channelNames: ReadonlySet<string>,
+  packId: string,
+  newChannel: string,
+): Pack {
+  // Read the current definition of record: raw TEXT (for the byte-preserving
+  // edit) and parsed array (for validation).
+  let packsText: string;
+  let rawPacks: unknown;
+  try {
+    packsText = readFileSync(packsPath, "utf8");
+    rawPacks = JSON.parse(packsText);
+  } catch (e) {
+    throw new PackError(`could not read/parse ${packsPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!Array.isArray(rawPacks)) {
+    throw new PackError("packs.json must be a JSON array (array order = publishing order)");
+  }
+  const current = rawPacks as RawPack[];
+
+  // Locate the target pack.
+  const targetIndex = current.findIndex(
+    (p) => p !== null && typeof p === "object" && (p as RawPack).id === packId,
+  );
+  if (targetIndex === -1) {
+    throw new PackError(`pack "${packId}" does not exist`);
+  }
+  const target = current[targetIndex] as RawPack;
+
+  // The COMPLETE candidate, with only the target pack's channel replaced.
+  const amendedPack: RawPack = { ...target, channel: newChannel };
+  const candidate: unknown[] = current.map((p, i) => (i === targetIndex ? amendedPack : p));
+
+  // Validate-before-write: the whole candidate through the load-path validator
+  // (reused unchanged — enforces channel non-empty AND present in config).
+  const validated = buildPacks(candidate, validIds, channelNames);
+
+  // Byte-preserving edit. Rewrite ONLY the target pack's `channel` line. Each
+  // pack is a multi-line object; find its "id": line, then the "channel": line
+  // within that pack's block, and replace only that line's string value.
+  const eol = packsText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = packsText.split(eol);
+
+  const idToken = `"id": ${JSON.stringify(packId)}`;
+  const idLineIdx = lines.findIndex((l) => l.includes(idToken));
+  if (idLineIdx === -1) {
+    throw new PackError(`could not locate the line for pack "${packId}" — refusing to write`);
+  }
+  let channelLineIdx = -1;
+  for (let i = idLineIdx; i < lines.length; i++) {
+    if (i > idLineIdx && /^\s*"id"\s*:/u.test(lines[i]!)) break; // next pack; stop
+    if (/^\s*"channel"\s*:/u.test(lines[i]!)) {
+      channelLineIdx = i;
+      break;
+    }
+  }
+  if (channelLineIdx === -1) {
+    throw new PackError(`could not locate the "channel" line for pack "${packId}" — refusing to write`);
+  }
+
+  const original = lines[channelLineIdx]!;
+  // Replace only the quoted string VALUE after "channel":, preserving the
+  // trailing comma/whitespace. Mirrors the display-value regex.
+  const channelRe = /("channel"\s*:\s*)"(?:[^"\\]|\\.)*"(\s*,?\s*)$/u;
+  if (!channelRe.test(original)) {
+    throw new PackError(
+      `the "channel" line for pack "${packId}" is not a single-line string — refusing to write`,
+    );
+  }
+  lines[channelLineIdx] = original.replace(channelRe, `$1${JSON.stringify(newChannel)}$2`);
+
+  const newText = lines.join(eol);
+
+  // Final guard: the edited text must re-parse to EXACTLY the validated
+  // candidate. Any divergence means the line surgery was unsafe; throw with
+  // nothing written.
+  let reparsed: unknown;
+  try {
+    reparsed = JSON.parse(newText);
+  } catch (e) {
+    throw new PackError(
+      `internal: packs text after channel reassignment is not valid JSON — nothing written (${e instanceof Error ? e.message : String(e)})`,
+    );
+  }
+  if (JSON.stringify(reparsed) !== JSON.stringify(candidate)) {
+    throw new PackError(
+      "internal: packs text after channel reassignment does not match the validated candidate — nothing written",
+    );
+  }
+
+  writeFileSync(packsPath, newText);
+
+  const amended = validated.find((p) => p.id === packId);
+  if (amended === undefined) {
+    throw new PackError(`internal: amended pack "${packId}" missing from validated packs`);
+  }
+  return amended;
+}
+
+/**
+ * Reorder the Packs array through Pack-owned persistence (Constitution §5.3:
+ * "Pack ... Pack reordering ... Ungated, in any state, unconfirmed. None of
+ * these touches any instance's membership or completeness."). This store owns
+ * the packs file; the reorder is validate-before-write over the WHOLE candidate.
+ *
+ * UNGATED, PURE DEFINITION PERSISTENCE. §5.3 edits touch no instance state, so
+ * this reads NO workspace state and needs no gate. The array order IS the
+ * publishing/workflow order; reordering changes ONLY that sequence — no pack's
+ * id, display, channel, assets, or membership changes.
+ *
+ * WHOLE-ORDERING INPUT: `orderedIds` must be a permutation of exactly the packs
+ * currently defined — every existing pack id, each once, no unknowns, none
+ * missing. This is a total reordering (not a move-one primitive); the delivery
+ * layer composes the desired order and this store applies it atomically.
+ *
+ * VALIDATE-BEFORE-WRITE: the complete candidate pack array (the same pack
+ * objects, permuted) is validated with buildPacks — the SAME validator the load
+ * path trusts, reused UNCHANGED — before a byte is written. buildPacks is
+ * order-agnostic: any permutation of already-valid packs is valid, so no
+ * validator change is part of this boundary.
+ *
+ * BYTE-PRESERVING BLOCK PERMUTATION: packs.json is operator-owned data recovered
+ * via version control (Constitution §2.2.1). Unlike the single-line field edits
+ * (display/channel), reordering permutes whole multi-line pack BLOCKS. The
+ * writer never re-serializes a pack: it splits the file into the array framing
+ * plus each pack's verbatim block text, reassembles the blocks in the new order
+ * (re-inserting the inter-block separators), and leaves every block's bytes —
+ * fields, formatting, asset order — untouched, preserving the file's trailing
+ * convention. As a final guard the new text is re-parsed and compared to the
+ * validated candidate; on ANY divergence it throws with nothing written.
+ *
+ * @param packsPath     location of the packs file (array of pack objects)
+ * @param validIds      set of asset ids known to the registry
+ * @param channelNames  set of channel names known to the channels config
+ * @param orderedIds    the desired full ordering — a permutation of all pack ids
+ * @returns the reordered Packs as validated
+ */
+export function reorderPacks(
+  packsPath: string,
+  validIds: ReadonlySet<string>,
+  channelNames: ReadonlySet<string>,
+  orderedIds: readonly string[],
+): readonly Pack[] {
+  // Read the current definition of record: raw TEXT (for the byte-preserving
+  // permutation) and parsed array (for validation).
+  let packsText: string;
+  let rawPacks: unknown;
+  try {
+    packsText = readFileSync(packsPath, "utf8");
+    rawPacks = JSON.parse(packsText);
+  } catch (e) {
+    throw new PackError(`could not read/parse ${packsPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!Array.isArray(rawPacks)) {
+    throw new PackError("packs.json must be a JSON array (array order = publishing order)");
+  }
+  const current = rawPacks as RawPack[];
+
+  const currentIds = current.map((p) =>
+    p !== null && typeof p === "object" ? (p as RawPack).id : undefined,
+  );
+
+  // orderedIds must be a permutation of exactly the current pack ids.
+  if (orderedIds.length !== current.length) {
+    throw new PackError(
+      `reorder must list every pack exactly once: got ${orderedIds.length} ids for ${current.length} packs`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const id of orderedIds) {
+    if (seen.has(id)) {
+      throw new PackError(`reorder lists duplicate pack id "${id}"`);
+    }
+    if (!currentIds.includes(id)) {
+      throw new PackError(`reorder lists unknown pack id "${id}"`);
+    }
+    seen.add(id);
+  }
+  // (equal length + no duplicates + all known) implies every current id present.
+
+  // Build the permuted candidate (the SAME objects, reordered).
+  const byId = new Map<string, RawPack>();
+  current.forEach((p) => {
+    if (p !== null && typeof p === "object") {
+      const pid = (p as RawPack).id;
+      if (typeof pid === "string") byId.set(pid, p as RawPack);
+    }
+  });
+  const candidate: unknown[] = orderedIds.map((id) => byId.get(id)!);
+
+  // If the order is unchanged, this is a no-op: refuse loudly rather than
+  // rewrite the file to identical bytes.
+  const unchanged = currentIds.every((id, i) => id === orderedIds[i]);
+  if (unchanged) {
+    throw new PackError("reorder is a no-op: the given order matches the current order");
+  }
+
+  // Validate-before-write: the whole candidate through the load-path validator
+  // (reused unchanged — order-agnostic).
+  const validated = buildPacks(candidate, validIds, channelNames);
+
+  // Byte-preserving block permutation. Split the file into: array-open framing,
+  // each pack's verbatim block text (in current order), and array-close framing.
+  const eol = packsText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = packsText.split(eol);
+
+  // A pack block runs from a line that is exactly "  {" to the next line that is
+  // "  }" or "  }," (top-level, two-space indent). Collect those block spans.
+  const blocks: string[][] = [];
+  let openIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (l === "  {") {
+      openIdx = i;
+    } else if ((l === "  }" || l === "  },") && openIdx !== -1) {
+      // Store the block WITHOUT any trailing comma on the closing line.
+      const block = lines.slice(openIdx, i);
+      block.push("  }"); // normalize closing line; comma is re-inserted on join
+      blocks.push(block);
+      openIdx = -1;
+    }
+  }
+  if (blocks.length !== current.length) {
+    throw new PackError(
+      `could not delimit all pack blocks (found ${blocks.length}, expected ${current.length}) — refusing to write`,
+    );
+  }
+
+  // Map each block to its pack id (the block's "id": line), to permute by id.
+  const blockById = new Map<string, string[]>();
+  for (const block of blocks) {
+    const idLine = block.find((l) => /^\s*"id"\s*:/u.test(l));
+    if (idLine === undefined) {
+      throw new PackError('a pack block has no "id" line — refusing to write');
+    }
+    const m = idLine.match(/"id"\s*:\s*"((?:[^"\\]|\\.)*)"/u);
+    if (m === null) {
+      throw new PackError('could not read a pack block id — refusing to write');
+    }
+    blockById.set(m[1]!, block);
+  }
+  for (const id of orderedIds) {
+    if (!blockById.has(id)) {
+      throw new PackError(`internal: no block for pack "${id}" — refusing to write`);
+    }
+  }
+
+  // Reassemble: "[", then each block in the new order joined by "," between
+  // blocks, then "]", restoring the original trailing convention.
+  const hadTrailingNewline = /\n$/.test(packsText);
+  const orderedBlocks = orderedIds.map((id) => blockById.get(id)!);
+  const bodyLines: string[] = [];
+  orderedBlocks.forEach((block, bi) => {
+    block.forEach((bl, li) => {
+      // The closing "  }" of every block except the last gets a trailing comma.
+      if (li === block.length - 1 && bi < orderedBlocks.length - 1) {
+        bodyLines.push("  },");
+      } else {
+        bodyLines.push(bl);
+      }
+    });
+  });
+  const newText = `[${eol}${bodyLines.join(eol)}${eol}]${hadTrailingNewline ? eol : ""}`;
+
+  // Final guard: the reassembled text must re-parse to EXACTLY the validated
+  // candidate. Any divergence means the permutation was unsafe; throw with
+  // nothing written.
+  let reparsed: unknown;
+  try {
+    reparsed = JSON.parse(newText);
+  } catch (e) {
+    throw new PackError(
+      `internal: packs text after reorder is not valid JSON — nothing written (${e instanceof Error ? e.message : String(e)})`,
+    );
+  }
+  if (JSON.stringify(reparsed) !== JSON.stringify(candidate)) {
+    throw new PackError(
+      "internal: packs text after reorder does not match the validated candidate — nothing written",
+    );
+  }
+
+  writeFileSync(packsPath, newText);
+
+  return validated;
 }
