@@ -12,8 +12,10 @@ import {
   DEFAULT_VALIDATION_POLICY,
   type ValidationPolicy,
 } from "../validation/validate-image.ts";
-import { captureFromFile } from "../application/capture-from-file.ts";
-import type { CaptureAttemptResult } from "../wiring/capture-once.ts";
+import {
+  captureFromFile,
+  type CaptureFromFileReceipt,
+} from "../application/capture-from-file.ts";
 import {
   publishPack,
   resumeInterruptedRelease,
@@ -89,7 +91,7 @@ export interface App {
   readonly staging: StagingStore;
   readonly releases: ReleaseStore;
   /** Application use case: capture one operator-exported file. */
-  captureFromFile(filePath: string): Promise<CaptureAttemptResult>;
+  captureFromFile(filePath: string): Promise<CaptureFromFileReceipt>;
   /** Orchestration: publish the given pack as an archived Release. */
   publishPack(packId: string, options: PublishOptions): Promise<PublishPackResult>;
   /** Orchestration: resume the given pack's interrupted release. */
@@ -133,8 +135,8 @@ export function buildApp(opts: BuildAppOptions): App {
     workspace,
     staging,
     releases,
-    captureFromFile(filePath: string): Promise<CaptureAttemptResult> {
-      return captureFromFile({ filePath, resolver, workspace, staging, validate });
+    captureFromFile(filePath: string): Promise<CaptureFromFileReceipt> {
+      return captureFromFile({ filePath, resolver, registry, workspace, staging, validate });
     },
     publishPack(packId: string, options: PublishOptions): Promise<PublishPackResult> {
       return publishPack(

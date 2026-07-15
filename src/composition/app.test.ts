@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
@@ -123,11 +123,65 @@ describe("buildApp — assembles against real config", () => {
 
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.asset.id).toBe(asset.id);
+      expect(r.assetId).toBe(asset.id);
+      expect(r.originalBasename).toBe(
+        `${asset.tradingView}_2026-06-25_01-18-55.png`,
+      );
+      expect(r.assetDisplay).toBe(asset.display);
       expect(r.revisions).toBe(1);
+      expect(r.placement.kind).toBe("pack");
+      if (r.placement.kind === "pack") {
+        expect(r.placement.packId).toBe(app.workspace.packs()[0]!.id);
+        expect(r.placement.totalCount).toBe(app.workspace.packs()[0]!.assets.length);
+      }
     }
     // Shared app state reflects the capture (staging custody is asset-keyed).
     expect(app.workspace.captureOf(asset.id)).not.toBeNull();
     expect(app.staging.has(asset.id)).toBe(true);
+  });
+
+  it("exposes the canonical receipt and preserves it across App reconstruction", async () => {
+    const firstApp = makeApp();
+    const asset = firstPackAssetFromCatalog(firstApp);
+    const firstPath = await makeExportPng(
+      `${asset.tradingView}_2026-06-25_01-18-55.png`,
+    );
+
+    const first = await firstApp.captureFromFile(firstPath);
+    expect(first.ok).toBe(true);
+    if (first.ok) {
+      expect(first.assetId).toBe(asset.id);
+      expect(first.revisions).toBe(1);
+      expect(first.placement.kind).toBe("pack");
+    }
+
+    const reconstructedApp = makeApp();
+    expect(reconstructedApp.workspace.captureOf(asset.id)?.revisions).toBe(1);
+
+    const secondPath = await makeExportPng(
+      `${asset.tradingView}_2026-06-25_02-18-55.png`,
+    );
+    const second = await reconstructedApp.captureFromFile(secondPath);
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(second.assetId).toBe(asset.id);
+      expect(second.revisions).toBe(2);
+    }
+  });
+
+  it("importing through the App creates no Release or archive effects", async () => {
+    const app = makeApp();
+    const asset = firstPackAssetFromCatalog(app);
+    const exportPath = await makeExportPng(
+      `${asset.tradingView}_2026-06-25_01-18-55.png`,
+    );
+
+    const receipt = await app.captureFromFile(exportPath);
+    expect(receipt.ok).toBe(true);
+
+    for (const pack of app.workspace.packs()) {
+      expect(app.releases.listReleases(pack.id)).toEqual([]);
+    }
+    expect(readdirSync(archiveDir)).toEqual([]);
   });
 });
