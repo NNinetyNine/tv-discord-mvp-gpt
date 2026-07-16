@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs";
-import sharp from "sharp";
 import type { ValidationResult, ValidationChecks } from "../types.ts";
+import { readDecodedImageFacts } from "./inspect-image.ts";
 
 /**
  * Canonical image validation — pure and deterministic.
@@ -94,12 +94,10 @@ export async function validateImage(
   let height: number | undefined;
   let maxStdev: number;
   try {
-    const img = sharp(imagePath);
-    const meta = await img.metadata();
-    const stats = await img.stats();
-    width = meta.width;
-    height = meta.height;
-    maxStdev = Math.max(...stats.channels.map((c) => c.stdev));
+    const facts = await readDecodedImageFacts(imagePath);
+    width = facts.width ?? undefined;
+    height = facts.height ?? undefined;
+    maxStdev = facts.maxChannelStddev;
   } catch (e) {
     checks.readable = false;
     return fail(checks, `image not readable: ${e instanceof Error ? e.message : String(e)}`);
