@@ -22,6 +22,16 @@ export interface DecodedImageFacts {
 }
 
 /** One deterministic, path-neutral observation of an explicitly supplied file. */
+
+/** Raw interleaved pixels obtained by decoding an image without writing output. */
+export interface DecodedImagePixels {
+  readonly format: string | null;
+  readonly width: number;
+  readonly height: number;
+  readonly channelCount: number;
+  readonly data: Buffer;
+}
+
 export interface ImageObservation {
   readonly originalBasename: string;
   readonly sha256: string;
@@ -84,6 +94,29 @@ export async function readDecodedImageFacts(
     hasAlpha: metadata.hasAlpha ?? null,
     maxChannelStddev: Math.max(...stats.channels.map((channel) => channel.stdev)),
   };
+}
+
+
+/**
+ * Decode an image into raw interleaved pixels for read-only technical analysis.
+ *
+ * This function applies no acceptance policy and creates no derivative. The
+ * caller owns interpretation of the returned pixels.
+ */
+export async function readDecodedImagePixels(
+  input: string | Buffer,
+): Promise<DecodedImagePixels> {
+  const image = sharp(input);
+  const metadata = await image.metadata();
+  const { data, info } = await image.raw().toBuffer({ resolveWithObject: true });
+
+  return Object.freeze({
+    format: metadata.format ?? null,
+    width: info.width,
+    height: info.height,
+    channelCount: info.channels,
+    data,
+  });
 }
 
 /** Inspect one explicitly supplied image without modifying it or creating state. */
