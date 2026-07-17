@@ -74,6 +74,11 @@ function setPixel(
   image.data[offset + 2] = rgb[2];
 }
 
+function setAlpha(image: DecodedPixelImage, x: number, y: number, alpha: number): void {
+  const offset = (y * image.width + x) * image.channelCount;
+  image.data[offset + 3] = alpha;
+}
+
 function expectSuccess(result: ReturnType<typeof detectChartFrameFromPixels>): ChartFrameObservation {
   expect(result.ok).toBe(true);
   return result as ChartFrameObservation;
@@ -235,12 +240,112 @@ describe("detectChartFrameFromPixels", () => {
     expectFailure(detectChartFrameFromPixels(image), "touching_image_boundary");
   });
 
+  it("rejects a source-boundary frame even when an internal rectangle also qualifies", () => {
+    const image = makeCanvas({ width: 140, height: 100, left: 0, top: 0, right: 139, bottom: 99 });
+    for (let x = 20; x <= 119; x += 1) {
+      setPixel(image, x, 20, [60, 60, 60]);
+      setPixel(image, x, 79, [60, 60, 60]);
+    }
+    for (let y = 20; y <= 79; y += 1) {
+      setPixel(image, 20, y, [60, 60, 60]);
+      setPixel(image, 119, y, [60, 60, 60]);
+    }
+
+    expectFailure(detectChartFrameFromPixels(image), "touching_image_boundary");
+  });
+
   it("reports no candidate for an image with no frame", () => {
     const image = makeCanvas();
     image.data.fill(31);
     for (let offset = 3; offset < image.data.length; offset += 4) image.data[offset] = 255;
 
     expectFailure(detectChartFrameFromPixels(image), "no_frame_candidate");
+  });
+
+  it("does not treat fully transparent stored RGB values as frame evidence", () => {
+    const image = makeCanvas();
+    for (let x = 7; x <= 112; x += 1) {
+      setAlpha(image, x, 9, 0);
+      setAlpha(image, x, 79, 0);
+    }
+    for (let y = 9; y <= 79; y += 1) {
+      setAlpha(image, 7, y, 0);
+      setAlpha(image, 112, y, 0);
+    }
+
+    expectFailure(detectChartFrameFromPixels(image), "no_frame_candidate");
+  });
+
+  it("fails closed when deterministic candidate enumeration exceeds its budget", () => {
+    const width = 50;
+    const height = 50;
+    const channelCount = 4;
+    const data = new Uint8Array(width * height * channelCount);
+    const image: DecodedPixelImage = { format: "png", width, height, channelCount, data };
+
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        setPixel(image, x, y, [45, 45, 45]);
+        setAlpha(image, x, y, 255);
+      }
+    }
+
+    const patch = 2;
+    for (const [originX, originY] of [
+      [0, 0],
+      [width - patch, 0],
+      [0, height - patch],
+      [width - patch, height - patch],
+    ] as const) {
+      for (let y = originY; y < originY + patch; y += 1) {
+        for (let x = originX; x < originX + patch; x += 1) {
+          setPixel(image, x, y, [31, 31, 31]);
+        }
+      }
+    }
+
+    const first = expectFailure(
+      detectChartFrameFromPixels(image),
+      "candidate_search_budget_exceeded",
+    );
+    const second = expectFailure(
+      detectChartFrameFromPixels(image),
+      "candidate_search_budget_exceeded",
+    );
+    expect(first).toEqual(second);
+  });
+
+  it("returns a deterministic typed failure for a valid long-perimeter image", () => {
+    // The 126,028-pixel source perimeter exceeds common spread-argument limits.
+    const width = 16;
+    const height = 63_000;
+    const channelCount = 4;
+    const data = new Uint8Array(width * height * channelCount);
+    data.fill(31);
+    for (let offset = 3; offset < data.length; offset += channelCount) data[offset] = 255;
+    const image: DecodedPixelImage = { format: "png", width, height, channelCount, data };
+
+    for (let x = 0; x < width; x += 1) {
+      setPixel(image, x, 0, [45, 45, 45]);
+      setPixel(image, x, height - 1, [45, 45, 45]);
+    }
+    for (let y = 0; y < height; y += 1) {
+      setPixel(image, 0, y, [45, 45, 45]);
+      setPixel(image, width - 1, y, [45, 45, 45]);
+    }
+
+    const before = Buffer.from(image.data);
+    const first = expectFailure(detectChartFrameFromPixels(image), "touching_image_boundary");
+    const second = expectFailure(detectChartFrameFromPixels(image), "touching_image_boundary");
+
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({ sourceWidth: width, sourceHeight: height });
+    const after = Buffer.from(
+      image.data.buffer,
+      image.data.byteOffset,
+      image.data.byteLength,
+    );
+    expect(after.equals(before)).toBe(true);
   });
 
   it("returns deterministic repeated results", () => {

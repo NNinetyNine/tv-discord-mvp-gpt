@@ -90,6 +90,7 @@ export type ChartFrameFailureReason =
   | "touching_image_boundary"
   | "unsupported_frame_style"
   | "invalid_geometry"
+  | "candidate_search_budget_exceeded"
   | "unreadable_input";
 
 export interface ChartFrameDetectionFailure {
@@ -111,6 +112,10 @@ interface Rgb {
   readonly red: number;
   readonly green: number;
   readonly blue: number;
+}
+
+interface Pixel extends Rgb {
+  readonly alpha: number;
 }
 
 interface LineRun {
@@ -147,6 +152,8 @@ const COMPARABLE_AREA_RATIO = 0.85;
 const LINE_ALIGNMENT_TOLERANCE = 2;
 const NEAR_DUPLICATE_MIN_INTERSECTION_OVER_UNION = 0.95;
 const DIAGNOSTIC_ALIGNMENT_TOLERANCE = 4;
+const MAX_CANDIDATE_COMBINATIONS = 1_000_000;
+const MAX_EVALUATED_CANDIDATES = 2_000;
 
 function freezeRgb(rgb: Rgb): RgbObservation {
   return Object.freeze(rgb);
@@ -187,13 +194,18 @@ function isValidInput(image: DecodedPixelImage): boolean {
   );
 }
 
-function pixelAt(image: DecodedPixelImage, x: number, y: number): Rgb {
+function pixelAt(image: DecodedPixelImage, x: number, y: number): Pixel {
   const index = (y * image.width + x) * image.channelCount;
   return {
     red: image.data[index] ?? 0,
     green: image.data[index + 1] ?? 0,
     blue: image.data[index + 2] ?? 0,
+    alpha: image.channelCount >= 4 ? (image.data[index + 3] ?? 0) : 255,
   };
+}
+
+function isFullyOpaque(pixel: Pixel): boolean {
+  return pixel.alpha === 255;
 }
 
 function luminance(rgb: Rgb): number {
@@ -204,12 +216,28 @@ function channelSpread(rgb: Rgb): number {
   return Math.max(rgb.red, rgb.green, rgb.blue) - Math.min(rgb.red, rgb.green, rgb.blue);
 }
 
-function median(values: readonly number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 1) return sorted[middle] ?? 0;
-  return Math.round(((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2);
+function medianFromHistogram(histogram: Uint32Array, total: number): number {
+  if (total === 0) return 0;
+  const lowerRank = Math.floor((total - 1) / 2);
+  const upperRank = Math.floor(total / 2);
+  let cumulative = 0;
+  let lowerValue = 0;
+  let upperValue = 0;
+  let foundLower = false;
+
+  for (let value = 0; value < histogram.length; value += 1) {
+    cumulative += histogram[value] ?? 0;
+    if (!foundLower && cumulative > lowerRank) {
+      lowerValue = value;
+      foundLower = true;
+    }
+    if (cumulative > upperRank) {
+      upperValue = value;
+      break;
+    }
+  }
+
+  return Math.round((lowerValue + upperValue) / 2);
 }
 
 function summarizeRgb(values: readonly Rgb[]): {
@@ -217,31 +245,52 @@ function summarizeRgb(values: readonly Rgb[]): {
   readonly minimum: Rgb;
   readonly maximum: Rgb;
 } {
-  const reds = values.map((value) => value.red);
-  const greens = values.map((value) => value.green);
-  const blues = values.map((value) => value.blue);
+  const redHistogram = new Uint32Array(256);
+  const greenHistogram = new Uint32Array(256);
+  const blueHistogram = new Uint32Array(256);
+  let total = 0;
+  let minimumRed = Number.POSITIVE_INFINITY;
+  let minimumGreen = Number.POSITIVE_INFINITY;
+  let minimumBlue = Number.POSITIVE_INFINITY;
+  let maximumRed = Number.NEGATIVE_INFINITY;
+  let maximumGreen = Number.NEGATIVE_INFINITY;
+  let maximumBlue = Number.NEGATIVE_INFINITY;
+
+  for (const value of values) {
+    redHistogram[value.red] = (redHistogram[value.red] ?? 0) + 1;
+    greenHistogram[value.green] = (greenHistogram[value.green] ?? 0) + 1;
+    blueHistogram[value.blue] = (blueHistogram[value.blue] ?? 0) + 1;
+    total += 1;
+    if (value.red < minimumRed) minimumRed = value.red;
+    if (value.green < minimumGreen) minimumGreen = value.green;
+    if (value.blue < minimumBlue) minimumBlue = value.blue;
+    if (value.red > maximumRed) maximumRed = value.red;
+    if (value.green > maximumGreen) maximumGreen = value.green;
+    if (value.blue > maximumBlue) maximumBlue = value.blue;
+  }
+
   return {
     representative: {
-      red: median(reds),
-      green: median(greens),
-      blue: median(blues),
+      red: medianFromHistogram(redHistogram, total),
+      green: medianFromHistogram(greenHistogram, total),
+      blue: medianFromHistogram(blueHistogram, total),
     },
     minimum: {
-      red: Math.min(...reds),
-      green: Math.min(...greens),
-      blue: Math.min(...blues),
+      red: minimumRed,
+      green: minimumGreen,
+      blue: minimumBlue,
     },
     maximum: {
-      red: Math.max(...reds),
-      green: Math.max(...greens),
-      blue: Math.max(...blues),
+      red: maximumRed,
+      green: maximumGreen,
+      blue: maximumBlue,
     },
   };
 }
 
-function estimateExterior(image: DecodedPixelImage): Rgb {
+function estimateExterior(image: DecodedPixelImage): Rgb | null {
   const patch = Math.max(2, Math.min(6, Math.floor(Math.min(image.width, image.height) / 20)));
-  const samples: Rgb[] = [];
+  const samples: Pixel[] = [];
   const origins: readonly [number, number][] = [
     [0, 0],
     [image.width - patch, 0],
@@ -255,12 +304,14 @@ function estimateExterior(image: DecodedPixelImage): Rgb {
       }
     }
   }
+  if (!samples.every(isFullyOpaque)) return null;
   return summarizeRgb(samples).representative;
 }
 
-function isFrameStylePixel(rgb: Rgb, exterior: Rgb): boolean {
+function isFrameStylePixel(rgb: Pixel, exterior: Rgb): boolean {
   const delta = luminance(rgb) - luminance(exterior);
   return (
+    isFullyOpaque(rgb) &&
     channelSpread(rgb) <= NEUTRAL_CHANNEL_SPREAD &&
     delta >= MIN_BORDER_DELTA_FROM_EXTERIOR &&
     delta <= MAX_BORDER_DELTA_FROM_EXTERIOR
@@ -409,8 +460,8 @@ function borderPixels(
   top: number,
   right: number,
   bottom: number,
-): readonly Rgb[] {
-  const values: Rgb[] = [];
+): readonly Pixel[] {
+  const values: Pixel[] = [];
   for (let x = left; x <= right; x += 1) {
     values.push(pixelAt(image, x, top));
     if (bottom !== top) values.push(pixelAt(image, x, bottom));
@@ -422,9 +473,11 @@ function borderPixels(
   return values;
 }
 
-function borderEvidence(values: readonly Rgb[]): BorderEvidence {
+function borderEvidence(values: readonly Pixel[]): BorderEvidence {
   const summary = summarizeRgb(values);
-  const neutralCount = values.filter((value) => channelSpread(value) <= NEUTRAL_CHANNEL_SPREAD).length;
+  const neutralCount = values.filter(
+    (value) => isFullyOpaque(value) && channelSpread(value) <= NEUTRAL_CHANNEL_SPREAD,
+  ).length;
   return Object.freeze({
     representative: freezeRgb(summary.representative),
     minimum: freezeRgb(summary.minimum),
@@ -439,8 +492,8 @@ function exteriorPixels(
   top: number,
   right: number,
   bottom: number,
-): readonly Rgb[] {
-  const values: Rgb[] = [];
+): readonly Pixel[] {
+  const values: Pixel[] = [];
   const strip = 3;
   for (let distance = 1; distance <= strip; distance += 1) {
     const yAbove = top - distance;
@@ -463,8 +516,8 @@ function exteriorPixels(
   return values;
 }
 
-function exteriorEvidence(values: readonly Rgb[], border: BorderEvidence): ExteriorEvidence | null {
-  if (values.length === 0) return null;
+function exteriorEvidence(values: readonly Pixel[], border: BorderEvidence): ExteriorEvidence | null {
+  if (values.length === 0 || !values.every(isFullyOpaque)) return null;
   const summary = summarizeRgb(values);
   const borderLuma = luminance(border.representative);
   const darker = values.filter((value) => luminance(value) < borderLuma).length;
@@ -502,14 +555,16 @@ function boundaryRectangleIsCoherent(image: DecodedPixelImage): boolean {
   const right = image.width - 1;
   const bottom = image.height - 1;
   const edgeValues = borderPixels(image, left, top, right, bottom);
+  if (!edgeValues.every(isFullyOpaque)) return false;
   const edgeSummary = summarizeRgb(edgeValues);
   const representativeLuma = luminance(edgeSummary.representative);
 
-  const matchesRepresentative = (value: Rgb): boolean =>
+  const matchesRepresentative = (value: Pixel): boolean =>
+    isFullyOpaque(value) &&
     channelSpread(value) <= NEUTRAL_CHANNEL_SPREAD &&
     Math.abs(luminance(value) - representativeLuma) <= NEUTRAL_CHANNEL_SPREAD;
 
-  const sideRatio = (values: readonly Rgb[]): number =>
+  const sideRatio = (values: readonly Pixel[]): number =>
     values.filter(matchesRepresentative).length / values.length;
 
   const topValues = Array.from({ length: image.width }, (_, x) => pixelAt(image, x, top));
@@ -535,7 +590,7 @@ function boundaryRectangleIsCoherent(image: DecodedPixelImage): boolean {
   if (!corners.every(matchesRepresentative)) return false;
 
   const inset = Math.max(1, Math.min(3, Math.floor(Math.min(image.width, image.height) / 8)));
-  const interiorValues: Rgb[] = [];
+  const interiorValues: Pixel[] = [];
   for (let x = inset; x <= right - inset; x += 1) {
     interiorValues.push(pixelAt(image, x, inset));
     interiorValues.push(pixelAt(image, x, bottom - inset));
@@ -544,10 +599,48 @@ function boundaryRectangleIsCoherent(image: DecodedPixelImage): boolean {
     interiorValues.push(pixelAt(image, inset, y));
     interiorValues.push(pixelAt(image, right - inset, y));
   }
-  if (interiorValues.length === 0) return false;
+  if (interiorValues.length === 0 || !interiorValues.every(isFullyOpaque)) return false;
 
   const interiorLuma = luminance(summarizeRgb(interiorValues).representative);
   return representativeLuma - interiorLuma >= MIN_EXTERIOR_CONTRAST;
+}
+
+interface CandidateSearchBudget {
+  remainingCombinations: number;
+  remainingEvaluations: number;
+  evaluatedCombinations: number;
+  evaluatedCandidates: number;
+  exceeded: boolean;
+}
+
+function createCandidateSearchBudget(): CandidateSearchBudget {
+  return {
+    remainingCombinations: MAX_CANDIDATE_COMBINATIONS,
+    remainingEvaluations: MAX_EVALUATED_CANDIDATES,
+    evaluatedCombinations: 0,
+    evaluatedCandidates: 0,
+    exceeded: false,
+  };
+}
+
+function consumeCandidateCombination(budget: CandidateSearchBudget): boolean {
+  if (budget.remainingCombinations === 0) {
+    budget.exceeded = true;
+    return false;
+  }
+  budget.remainingCombinations -= 1;
+  budget.evaluatedCombinations += 1;
+  return true;
+}
+
+function consumeCandidateEvaluation(budget: CandidateSearchBudget): boolean {
+  if (budget.remainingEvaluations === 0) {
+    budget.exceeded = true;
+    return false;
+  }
+  budget.remainingEvaluations -= 1;
+  budget.evaluatedCandidates += 1;
+  return true;
 }
 
 function buildCandidates(
@@ -555,6 +648,7 @@ function buildCandidates(
   exterior: Rgb,
   horizontals: readonly LineRun[],
   verticals: readonly LineRun[],
+  budget: CandidateSearchBudget,
   alignmentTolerance = LINE_ALIGNMENT_TOLERANCE,
 ): readonly Candidate[] {
   const candidates: Candidate[] = [];
@@ -571,6 +665,7 @@ function buildCandidates(
         for (let rightIndex = leftIndex + 1; rightIndex < verticals.length; rightIndex += 1) {
           const rightRun = verticals[rightIndex];
           if (rightRun === undefined || rightRun.coordinate <= leftRun.coordinate) continue;
+          if (!consumeCandidateCombination(budget)) return candidates;
           const left = leftRun.coordinate;
           const right = rightRun.coordinate;
           const top = topRun.coordinate;
@@ -586,15 +681,16 @@ function buildCandidates(
           const key = `${left},${top},${right},${bottom}`;
           if (seen.has(key)) continue;
           seen.add(key);
+          if (!consumeCandidateEvaluation(budget)) return candidates;
 
           const continuity = sideContinuity(image, exterior, left, top, right, bottom);
           const corners = cornerEvidence(image, exterior, left, top, right, bottom);
-          const border = borderEvidence(borderPixels(image, left, top, right, bottom));
-          const exteriorResult = exteriorEvidence(
-            exteriorPixels(image, left, top, right, bottom),
-            border,
-          );
+          const borderValues = borderPixels(image, left, top, right, bottom);
+          const border = borderEvidence(borderValues);
+          const exteriorValues = exteriorPixels(image, left, top, right, bottom);
+          const exteriorResult = exteriorEvidence(exteriorValues, border);
           const frameStyleSupported =
+            borderValues.every(isFullyOpaque) &&
             border.neutralPixelRatio >= REQUIRED_SIDE_CONTINUITY &&
             exteriorResult !== null &&
             exteriorResult.contrastFromBorder >= MIN_EXTERIOR_CONTRAST &&
@@ -777,30 +873,58 @@ export function detectChartFrameFromPixels(
     );
   }
 
+  if (boundaryRectangleIsCoherent(image)) {
+    return freezeFailure(
+      "touching_image_boundary",
+      "a coherent frame-like rectangle coincides with the source-image boundary",
+      image.width,
+      image.height,
+      1,
+    );
+  }
+
   const exterior = estimateExterior(image);
+  if (exterior === null) {
+    return freezeFailure(
+      "unsupported_frame_style",
+      "exterior frame evidence is not fully opaque",
+      image.width,
+      image.height,
+    );
+  }
+
   const horizontals = horizontalRuns(image, exterior);
   const verticals = verticalRuns(image, exterior);
-  const candidates = buildCandidates(image, exterior, horizontals, verticals);
+  const budget = createCandidateSearchBudget();
+  const candidates = buildCandidates(image, exterior, horizontals, verticals, budget);
+  if (budget.exceeded) {
+    return freezeFailure(
+      "candidate_search_budget_exceeded",
+      `candidate search exceeded deterministic budgets of ${MAX_CANDIDATE_COMBINATIONS} combinations or ${MAX_EVALUATED_CANDIDATES} evaluated candidates`,
+      image.width,
+      image.height,
+    );
+  }
 
   if (candidates.length === 0) {
-    if (boundaryRectangleIsCoherent(image)) {
-      return freezeFailure(
-        "touching_image_boundary",
-        "a coherent frame-like rectangle coincides with the source-image boundary",
-        image.width,
-        image.height,
-        1,
-      );
-    }
     const diagnosticCandidates = [
       ...buildCandidates(
         image,
         exterior,
         horizontals,
         verticals,
+        budget,
         DIAGNOSTIC_ALIGNMENT_TOLERANCE,
       ),
     ].sort((a, b) => b.area - a.area);
+    if (budget.exceeded) {
+      return freezeFailure(
+        "candidate_search_budget_exceeded",
+        `candidate search exceeded deterministic budgets of ${MAX_CANDIDATE_COMBINATIONS} combinations or ${MAX_EVALUATED_CANDIDATES} evaluated candidates`,
+        image.width,
+        image.height,
+      );
+    }
     const incoherent = diagnosticCandidates.find(
       (candidate) =>
         completedSideCount(candidate) === 4 && candidate.corners.coherentCornerCount < 4,
