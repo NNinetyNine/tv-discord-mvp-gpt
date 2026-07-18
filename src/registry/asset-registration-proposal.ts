@@ -223,7 +223,7 @@ export function validateAssetRegistrationInput(value: unknown):
   });
 }
 
-function registryFingerprint(assets: readonly Asset[], packs: readonly Pack[]): string {
+export function computeAssetRegistrationRegistryFingerprint(assets: readonly Asset[], packs: readonly Pack[]): string {
   const canonical = {
     assets: [...assets]
       .sort((a, b) => a.id.localeCompare(b.id, "en"))
@@ -289,7 +289,7 @@ export function proposeAssetRegistration(
     proposalType: "visionx.asset-registration",
     operation: input.operation,
     valid: true,
-    registryState: Object.freeze({ assetCount: assets.length, registryFingerprint: registryFingerprint(assets, packs) }),
+    registryState: Object.freeze({ assetCount: assets.length, registryFingerprint: computeAssetRegistrationRegistryFingerprint(assets, packs) }),
     asset: input.asset,
     targetPacks: Object.freeze(targets.map(({ packId, membershipAlreadyExists }) => Object.freeze({ packId, membershipAlreadyExists }))),
     publicationMetadataPreview: previewChartPublicationMetadataForProposedAsset(input.asset),
