@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import { loadPacks } from "../packs/packs.ts";
 import { loadRegistry } from "./registry.ts";
+import { loadChannels } from "../wiring/channels.ts";
 import {
   planAssetRegistrationApplication,
   serializeAssetRegistrationApplicationPlan,
@@ -210,9 +211,10 @@ export async function planAssetRegistrationApplicationFile(
   const channelsPath = options.channelsPath ?? resolve("config/channels.json");
   let registry;
   let packs;
+  let channels: Record<string, unknown>;
   try {
+    channels = loadChannels(channelsPath);
     registry = loadRegistry(registryPath, channelsPath);
-    const channels = JSON.parse(await readFile(channelsPath, "utf8")) as Record<string, unknown>;
     packs = loadPacks(
       packsPath,
       new Set(registry.all().map((asset) => asset.id)),
@@ -229,6 +231,7 @@ export async function planAssetRegistrationApplicationFile(
     authorizationSha256: authorization.sha256,
     assets: registry.all(),
     packs,
+    channels,
   });
   if (!planned.ok) return planned;
   const outputBytes = serializeAssetRegistrationApplicationPlan(planned.plan);

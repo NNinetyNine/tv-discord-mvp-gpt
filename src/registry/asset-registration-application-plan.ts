@@ -5,10 +5,14 @@ import type { Asset } from "../types.ts";
 import { previewChartPublicationMetadataForProposedAsset } from "../application/chart-publication-metadata-preview.ts";
 import {
   computeAssetRegistrationRegistryFingerprint,
-  validateAssetRegistrationInput,
-  type AssetRegistrationExpectedCurrent,
+  serializeAssetRegistrationProposal,
+  validateAssetRegistrationProposalReceipt,
+  type AssetRegistrationExpectedCurrentV1,
+  type AssetRegistrationExpectedCurrentV2,
   type AssetRegistrationOperation,
   type AssetRegistrationProposal,
+  type AssetRegistrationProposalV1,
+  type AssetRegistrationProposalV2,
 } from "./asset-registration-proposal.ts";
 import {
   serializeAssetRegistrationApplicationAuthorization,
@@ -19,18 +23,28 @@ import {
   type AssetApplicationAuthorizationFailureReason,
 } from "./asset-registration-application-authorization.ts";
 import type { ProposedAssetMarketIdentity } from "./asset-market-identity.ts";
+import {
+  validateAssetRegistrationChannel,
+  type AssetRegistrationChannelFailureReason,
+  type ChannelAwareProposedAssetMarketIdentity,
+} from "./asset-registration-channel.ts";
 
 const LOWER_SHA256 = /^[a-f0-9]{64}$/u;
 
 export type AssetRegistrationApplicationPlanFailureReason =
   | "invalid_proposal"
+  | "invalid_plan"
   | "invalid_authorization"
+  | "unsupported_schema_version"
+  | "legacy_proposal_not_applicable"
   | "proposal_hash_mismatch"
   | "unsupported_decision"
   | "stale_registry_state"
   | "asset_already_exists"
   | "unknown_asset"
   | "stale_asset_state"
+  | "channel_change_not_authorized"
+  | AssetRegistrationChannelFailureReason
   | "unknown_target_pack"
   | "missing_pack_placement"
   | "unexpected_pack_placement"
@@ -45,15 +59,26 @@ export interface AssetRegistrationApplicationPlanFailure {
   readonly detail: string;
 }
 
-export interface AddAssetOperation {
+export interface AddAssetOperationV1 {
   readonly type: "add_asset";
   readonly asset: ProposedAssetMarketIdentity;
 }
 
-export interface UpdateAssetIdentityOperation {
+export interface AddAssetOperationV2 {
+  readonly type: "add_asset";
+  readonly asset: ChannelAwareProposedAssetMarketIdentity;
+}
+
+export interface UpdateAssetIdentityOperationV1 {
   readonly type: "update_asset_identity";
   readonly asset: ProposedAssetMarketIdentity;
-  readonly expectedCurrent: AssetRegistrationExpectedCurrent;
+  readonly expectedCurrent: AssetRegistrationExpectedCurrentV1;
+}
+
+export interface UpdateAssetIdentityOperationV2 {
+  readonly type: "update_asset_identity";
+  readonly asset: ChannelAwareProposedAssetMarketIdentity;
+  readonly expectedCurrent: AssetRegistrationExpectedCurrentV2;
 }
 
 export interface InsertPackAssetOperation {
@@ -64,10 +89,19 @@ export interface InsertPackAssetOperation {
   readonly resultingIndex: number;
 }
 
-export type AssetRegistrationApplicationOperation =
-  | AddAssetOperation
-  | UpdateAssetIdentityOperation
+export type AssetRegistrationApplicationOperationV1 =
+  | AddAssetOperationV1
+  | UpdateAssetIdentityOperationV1
   | InsertPackAssetOperation;
+
+export type AssetRegistrationApplicationOperationV2 =
+  | AddAssetOperationV2
+  | UpdateAssetIdentityOperationV2
+  | InsertPackAssetOperation;
+
+export type AssetRegistrationApplicationOperation =
+  | AssetRegistrationApplicationOperationV1
+  | AssetRegistrationApplicationOperationV2;
 
 export interface SimulatedPackResult {
   readonly packId: string;
@@ -80,25 +114,11 @@ export interface SimulatedPackResult {
   readonly existingRelativeOrderPreserved: true;
 }
 
-export interface AssetRegistrationApplicationPlan {
-  readonly schemaVersion: 1;
+interface AssetRegistrationApplicationPlanCommon {
   readonly planType: "visionx.asset-registration.application-plan";
   readonly applicationAuthorized: boolean;
   readonly applicationStatus: "planned_not_applied" | "rejected_not_applied";
-  readonly technicalValidation: {
-    readonly ok: true;
-    readonly proposalSha256: string;
-    readonly authorizationSha256: string;
-    readonly registryFingerprintVerified: true;
-    readonly staleStateDetected: false;
-  };
-  readonly proposal: {
-    readonly operation: AssetRegistrationOperation;
-    readonly assetId: string;
-    readonly registryFingerprint: string;
-  };
   readonly authorization: AssetRegistrationApplicationAuthorization;
-  readonly operations: readonly AssetRegistrationApplicationOperation[];
   readonly simulatedResult: {
     readonly registryAssetCountBefore: number;
     readonly registryAssetCountAfter: number;
@@ -112,9 +132,49 @@ export interface AssetRegistrationApplicationPlan {
   readonly sourceChangesApplied: false;
 }
 
+export interface AssetRegistrationApplicationPlanV1 extends AssetRegistrationApplicationPlanCommon {
+  readonly schemaVersion: 1;
+  readonly technicalValidation: {
+    readonly ok: true;
+    readonly proposalSha256: string;
+    readonly authorizationSha256: string;
+    readonly registryFingerprintVerified: true;
+    readonly staleStateDetected: false;
+  };
+  readonly proposal: {
+    readonly operation: AssetRegistrationOperation;
+    readonly assetId: string;
+    readonly registryFingerprint: string;
+  };
+  readonly operations: readonly AssetRegistrationApplicationOperationV1[];
+}
+
+export interface AssetRegistrationApplicationPlanV2 extends AssetRegistrationApplicationPlanCommon {
+  readonly schemaVersion: 2;
+  readonly technicalValidation: {
+    readonly ok: true;
+    readonly proposalSha256: string;
+    readonly authorizationSha256: string;
+    readonly registryFingerprintVerified: true;
+    readonly channelConfigurationVerified: true;
+    readonly staleStateDetected: false;
+  };
+  readonly proposal: {
+    readonly operation: AssetRegistrationOperation;
+    readonly assetId: string;
+    readonly channel: string;
+    readonly registryFingerprint: string;
+  };
+  readonly operations: readonly AssetRegistrationApplicationOperationV2[];
+}
+
+export type AssetRegistrationApplicationPlan =
+  | AssetRegistrationApplicationPlanV1
+  | AssetRegistrationApplicationPlanV2;
+
 export interface AssetRegistrationApplicationPlanSuccess {
   readonly ok: true;
-  readonly plan: AssetRegistrationApplicationPlan;
+  readonly plan: AssetRegistrationApplicationPlanV2;
 }
 
 export type AssetRegistrationApplicationPlanResult =
@@ -128,7 +188,12 @@ export interface PlanAssetRegistrationApplicationInput {
   readonly authorizationSha256: string;
   readonly assets: readonly Asset[];
   readonly packs: readonly Pack[];
+  readonly channels: Readonly<Record<string, unknown>>;
 }
+
+export type AssetRegistrationApplicationPlanReceiptValidationResult =
+  | { readonly ok: true; readonly plan: AssetRegistrationApplicationPlan }
+  | AssetRegistrationApplicationPlanFailure;
 
 function failure(
   reason: AssetRegistrationApplicationPlanFailureReason,
@@ -145,15 +210,16 @@ function exactFields(
   value: Readonly<Record<string, unknown>>,
   allowed: readonly string[],
   where: string,
+  reason: "invalid_proposal" | "invalid_plan" = "invalid_proposal",
 ): AssetRegistrationApplicationPlanFailure | null {
   const allowedSet = new Set(allowed);
   const unknown = Object.keys(value).filter((key) => !allowedSet.has(key));
   const missing = allowed.filter((key) => !(key in value));
   if (unknown.length > 0) {
-    return failure("invalid_proposal", `${where} contains unknown field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`);
+    return failure(reason, `${where} contains unknown field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`);
   }
   if (missing.length > 0) {
-    return failure("invalid_proposal", `${where} is missing required field${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`);
+    return failure(reason, `${where} is missing required field${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`);
   }
   return null;
 }
@@ -171,99 +237,13 @@ export function computeAssetRegistrationPackFingerprint(pack: Pack): string {
   });
 }
 
-function computePlannedRegistryFingerprint(
-  currentRegistryFingerprint: string,
-  operations: readonly AssetRegistrationApplicationOperation[],
-): string {
-  return hashCanonical({
-    schemaVersion: 1,
-    currentRegistryFingerprint,
-    operations,
-  });
-}
-
-function validateProposalReceipt(value: unknown):
-  | { readonly ok: true; readonly proposal: AssetRegistrationProposal }
-  | AssetRegistrationApplicationPlanFailure {
-  if (!isRecord(value)) return failure("invalid_proposal", "proposal must be a JSON object");
-  const operation = value.operation;
-  if (operation !== "add" && operation !== "update_identity") {
-    return failure("invalid_proposal", "proposal.operation must be add or update_identity");
-  }
-  const topFields = operation === "update_identity"
-    ? ["schemaVersion", "proposalType", "operation", "valid", "registryState", "asset", "targetPacks", "publicationMetadataPreview", "decision", "expectedCurrent", "applicationStatus"]
-    : ["schemaVersion", "proposalType", "operation", "valid", "registryState", "asset", "targetPacks", "publicationMetadataPreview", "decision", "applicationStatus"];
-  const top = exactFields(value, topFields, "proposal");
-  if (top !== null) return top;
-  if (value.schemaVersion !== 1 || value.proposalType !== "visionx.asset-registration" || value.valid !== true || value.applicationStatus !== "not_applied") {
-    return failure("invalid_proposal", "proposal identity, validity, or applicationStatus is unsupported");
-  }
-  if (!isRecord(value.registryState)) return failure("invalid_proposal", "proposal.registryState must be a JSON object");
-  const registryFields = exactFields(value.registryState, ["assetCount", "registryFingerprint"], "proposal.registryState");
-  if (registryFields !== null) return registryFields;
-  if (!Number.isSafeInteger(value.registryState.assetCount) || Number(value.registryState.assetCount) < 0) {
-    return failure("invalid_proposal", "proposal.registryState.assetCount must be a non-negative safe integer");
-  }
-  if (typeof value.registryState.registryFingerprint !== "string" || !LOWER_SHA256.test(value.registryState.registryFingerprint)) {
-    return failure("invalid_proposal", "proposal.registryState.registryFingerprint must be a lowercase SHA-256 digest");
-  }
-  if (!Array.isArray(value.targetPacks)) return failure("invalid_proposal", "proposal.targetPacks must be an array");
-  const targetPackIds: string[] = [];
-  const seen = new Set<string>();
-  for (let index = 0; index < value.targetPacks.length; index += 1) {
-    const target = value.targetPacks[index];
-    if (!isRecord(target)) return failure("invalid_proposal", `proposal.targetPacks[${index}] must be a JSON object`);
-    const fields = exactFields(target, ["packId", "membershipAlreadyExists"], `proposal.targetPacks[${index}]`);
-    if (fields !== null) return fields;
-    if (typeof target.packId !== "string" || target.packId.length === 0 || target.packId.trim() !== target.packId) {
-      return failure("invalid_proposal", `proposal.targetPacks[${index}].packId must be an exact non-empty string`);
-    }
-    if (target.membershipAlreadyExists !== false) {
-      return failure("invalid_proposal", `proposal.targetPacks[${index}].membershipAlreadyExists must equal false`);
-    }
-    if (seen.has(target.packId)) return failure("invalid_proposal", `proposal target Pack ${target.packId} is duplicated`);
-    seen.add(target.packId);
-    targetPackIds.push(target.packId);
-  }
-
-  const reconstructed = validateAssetRegistrationInput({
-    schemaVersion: 1,
-    operation,
-    asset: value.asset,
-    targetPackIds,
-    decision: value.decision,
-    ...(operation === "update_identity" ? { expectedCurrent: value.expectedCurrent } : {}),
-  });
-  if (!reconstructed.ok) {
-    return failure("invalid_proposal", `proposal content is invalid: ${reconstructed.reason}: ${reconstructed.detail}`);
-  }
-  if (!isRecord(value.publicationMetadataPreview)) {
-    return failure("invalid_proposal", "proposal.publicationMetadataPreview must be a JSON object");
-  }
-  const previewFields = exactFields(value.publicationMetadataPreview, ["title", "symbol", "market", "currency"], "proposal.publicationMetadataPreview");
-  if (previewFields !== null) return previewFields;
-  const expectedPreview = previewChartPublicationMetadataForProposedAsset(reconstructed.input.asset);
-  if (JSON.stringify(value.publicationMetadataPreview) !== JSON.stringify(expectedPreview)) {
-    return failure("invalid_proposal", "proposal.publicationMetadataPreview does not match the proposed Asset identity");
-  }
-
-  const proposal: AssetRegistrationProposal = Object.freeze({
-    schemaVersion: 1,
-    proposalType: "visionx.asset-registration",
-    operation,
-    valid: true,
-    registryState: Object.freeze({
-      assetCount: Number(value.registryState.assetCount),
-      registryFingerprint: value.registryState.registryFingerprint,
-    }),
-    asset: reconstructed.input.asset,
-    targetPacks: Object.freeze(targetPackIds.map((packId) => Object.freeze({ packId, membershipAlreadyExists: false as const }))),
-    publicationMetadataPreview: expectedPreview,
-    decision: reconstructed.input.decision,
-    ...(reconstructed.input.expectedCurrent === undefined ? {} : { expectedCurrent: reconstructed.input.expectedCurrent }),
-    applicationStatus: "not_applied",
-  });
-  return Object.freeze({ ok: true, proposal });
+function mapProposalFailure(reason: string): AssetRegistrationApplicationPlanFailureReason {
+  if (reason === "unsupported_schema_version") return "unsupported_schema_version";
+  if (reason === "proposal_channel_required") return "proposal_channel_required";
+  if (reason === "invalid_channel") return "invalid_channel";
+  if (reason === "unknown_channel") return "unknown_channel";
+  if (reason === "unresolved_channel") return "unresolved_channel";
+  return "invalid_proposal";
 }
 
 function mapAuthorizationFailure(reason: AssetApplicationAuthorizationFailureReason): AssetRegistrationApplicationPlanFailureReason {
@@ -287,8 +267,10 @@ function canonicalAuthorizationSha256(authorization: AssetRegistrationApplicatio
   return createHash("sha256").update(serializeAssetRegistrationApplicationAuthorization(authorization)).digest("hex");
 }
 
-function freezeOperation(operation: AssetRegistrationApplicationOperation): AssetRegistrationApplicationOperation {
-  if (operation.type === "add_asset") return Object.freeze({ type: operation.type, asset: Object.freeze({ ...operation.asset }) });
+function freezeOperationV2(operation: AssetRegistrationApplicationOperationV2): AssetRegistrationApplicationOperationV2 {
+  if (operation.type === "add_asset") {
+    return Object.freeze({ type: operation.type, asset: Object.freeze({ ...operation.asset }) });
+  }
   if (operation.type === "update_asset_identity") {
     return Object.freeze({
       type: operation.type,
@@ -305,7 +287,7 @@ function freezeOperation(operation: AssetRegistrationApplicationOperation): Asse
   });
 }
 
-function freezePlan(plan: AssetRegistrationApplicationPlan): AssetRegistrationApplicationPlan {
+function freezePlanV2(plan: AssetRegistrationApplicationPlanV2): AssetRegistrationApplicationPlanV2 {
   return Object.freeze({
     ...plan,
     technicalValidation: Object.freeze({ ...plan.technicalValidation }),
@@ -317,7 +299,7 @@ function freezePlan(plan: AssetRegistrationApplicationPlan): AssetRegistrationAp
         placement: freezePlacement(entry.placement),
       }))),
     }),
-    operations: Object.freeze(plan.operations.map(freezeOperation)),
+    operations: Object.freeze(plan.operations.map(freezeOperationV2)),
     simulatedResult: Object.freeze({
       ...plan.simulatedResult,
       packs: Object.freeze(plan.simulatedResult.packs.map((pack) => Object.freeze({ ...pack }))),
@@ -335,20 +317,67 @@ function placementIndex(pack: Pack, placement: AssetPackPlacement): number | Ass
   return placement.mode === "before" ? anchorIndex : anchorIndex + 1;
 }
 
+function proposedAssetAsRegistryAsset(
+  proposed: ChannelAwareProposedAssetMarketIdentity,
+  existing?: Asset,
+): Asset {
+  return Object.freeze({
+    id: proposed.id,
+    tradingView: proposed.tradingViewSymbol,
+    display: proposed.displayName,
+    channel: proposed.channel,
+    ...(existing?.tradingViewAliases === undefined
+      ? {}
+      : { tradingViewAliases: Object.freeze([...existing.tradingViewAliases]) }),
+  });
+}
+
+function simulatePacks(
+  packs: readonly Pack[],
+  placements: readonly { readonly pack: Pack; readonly index: number }[],
+  assetId: string,
+  approved: boolean,
+): readonly Pack[] {
+  if (!approved) return packs;
+  const byId = new Map(placements.map((placement) => [placement.pack.id, placement.index] as const));
+  return Object.freeze(packs.map((pack) => {
+    const index = byId.get(pack.id);
+    if (index === undefined) return pack;
+    const assets = [...pack.assets];
+    assets.splice(index, 0, assetId);
+    return Object.freeze({ ...pack, assets: Object.freeze(assets) });
+  }));
+}
+
 export function planAssetRegistrationApplication(
   input: PlanAssetRegistrationApplicationInput,
 ): AssetRegistrationApplicationPlanResult {
   if (!LOWER_SHA256.test(input.proposalSha256) || !LOWER_SHA256.test(input.authorizationSha256)) {
     return failure("invalid_proposal", "input artifact hashes must be lowercase SHA-256 digests");
   }
-  const proposalResult = validateProposalReceipt(input.proposal);
-  if (!proposalResult.ok) return proposalResult;
+  const proposalResult = validateAssetRegistrationProposalReceipt(input.proposal, input.channels);
+  if (!proposalResult.ok) return failure(mapProposalFailure(proposalResult.reason), proposalResult.detail);
+  const canonicalProposalSha256 = createHash("sha256")
+    .update(serializeAssetRegistrationProposal(proposalResult.proposal))
+    .digest("hex");
+  if (canonicalProposalSha256 !== input.proposalSha256) {
+    return failure("proposal_hash_mismatch", "supplied proposal bytes do not match the validated deterministic proposal receipt");
+  }
+  if (proposalResult.proposal.schemaVersion === 1) {
+    return failure("legacy_proposal_not_applicable", "schemaVersion 1 proposals are historical and cannot produce a source-applicable plan");
+  }
   const proposal = proposalResult.proposal;
+  const channel = validateAssetRegistrationChannel(proposal.asset.channel, input.channels);
+  if (!channel.ok) return channel;
+
   const authorizationResult = validateAssetRegistrationApplicationAuthorization(input.authorization);
   if (!authorizationResult.ok) {
     return failure(mapAuthorizationFailure(authorizationResult.reason), authorizationResult.detail);
   }
   const authorization = authorizationResult.authorization;
+  if (canonicalAuthorizationSha256(authorization) !== input.authorizationSha256) {
+    return failure("invalid_authorization", "supplied authorization bytes do not match the validated deterministic authorization receipt");
+  }
   if (authorization.proposalSha256 !== input.proposalSha256) {
     return failure("proposal_hash_mismatch", "authorization.proposalSha256 does not match the supplied proposal bytes");
   }
@@ -364,8 +393,16 @@ export function planAssetRegistrationApplication(
   } else {
     if (currentAsset === undefined) return failure("unknown_asset", `Asset ${proposal.asset.id} is no longer registered`);
     const expected = proposal.expectedCurrent;
-    if (expected === undefined || currentAsset.display !== expected.display || currentAsset.tradingView !== expected.tradingView) {
+    if (
+      expected === undefined ||
+      currentAsset.display !== expected.display ||
+      currentAsset.tradingView !== expected.tradingView ||
+      currentAsset.channel !== expected.channel
+    ) {
       return failure("stale_asset_state", `Asset ${proposal.asset.id} no longer matches proposal.expectedCurrent`);
+    }
+    if (proposal.asset.channel !== currentAsset.channel) {
+      return failure("channel_change_not_authorized", "update_identity cannot change an Asset logical channel");
     }
   }
 
@@ -383,11 +420,8 @@ export function planAssetRegistrationApplication(
   if (JSON.stringify(proposalTargets) !== JSON.stringify(expectedTargetOrder)) {
     return failure("stale_registry_state", "proposal target Pack order no longer matches canonical Pack order");
   }
-
-  if (proposal.operation === "update_identity") {
-    if (proposalTargets.length > 0 || authorization.packPlacements.length > 0) {
-      return failure("unexpected_pack_placement", "update_identity cannot add or reorder Pack membership");
-    }
+  if (proposal.operation === "update_identity" && (proposalTargets.length > 0 || authorization.packPlacements.length > 0)) {
+    return failure("unexpected_pack_placement", "update_identity cannot add or reorder Pack membership");
   }
 
   const authorizationByPack = new Map<string, AssetApplicationPackPlacement>();
@@ -428,9 +462,7 @@ export function planAssetRegistrationApplication(
   const canonicalAuthorizationPlacements: AssetApplicationPackPlacement[] = [];
   for (const packId of proposalTargets) {
     const placement = authorizationByPack.get(packId);
-    if (placement === undefined) {
-      return failure("missing_pack_placement", `authorization is missing validated Pack ${packId}`);
-    }
+    if (placement === undefined) return failure("missing_pack_placement", `authorization is missing validated Pack ${packId}`);
     canonicalAuthorizationPlacements.push(Object.freeze({
       packId,
       placement: freezePlacement(placement.placement),
@@ -442,7 +474,7 @@ export function planAssetRegistrationApplication(
   });
 
   const approved = canonicalAuthorization.decision === "approved";
-  const operations: AssetRegistrationApplicationOperation[] = [];
+  const operations: AssetRegistrationApplicationOperationV2[] = [];
   const simulatedPacks: SimulatedPackResult[] = [];
   if (approved) {
     if (proposal.operation === "add") {
@@ -480,12 +512,22 @@ export function planAssetRegistrationApplication(
   const membershipCountBefore = countMemberships(input.packs);
   const registryCountAfter = approved && proposal.operation === "add" ? registryCountBefore + 1 : registryCountBefore;
   const membershipCountAfter = approved ? membershipCountBefore + canonicalPlacements.length : membershipCountBefore;
+  const futurePacks = simulatePacks(input.packs, canonicalPlacements, proposal.asset.id, approved);
+  let futureAssets: readonly Asset[] = input.assets;
+  if (approved && proposal.operation === "add") {
+    futureAssets = Object.freeze([...input.assets, proposedAssetAsRegistryAsset(proposal.asset)]);
+  } else if (approved && proposal.operation === "update_identity") {
+    futureAssets = Object.freeze(input.assets.map((asset) =>
+      asset.id === proposal.asset.id
+        ? proposedAssetAsRegistryAsset(proposal.asset, asset)
+        : asset));
+  }
   const registryFingerprintAfter = approved
-    ? computePlannedRegistryFingerprint(currentRegistryFingerprint, operations)
+    ? computeAssetRegistrationRegistryFingerprint(futureAssets, futurePacks)
     : currentRegistryFingerprint;
 
-  const plan = freezePlan({
-    schemaVersion: 1,
+  const plan = freezePlanV2({
+    schemaVersion: 2,
     planType: "visionx.asset-registration.application-plan",
     applicationAuthorized: approved,
     applicationStatus: approved ? "planned_not_applied" : "rejected_not_applied",
@@ -494,11 +536,13 @@ export function planAssetRegistrationApplication(
       proposalSha256: input.proposalSha256,
       authorizationSha256: canonicalAuthorizationSha256(canonicalAuthorization),
       registryFingerprintVerified: true,
+      channelConfigurationVerified: true,
       staleStateDetected: false,
     }),
     proposal: Object.freeze({
       operation: proposal.operation,
       assetId: proposal.asset.id,
+      channel: proposal.asset.channel,
       registryFingerprint: proposal.registryState.registryFingerprint,
     }),
     authorization: canonicalAuthorization,
@@ -516,6 +560,111 @@ export function planAssetRegistrationApplication(
     sourceChangesApplied: false,
   });
   return Object.freeze({ ok: true, plan });
+}
+
+function validateBasicPlanCommon(
+  value: Readonly<Record<string, unknown>>,
+  version: 1 | 2,
+): AssetRegistrationApplicationPlanFailure | null {
+  const top = exactFields(
+    value,
+    ["schemaVersion", "planType", "applicationAuthorized", "applicationStatus", "technicalValidation", "proposal", "authorization", "operations", "simulatedResult", "publicationMetadataPreview", "sourceChangesApplied"],
+    "plan",
+    "invalid_plan",
+  );
+  if (top !== null) return top;
+  if (value.schemaVersion !== version || value.planType !== "visionx.asset-registration.application-plan") {
+    return failure("invalid_plan", "plan identity or schemaVersion is unsupported");
+  }
+  if (typeof value.applicationAuthorized !== "boolean") return failure("invalid_plan", "plan.applicationAuthorized must be boolean");
+  const expectedStatus = value.applicationAuthorized ? "planned_not_applied" : "rejected_not_applied";
+  if (value.applicationStatus !== expectedStatus || value.sourceChangesApplied !== false) {
+    return failure("invalid_plan", "plan status or sourceChangesApplied is inconsistent");
+  }
+  return null;
+}
+
+function validatePlanPreview(value: unknown): AssetRegistrationApplicationPlanFailure | null {
+  if (!isRecord(value)) return failure("invalid_plan", "plan.publicationMetadataPreview must be a JSON object");
+  return exactFields(value, ["title", "symbol", "market", "currency"], "plan.publicationMetadataPreview", "invalid_plan");
+}
+
+export function validateAssetRegistrationApplicationPlanReceipt(
+  value: unknown,
+  channels: Readonly<Record<string, unknown>>,
+): AssetRegistrationApplicationPlanReceiptValidationResult {
+  if (!isRecord(value)) return failure("invalid_plan", "plan must be a JSON object");
+  if (value.schemaVersion !== 1 && value.schemaVersion !== 2) {
+    return failure("unsupported_schema_version", "plan.schemaVersion must equal 1 or 2");
+  }
+  const version = value.schemaVersion;
+  const common = validateBasicPlanCommon(value, version);
+  if (common !== null) return common;
+  const preview = validatePlanPreview(value.publicationMetadataPreview);
+  if (preview !== null) return preview;
+  if (!isRecord(value.proposal)) return failure("invalid_plan", "plan.proposal must be a JSON object");
+  const proposalFields = exactFields(
+    value.proposal,
+    version === 1
+      ? ["operation", "assetId", "registryFingerprint"]
+      : ["operation", "assetId", "channel", "registryFingerprint"],
+    "plan.proposal",
+    "invalid_plan",
+  );
+  if (proposalFields !== null) return proposalFields;
+  if (value.proposal.operation !== "add" && value.proposal.operation !== "update_identity") {
+    return failure("invalid_plan", "plan.proposal.operation is invalid");
+  }
+  if (typeof value.proposal.assetId !== "string" || typeof value.proposal.registryFingerprint !== "string" || !LOWER_SHA256.test(value.proposal.registryFingerprint)) {
+    return failure("invalid_plan", "plan.proposal identity is invalid");
+  }
+  if (!Array.isArray(value.operations)) return failure("invalid_plan", "plan.operations must be an array");
+  const authorization = validateAssetRegistrationApplicationAuthorization(value.authorization);
+  if (!authorization.ok) return failure("invalid_plan", `plan.authorization is invalid: ${authorization.detail}`);
+  if (version === 2) {
+    const channel = validateAssetRegistrationChannel(value.proposal.channel, channels);
+    if (!channel.ok) return channel;
+    for (let index = 0; index < value.operations.length; index += 1) {
+      const operation = value.operations[index];
+      if (!isRecord(operation)) return failure("invalid_plan", `plan.operations[${index}] must be a JSON object`);
+      if (operation.type === "add_asset" || operation.type === "update_asset_identity") {
+        if (!isRecord(operation.asset) || operation.asset.channel !== channel.channel) {
+          return failure("invalid_plan", `plan.operations[${index}].asset.channel must match plan.proposal.channel`);
+        }
+      }
+    }
+  }
+  if (!value.applicationAuthorized && value.operations.length !== 0) {
+    return failure("invalid_plan", "rejected plans must contain no operations");
+  }
+  if (!isRecord(value.technicalValidation) || !isRecord(value.simulatedResult)) {
+    return failure("invalid_plan", "plan technicalValidation and simulatedResult must be objects");
+  }
+  const technicalFields = exactFields(
+    value.technicalValidation,
+    version === 1
+      ? ["ok", "proposalSha256", "authorizationSha256", "registryFingerprintVerified", "staleStateDetected"]
+      : ["ok", "proposalSha256", "authorizationSha256", "registryFingerprintVerified", "channelConfigurationVerified", "staleStateDetected"],
+    "plan.technicalValidation",
+    "invalid_plan",
+  );
+  if (technicalFields !== null) return technicalFields;
+  if (
+    value.technicalValidation.ok !== true ||
+    value.technicalValidation.registryFingerprintVerified !== true ||
+    value.technicalValidation.staleStateDetected !== false ||
+    (version === 2 && value.technicalValidation.channelConfigurationVerified !== true)
+  ) {
+    return failure("invalid_plan", "plan.technicalValidation is inconsistent");
+  }
+  const simulatedFields = exactFields(
+    value.simulatedResult,
+    ["registryAssetCountBefore", "registryAssetCountAfter", "packMembershipCountBefore", "packMembershipCountAfter", "registryFingerprintBefore", "registryFingerprintAfter", "packs"],
+    "plan.simulatedResult",
+    "invalid_plan",
+  );
+  if (simulatedFields !== null) return simulatedFields;
+  return Object.freeze({ ok: true, plan: value as unknown as AssetRegistrationApplicationPlan });
 }
 
 export function serializeAssetRegistrationApplicationPlan(

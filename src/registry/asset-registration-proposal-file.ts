@@ -11,6 +11,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import { loadPacks } from "../packs/packs.ts";
 import { loadRegistry } from "./registry.ts";
+import { loadChannels } from "../wiring/channels.ts";
 import {
   proposeAssetRegistration,
   serializeAssetRegistrationProposal,
@@ -189,18 +190,20 @@ export async function proposeAssetRegistrationFile(
 
   let registry;
   let packs;
+  let channels: Record<string, unknown>;
   try {
+    channels = loadChannels(channelsPath);
     registry = loadRegistry(registryPath, channelsPath);
     packs = loadPacks(
       packsPath,
       new Set(registry.all().map((asset) => asset.id)),
-      new Set(Object.keys(JSON.parse(await readFile(channelsPath, "utf8")) as Record<string, unknown>)),
+      new Set(Object.keys(channels)),
     );
   } catch (error) {
     return failure("invalid_registration_input", `canonical Registry or Pack definitions are invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  const proposed = proposeAssetRegistration(parsed, registry.all(), packs);
+  const proposed = proposeAssetRegistration(parsed, registry.all(), packs, channels);
   if (!proposed.ok) return proposed;
   const outputBytes = serializeAssetRegistrationProposal(proposed.proposal);
 

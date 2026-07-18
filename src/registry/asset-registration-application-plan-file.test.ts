@@ -19,10 +19,10 @@ const REGISTRY_JSON = {
 const PACKS_JSON = [
   { id: "crypto", display: "Crypto", channel: "crypto", assets: ["btc"] },
 ];
-const CHANNELS_JSON = { crypto: "" };
+const CHANNELS_JSON = { crypto: "1527846955668078663", stocks: "1527846988270534827" };
 
 const INPUT = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   operation: "add",
   asset: {
     id: "example_asset",
@@ -31,12 +31,13 @@ const INPUT = {
     market: "NASDAQ",
     tradingViewSymbol: "NASDAQ:EXAMPLE",
     currency: "USD",
+    channel: "stocks",
   },
   targetPackIds: [],
   decision: {
     reviewerId: "visionx-curator",
     decidedAt: "2026-07-17T22:30:00Z",
-    referenceId: "visionx.asset-registration.example-v1",
+    referenceId: "visionx.asset-registration.example-channel-v2",
     notes: "Schema demonstration only.",
   },
 };
@@ -63,7 +64,7 @@ describe("Asset registration application-plan file custody", () => {
     writeFileSync(channelsPath, JSON.stringify(CHANNELS_JSON));
     const registry = buildRegistry(REGISTRY_JSON, CHANNELS_JSON);
     const packs = buildPacks(PACKS_JSON, new Set(["btc"]), new Set(["crypto"]));
-    const proposed = proposeAssetRegistration(INPUT, registry.all(), packs);
+    const proposed = proposeAssetRegistration(INPUT, registry.all(), packs, CHANNELS_JSON);
     if (!proposed.ok) throw new Error(proposed.detail);
     const proposalBytes = serializeAssetRegistrationProposal(proposed.proposal);
     writeFileSync(proposalPath, proposalBytes);
@@ -73,7 +74,7 @@ describe("Asset registration application-plan file custody", () => {
       proposalSha256: sha(proposalBytes),
       reviewerId: "visionx-curator",
       decidedAt: "2026-07-18T00:30:00Z",
-      referenceId: "visionx.asset-application.example-v1",
+      referenceId: "visionx.asset-application.example-channel-v2",
       packPlacements: [],
       notes: "Authorize planning only.",
     }, null, 2)}\n`);
@@ -93,6 +94,24 @@ describe("Asset registration application-plan file custody", () => {
     const output = readFileSync(outputPath);
     expect(output.at(-1)).toBe(10);
     expect(JSON.parse(output.toString("utf8"))).toMatchObject({ applicationStatus: "planned_not_applied" });
+  });
+
+  it("produces byte-identical plan bytes across caller path locations", async () => {
+    const secondProposalPath = join(dir, "renamed-proposal.json");
+    const secondAuthorizationPath = join(dir, "renamed-authorization.json");
+    const secondOutputPath = join(dir, "renamed-plan.json");
+    writeFileSync(secondProposalPath, readFileSync(proposalPath));
+    writeFileSync(secondAuthorizationPath, readFileSync(authorizationPath));
+
+    expect(await planAssetRegistrationApplicationFile(options())).toMatchObject({ ok: true });
+    expect(await planAssetRegistrationApplicationFile({
+      ...options(),
+      proposalPath: secondProposalPath,
+      authorizationPath: secondAuthorizationPath,
+      outputPath: secondOutputPath,
+    })).toMatchObject({ ok: true });
+
+    expect(readFileSync(secondOutputPath).equals(readFileSync(outputPath))).toBe(true);
   });
 
   it("rejects input collisions and existing output without overwrite", async () => {

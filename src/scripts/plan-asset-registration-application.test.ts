@@ -37,12 +37,12 @@ describe("plan-asset-registration-application CLI", () => {
     const channels = JSON.parse(readFileSync(resolve("config/channels.json"), "utf8")) as Record<string, unknown>;
     const packs = loadPacks(resolve("definitions/packs.json"), new Set(registry.all().map((asset) => asset.id)), new Set(Object.keys(channels)));
     const proposed = proposeAssetRegistration({
-      schemaVersion: 1,
+      schemaVersion: 2,
       operation: "add",
-      asset: { id: "example_asset", displayName: "Example Asset", symbol: "EXAMPLE", market: "NASDAQ", tradingViewSymbol: "NASDAQ:EXAMPLE", currency: "USD" },
+      asset: { id: "example_asset", displayName: "Example Asset", symbol: "EXAMPLE", market: "NASDAQ", tradingViewSymbol: "NASDAQ:EXAMPLE", currency: "USD", channel: "stocks" },
       targetPackIds: [],
-      decision: { reviewerId: "visionx-curator", decidedAt: "2026-07-17T22:30:00Z", referenceId: "visionx.asset-registration.example-v1", notes: "Schema demonstration only." },
-    }, registry.all(), packs);
+      decision: { reviewerId: "visionx-curator", decidedAt: "2026-07-17T22:30:00Z", referenceId: "visionx.asset-registration.example-channel-v2", notes: "Schema demonstration only." },
+    }, registry.all(), packs, channels);
     if (!proposed.ok) throw new Error(proposed.detail);
     const proposalBytes = serializeAssetRegistrationProposal(proposed.proposal);
     writeFileSync(proposalPath, proposalBytes);
@@ -52,7 +52,7 @@ describe("plan-asset-registration-application CLI", () => {
       proposalSha256: sha(proposalBytes),
       reviewerId: "visionx-curator",
       decidedAt: "2026-07-18T00:30:00Z",
-      referenceId: "visionx.asset-application.example-v1",
+      referenceId: "visionx.asset-application.example-channel-v2",
       packPlacements: [],
       notes: "Authorize planning only.",
     }, null, 2)}\n`);

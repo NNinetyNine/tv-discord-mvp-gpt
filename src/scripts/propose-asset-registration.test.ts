@@ -18,17 +18,30 @@ describe("propose-asset-registration CLI", () => {
     expect(parseProposeAssetRegistrationArguments(["node", "script", "--input", "a"])).toMatchObject({ ok: false, reason: "invalid_arguments" });
   });
 
-  it("prints exactly one structured success result for a fictional proposal", async () => {
+  it("prints exactly one structured v2 success result", async () => {
     const dir = mkdtempSync(join(tmpdir(), "visionx-proposal-cli-"));
     dirs.push(dir);
     const input = join(dir, "input.json");
     const output = join(dir, "output.json");
     writeFileSync(input, JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       operation: "add",
-      asset: { id: "example_asset", displayName: "Example Asset", symbol: "EXAMPLE", market: "NASDAQ", tradingViewSymbol: "NASDAQ:EXAMPLE", currency: "USD" },
+      asset: {
+        id: "example_asset",
+        displayName: "Example Asset",
+        symbol: "EXAMPLE",
+        market: "NASDAQ",
+        tradingViewSymbol: "NASDAQ:EXAMPLE",
+        currency: "USD",
+        channel: "stocks",
+      },
       targetPackIds: [],
-      decision: { reviewerId: "visionx-curator", decidedAt: "2026-07-17T22:30:00Z", referenceId: "visionx.asset-registration.example-v1", notes: "Schema demonstration only." },
+      decision: {
+        reviewerId: "visionx-curator",
+        decidedAt: "2026-07-17T22:30:00Z",
+        referenceId: "visionx.asset-registration.example-channel-v2",
+        notes: "Schema demonstration only.",
+      },
     }));
     const stdout: string[] = [];
     const stderr: string[] = [];
@@ -36,7 +49,27 @@ describe("propose-asset-registration CLI", () => {
     expect(exit).toBe(0);
     expect(stdout).toHaveLength(1);
     expect(stderr).toHaveLength(0);
-    expect(JSON.parse(stdout[0] ?? "{}")).toMatchObject({ ok: true, proposal: { applicationStatus: "not_applied" } });
-    expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ applicationStatus: "not_applied" });
+    expect(JSON.parse(stdout[0] ?? "{}")).toMatchObject({ ok: true, proposal: { schemaVersion: 2, asset: { channel: "stocks" }, applicationStatus: "not_applied" } });
+    expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ schemaVersion: 2, applicationStatus: "not_applied" });
+  });
+
+  it("returns nonzero when explicit channel is missing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "visionx-proposal-cli-missing-channel-"));
+    dirs.push(dir);
+    const input = join(dir, "input.json");
+    const output = join(dir, "output.json");
+    writeFileSync(input, JSON.stringify({
+      schemaVersion: 2,
+      operation: "add",
+      asset: { id: "example_asset", displayName: "Example Asset", symbol: "EXAMPLE", market: "NASDAQ", tradingViewSymbol: "NASDAQ:EXAMPLE", currency: "USD" },
+      targetPackIds: [],
+      decision: { reviewerId: "visionx-curator", decidedAt: "2026-07-17T22:30:00Z", referenceId: "visionx.asset-registration.example-channel-v2" },
+    }));
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const exit = await main(["node", "script", "--input", input, "--output", output], (line) => stdout.push(line), (line) => stderr.push(line));
+    expect(exit).toBe(1);
+    expect(stdout).toHaveLength(0);
+    expect(stderr).toHaveLength(1);
   });
 });
