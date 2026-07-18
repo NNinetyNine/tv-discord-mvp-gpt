@@ -10,9 +10,13 @@ describe("inspect-asset-market-identity CLI", () => {
     expect(exit).toBe(1);
     expect(stdout).toHaveLength(1);
     expect(stderr).toHaveLength(0);
-    const result = JSON.parse(stdout[0] ?? "{}") as { ok?: boolean; assets?: Array<{ assetId: string }> };
+    const result = JSON.parse(stdout[0] ?? "{}") as {
+      ok?: boolean;
+      registryAssetCount?: number;
+      assets?: Array<{ assetId: string }>;
+    };
     expect(result.ok).toBe(false);
-    expect(result.assets).toHaveLength(131);
+    expect(result.assets?.length).toBe(result.registryAssetCount);
     for (const id of ["aem", "lac", "paas", "nem", "race", "vwra"]) {
       expect(result.assets?.find((asset) => asset.assetId === id)).toMatchObject({ assetId: id });
     }

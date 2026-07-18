@@ -27,11 +27,11 @@ describe("propose-asset-registration CLI", () => {
       schemaVersion: 2,
       operation: "add",
       asset: {
-        id: "example_asset",
-        displayName: "Example Asset",
-        symbol: "EXAMPLE",
+        id: "proposal_cli_test_asset",
+        displayName: "Proposal CLI Test Asset",
+        symbol: "PROPOSALCLITEST",
         market: "NASDAQ",
-        tradingViewSymbol: "NASDAQ:EXAMPLE",
+        tradingViewSymbol: "NASDAQ:PROPOSALCLITEST",
         currency: "USD",
         channel: "stocks",
       },
@@ -39,7 +39,7 @@ describe("propose-asset-registration CLI", () => {
       decision: {
         reviewerId: "visionx-curator",
         decidedAt: "2026-07-17T22:30:00Z",
-        referenceId: "visionx.asset-registration.example-channel-v2",
+        referenceId: "visionx.asset-registration.proposal-cli-test-v2",
         notes: "Schema demonstration only.",
       },
     }));

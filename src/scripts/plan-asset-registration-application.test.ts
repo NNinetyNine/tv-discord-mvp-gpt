@@ -39,9 +39,9 @@ describe("plan-asset-registration-application CLI", () => {
     const proposed = proposeAssetRegistration({
       schemaVersion: 2,
       operation: "add",
-      asset: { id: "example_asset", displayName: "Example Asset", symbol: "EXAMPLE", market: "NASDAQ", tradingViewSymbol: "NASDAQ:EXAMPLE", currency: "USD", channel: "stocks" },
+      asset: { id: "planning_cli_test_asset", displayName: "Planning CLI Test Asset", symbol: "PLANNINGCLITEST", market: "NASDAQ", tradingViewSymbol: "NASDAQ:PLANNINGCLITEST", currency: "USD", channel: "stocks" },
       targetPackIds: [],
-      decision: { reviewerId: "visionx-curator", decidedAt: "2026-07-17T22:30:00Z", referenceId: "visionx.asset-registration.example-channel-v2", notes: "Schema demonstration only." },
+      decision: { reviewerId: "visionx-curator", decidedAt: "2026-07-17T22:30:00Z", referenceId: "visionx.asset-registration.planning-cli-test-v2", notes: "Schema demonstration only." },
     }, registry.all(), packs, channels);
     if (!proposed.ok) throw new Error(proposed.detail);
     const proposalBytes = serializeAssetRegistrationProposal(proposed.proposal);
@@ -52,7 +52,7 @@ describe("plan-asset-registration-application CLI", () => {
       proposalSha256: sha(proposalBytes),
       reviewerId: "visionx-curator",
       decidedAt: "2026-07-18T00:30:00Z",
-      referenceId: "visionx.asset-application.example-channel-v2",
+      referenceId: "visionx.asset-application.planning-cli-test-v2",
       packPlacements: [],
       notes: "Authorize planning only.",
     }, null, 2)}\n`);
