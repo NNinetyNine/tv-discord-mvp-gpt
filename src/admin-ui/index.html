@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>VisionX Administration</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">VisionX local administration</p>
+      <h1>Curator workspace</h1>
+    </div>
+    <div class="header-status" role="status">
+      <strong>Read-only canonical state</strong>
+      <span>Draft saves never modify live Pack definitions.</span>
+    </div>
+  </header>
+
+  <nav class="primary-nav" aria-label="Administration views">
+    <button type="button" data-view="dashboard" aria-current="page">Dashboard</button>
+    <button type="button" data-view="registry">Registry</button>
+    <button type="button" data-view="packs">Packs</button>
+    <button type="button" data-view="drafts">Pack drafts</button>
+  </nav>
+
+  <main id="main-content" tabindex="-1">
+    <section id="global-message" class="message" aria-live="polite" hidden></section>
+
+    <section class="view" data-view-panel="dashboard">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Live source overview</p>
+          <h2>Dashboard</h2>
+        </div>
+        <button id="refresh-live-state" type="button">Refresh live state</button>
+      </div>
+      <div id="dashboard-cards" class="metric-grid" aria-live="polite"></div>
+      <section class="panel">
+        <h3>Source integrity</h3>
+        <dl id="source-integrity" class="definition-grid"></dl>
+      </section>
+    </section>
+
+    <section class="view" data-view-panel="registry" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">131 canonical Assets</p>
+          <h2>Registry</h2>
+        </div>
+      </div>
+      <div class="split-layout">
+        <section class="panel">
+          <form id="asset-search-form" class="search-row" role="search">
+            <label for="asset-search">Search Assets</label>
+            <input id="asset-search" name="q" type="search" placeholder="ID, display name, symbol, or channel" autocomplete="off">
+            <button type="submit">Search</button>
+          </form>
+          <p class="help-text">Results are deterministic and limited to 100 entries.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th scope="col">Asset ID</th><th scope="col">Display name</th><th scope="col">TradingView</th><th scope="col">Channel</th><th scope="col">Packs</th></tr>
+              </thead>
+              <tbody id="asset-table-body"></tbody>
+            </table>
+          </div>
+        </section>
+        <aside id="asset-detail" class="panel detail-panel" aria-live="polite">
+          <h3>Asset details</h3>
+          <p>Select an Asset to inspect its current Pack memberships.</p>
+        </aside>
+      </div>
+    </section>
+
+    <section class="view" data-view-panel="packs" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Live definitions</p>
+          <h2>Packs</h2>
+        </div>
+        <span class="status-chip">Read-only</span>
+      </div>
+      <div class="split-layout">
+        <section class="panel">
+          <h3>Canonical Packs</h3>
+          <ul id="pack-list" class="selection-list"></ul>
+        </section>
+        <section id="pack-detail" class="panel detail-panel" aria-live="polite">
+          <h3>Pack details</h3>
+          <p>Select a Pack to inspect its exact canonical ordering.</p>
+        </section>
+      </div>
+    </section>
+
+    <section class="view" data-view-panel="drafts" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Noncanonical workspace</p>
+          <h2>Pack drafts</h2>
+        </div>
+        <button id="new-draft" type="button">Create draft</button>
+      </div>
+      <div class="draft-banner" role="note">
+        <strong>Draft only — not live, not applied, not released, not published</strong>
+        <span>Saving here never modifies <code>definitions/packs.json</code>.</span>
+      </div>
+      <div class="draft-layout">
+        <aside class="panel">
+          <div class="subheading-row"><h3>Saved drafts</h3><button id="reload-draft-list" type="button">Reload list</button></div>
+          <ul id="draft-list" class="selection-list"></ul>
+        </aside>
+        <section class="panel draft-editor" aria-labelledby="draft-editor-heading">
+          <div class="subheading-row">
+            <div>
+              <h3 id="draft-editor-heading">Draft editor</h3>
+              <p id="draft-revision-state" class="help-text">No draft loaded.</p>
+            </div>
+            <span id="unsaved-indicator" class="status-chip" hidden>Unsaved changes</span>
+          </div>
+
+          <form id="draft-form">
+            <div class="field-grid">
+              <label>Draft ID<input id="draft-id" name="id" required pattern="[a-z0-9][a-z0-9_-]{0,63}" maxlength="64"></label>
+              <label>Display name<input id="draft-display-name" name="displayName" required maxlength="120"></label>
+            </div>
+            <label>Description<textarea id="draft-description" name="description" maxlength="1000" rows="3"></textarea></label>
+          </form>
+
+          <section class="draft-assets" aria-labelledby="draft-assets-heading">
+            <div class="subheading-row"><h4 id="draft-assets-heading">Ordered Assets</h4><span id="draft-asset-count">0 Assets</span></div>
+            <div class="asset-picker">
+              <label for="draft-asset-search">Search registered Assets</label>
+              <div class="search-row">
+                <input id="draft-asset-search" type="search" placeholder="Search Registry" autocomplete="off">
+                <button id="draft-asset-search-button" type="button">Search</button>
+              </div>
+              <ul id="draft-asset-search-results" class="search-results"></ul>
+            </div>
+            <ol id="draft-assets-list" class="ordered-assets"></ol>
+          </section>
+
+          <section id="draft-validation" class="validation-summary" aria-live="polite" aria-labelledby="validation-heading">
+            <h4 id="validation-heading">Validation result</h4>
+            <p>No validation has run.</p>
+          </section>
+
+          <div class="action-row">
+            <button id="save-draft" type="button">Save draft explicitly</button>
+            <button id="reload-draft" type="button">Reload saved revision</button>
+            <button id="validate-draft" type="button">Validate draft</button>
+            <button id="export-draft" type="button">Export canonical JSON</button>
+            <button id="delete-draft" class="danger" type="button">Delete draft</button>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Local loopback administration service. No telemetry, external resources, or automatic publication.</p>
+  </footer>
+</body>
+</html>

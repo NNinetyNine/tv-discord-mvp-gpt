@@ -15,7 +15,8 @@
     "load-chart": "tsx src/scripts/load-chart.ts",
     "inspect-buttons": "tsx src/scripts/inspect-buttons.ts",
     "snapshot-spike": "tsx src/scripts/snapshot-spike.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "admin": "tsx src/scripts/start-admin.ts"
   },
   "dependencies": {
     "discord.js": "^14.26.4",
