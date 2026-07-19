@@ -7,6 +7,9 @@ const state = {
   unsaved: false,
   promotionId: null,
   logicalChannels: [],
+  reviewApproved: false,
+  authorizationApproved: false,
+  applicationCompleted: false,
 };
 
 const qs = (selector) => document.querySelector(selector);
@@ -54,8 +57,6 @@ function setView(view) {
   qsa("[data-view]").forEach((button) => button.setAttribute("aria-current", button.dataset.view === view ? "page" : "false"));
   qs("#main-content").focus();
   if (view === "dashboard") void loadDashboard();
-void loadLogicalChannels();
-void updatePromotionOperationUi();
   if (view === "registry") void searchAssets("");
   if (view === "packs") void loadPacks();
   if (view === "drafts") void loadDraftList();
@@ -253,6 +254,9 @@ function populateDraft(record, savedBytes = null) {
   state.draftAssets = [...draft.assetIds];
   state.savedDraftBytes = savedBytes;
   state.promotionId = null;
+  state.reviewApproved = false;
+  state.authorizationApproved = false;
+  state.applicationCompleted = false;
   qs("#draft-id").value = draft.id; qs("#draft-id").readOnly = draft.revision > 1 || savedBytes !== null;
   qs("#draft-display-name").value = draft.displayName;
   qs("#draft-description").value = draft.description ?? "";
@@ -374,12 +378,57 @@ function promotionRequestSnapshot() {
   };
 }
 
+async function promotionArtifactJson(name) {
+  if (!state.currentDraft?.id || !state.promotionId) throw new Error("No promotion is selected.");
+  const response = await fetch(`/api/v1/pack-drafts/${encodeURIComponent(state.currentDraft.id)}/promotion/${state.promotionId}/artifacts/${encodeURIComponent(name)}`);
+  if (!response.ok) throw new Error(`Could not load ${name}.`);
+  return await response.json();
+}
+
+function updatePackApplyEnabled() {
+  const exactConfirmation = qs("#pack-application-confirmation").value === "APPLY PACK SOURCE CHANGE";
+  qs("#apply-pack-source-change").disabled = !(state.reviewApproved && state.authorizationApproved && exactConfirmation && !state.applicationCompleted);
+}
+
+function renderReviewBindings(receipt, artifacts) {
+  const target = qs("#pack-review-bindings");
+  target.replaceChildren();
+  const sourceReceiptArtifact = artifacts.find((entry) => entry.name === "pack-source-change.json");
+  const rows = [
+    ["Operation", receipt.operation],
+    ["Pack ID", receipt.pack.id],
+    ["Display", receipt.pack.display],
+    ["Logical channel", receipt.pack.channel],
+    ["Ordered membership", receipt.pack.assetIds.join(" → ")],
+    ["Current Packs SHA-256", receipt.sourceState.packs.beforeSha256],
+    ["Expected Packs SHA-256", receipt.sourceState.packs.afterSha256],
+    ["Patch SHA-256", receipt.patch.sha256],
+    ["Source-change receipt SHA-256", sourceReceiptArtifact?.sha256 ?? "Unavailable"],
+    ["Changed paths", receipt.patch.changedPaths.join(", ")],
+  ];
+  for (const [label, value] of rows) {
+    const dt = document.createElement("dt"); dt.textContent = label;
+    const dd = document.createElement("dd"); dd.textContent = String(value);
+    target.append(dt, dd);
+  }
+}
+
 async function renderPromotionArtifacts() {
   const list = qs("#promotion-artifacts"); list.replaceChildren();
-  if (!state.currentDraft?.id || !state.promotionId) { qs("#promotion-state").textContent = "No promotion artifacts prepared."; return; }
+  state.reviewApproved = false;
+  state.authorizationApproved = false;
+  state.applicationCompleted = false;
+  if (!state.currentDraft?.id || !state.promotionId) {
+    qs("#promotion-state").textContent = "No promotion artifacts prepared.";
+    qs("#pack-review-status").textContent = "No Pack source-change review exists.";
+    qs("#pack-authorization-status").textContent = "No Pack application authorization exists.";
+    qs("#pack-application-status").textContent = "Not applied.";
+    updatePackApplyEnabled();
+    return;
+  }
   try {
     const result = await api(`/api/v1/pack-drafts/${encodeURIComponent(state.currentDraft.id)}/promotion/${state.promotionId}/artifacts`);
-    qs("#promotion-state").textContent = `Prepared promotion ${state.promotionId.slice(0, 12)}… — canonical Pack source has not changed.`;
+    qs("#promotion-state").textContent = `Prepared promotion ${state.promotionId.slice(0, 12)}… — canonical Pack source has not changed unless an explicit application receipt is present.`;
     for (const artifact of result.artifacts) {
       const item = document.createElement("li");
       const link = document.createElement("a");
@@ -387,6 +436,29 @@ async function renderPromotionArtifacts() {
       link.textContent = `Download ${artifact.name} — ${artifact.bytes} bytes — SHA-256 ${artifact.sha256}`;
       item.append(link); list.append(item);
     }
+    const names = new Set(result.artifacts.map((entry) => entry.name));
+    if (names.has("pack-source-change.json")) renderReviewBindings(await promotionArtifactJson("pack-source-change.json"), result.artifacts);
+    if (names.has("pack-source-review.json")) {
+      const review = await promotionArtifactJson("pack-source-review.json");
+      state.reviewApproved = review.decision === "approved" && review.reviewStatus === "approved_not_authorized_for_application";
+      qs("#pack-review-status").textContent = state.reviewApproved
+        ? "Independent review approved. Review approval does not authorize application."
+        : "Independent review rejected. Application is blocked.";
+    } else qs("#pack-review-status").textContent = "No Pack source-change review exists.";
+    if (names.has("pack-application-authorization.json")) {
+      const authorization = await promotionArtifactJson("pack-application-authorization.json");
+      state.authorizationApproved = authorization.decision === "approved";
+      qs("#pack-authorization-status").textContent = state.authorizationApproved
+        ? "Approved authorization stored. It is bound to the exact reviewed source change and has not applied it."
+        : "Rejected authorization stored. Application is blocked.";
+    } else qs("#pack-authorization-status").textContent = "No Pack application authorization exists.";
+    if (names.has("pack-source-application.json")) {
+      const receipt = await promotionArtifactJson("pack-source-application.json");
+      const artifact = result.artifacts.find((entry) => entry.name === "pack-source-application.json");
+      state.applicationCompleted = true;
+      qs("#pack-application-status").textContent = `Applied to canonical Pack source. Receipt SHA-256 ${artifact?.sha256 ?? "unknown"}; ${artifact?.bytes ?? 0} bytes. Packs ${receipt.sourceState.packs.beforeSha256} → ${receipt.sourceState.packs.afterSha256}.`;
+    } else qs("#pack-application-status").textContent = "Not applied.";
+    updatePackApplyEnabled();
   } catch (error) { announce(error.message, true); }
 }
 
@@ -419,6 +491,46 @@ async function createPromotionSourceChange() {
   } catch (error) { announce(error.message, true); }
 }
 
+async function generatePackReview() {
+  if (!state.promotionId || !state.currentDraft?.id) return announce("Generate the source patch and receipt first.", true);
+  try {
+    const notes = qs("#pack-review-notes").value;
+    const decision = {
+      schemaVersion: 1,
+      decisionType: "visionx.pack-source-change-review-decision",
+      decision: qs("#pack-review-decision").value,
+      reviewerId: qs("#pack-reviewer-id").value,
+      decidedAt: qs("#pack-review-decided-at").value,
+      referenceId: qs("#pack-review-reference-id").value,
+      ...(notes === "" ? {} : { notes }),
+    };
+    await api(`/api/v1/pack-drafts/${encodeURIComponent(state.currentDraft.id)}/promotion/${state.promotionId}/review`, { method: "POST", body: JSON.stringify({ decision }) });
+    await renderPromotionArtifacts();
+    announce(decision.decision === "approved" ? "Independent review approved. Separate application authorization is still required." : "Independent review rejected. Application is blocked.");
+  } catch (error) { announce(error.message, true); }
+}
+
+async function storePackApplicationAuthorization() {
+  if (!state.promotionId || !state.currentDraft?.id) return announce("An approved review is required first.", true);
+  try {
+    const authorization = JSON.parse(qs("#pack-application-authorization-json").value);
+    await api(`/api/v1/pack-drafts/${encodeURIComponent(state.currentDraft.id)}/promotion/${state.promotionId}/application-authorization`, { method: "POST", body: JSON.stringify({ authorization }) });
+    await renderPromotionArtifacts();
+    announce("Separate Pack application authorization stored. No source change was applied.");
+  } catch (error) { announce(error.message, true); }
+}
+
+async function applyPackSourceChange() {
+  if (!state.promotionId || !state.currentDraft?.id) return announce("No promotion is selected.", true);
+  try {
+    const confirmation = qs("#pack-application-confirmation").value;
+    const result = await api(`/api/v1/pack-drafts/${encodeURIComponent(state.currentDraft.id)}/promotion/${state.promotionId}/apply`, { method: "POST", body: JSON.stringify({ confirmation }) });
+    await renderPromotionArtifacts();
+    await loadDashboard();
+    announce(`Applied to canonical Pack source. Application receipt SHA-256 ${result.receiptSha256}.`);
+  } catch (error) { announce(error.message, true); }
+}
+
 qsa("[data-view]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
 qs("#refresh-live-state").addEventListener("click", () => void refreshLiveState());
 qs("#asset-search-form").addEventListener("submit", (event) => { event.preventDefault(); void searchAssets(qs("#asset-search").value); });
@@ -438,6 +550,14 @@ qs("#create-promotion-source-change").addEventListener("click", () => void creat
 qs("#planning-authorization-file").addEventListener("change", async (event) => {
   const file = event.target.files?.[0];
   if (file) qs("#planning-authorization-json").value = await file.text();
+});
+qs("#generate-pack-review").addEventListener("click", () => void generatePackReview());
+qs("#store-pack-application-authorization").addEventListener("click", () => void storePackApplicationAuthorization());
+qs("#apply-pack-source-change").addEventListener("click", () => void applyPackSourceChange());
+qs("#pack-application-confirmation").addEventListener("input", updatePackApplyEnabled);
+qs("#pack-application-authorization-file").addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  if (file) qs("#pack-application-authorization-json").value = await file.text();
 });
 qsa("#draft-form input, #draft-form textarea").forEach((field) => field.addEventListener("input", () => setUnsaved(true)));
 window.addEventListener("beforeunload", (event) => { if (state.unsaved) event.preventDefault(); });

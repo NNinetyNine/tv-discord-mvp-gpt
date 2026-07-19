@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 
 import type { Asset } from "../types.ts";
@@ -33,6 +35,17 @@ import {
   validatePackSourcePlanningAuthorization,
   type PackPromotionContext,
 } from "../packs/pack-draft-promotion.ts";
+
+import {
+  reviewPackSourceChange,
+  serializePackSourceChangeReviewDecision,
+  serializePackSourceChangeReviewReceipt,
+  validatePackSourceChangeReviewDecision,
+} from "../packs/pack-source-change-review.ts";
+import {
+  serializePackSourceApplicationAuthorization,
+  validatePackSourceApplicationAuthorization,
+} from "../packs/pack-source-application-authorization.ts";
 
 const REGISTRY_RELATIVE_PATH = "definitions/registry.json" as const;
 const PACKS_RELATIVE_PATH = "definitions/packs.json" as const;
@@ -172,6 +185,22 @@ function parseJson(bytes: Buffer, label: string): unknown {
   } catch {
     throw new AdminError("unreadable_source", `${label} is not valid JSON.`);
   }
+}
+
+
+async function verifyPackPatch(patchBytes: Buffer, packsBytes: Buffer): Promise<boolean> {
+  const directory = await mkdtemp(join(tmpdir(), "visionx-admin-pack-review-check-"));
+  try {
+    await mkdir(join(directory, "definitions"), { recursive: true });
+    await writeFile(join(directory, "definitions/packs.json"), packsBytes);
+    const patchPath = join(directory, "change.patch");
+    await writeFile(patchPath, patchBytes);
+    return await new Promise<boolean>((done) => {
+      const child = spawn("git", ["apply", "--check", "--whitespace=nowarn", patchPath], { cwd: directory, stdio: "ignore", env: { ...process.env, LC_ALL: "C", LANG: "C" } });
+      child.once("error", () => done(false));
+      child.once("exit", (code) => done(code === 0));
+    });
+  } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
 function assetSummary(asset: Asset, packIds: readonly string[]): AdminAssetSummary {
@@ -497,6 +526,82 @@ export class AdminService {
       "packs-after.json": generated.value.packsAfter,
     });
     return Object.freeze({ promotionId, artifacts });
+  }
+
+
+  async reviewPackPromotion(draftId: string, promotionId: string, decisionValue: unknown): Promise<{ readonly promotionId: string; readonly artifacts: readonly unknown[] }> {
+    const requestBytes = await this.promotions.readArtifact(draftId, promotionId, "promotion-request.json");
+    const proposalBytes = await this.promotions.readArtifact(draftId, promotionId, "pack-proposal.json");
+    const planningAuthorizationBytes = await this.promotions.readArtifact(draftId, promotionId, "planning-authorization.json");
+    const planBytes = await this.promotions.readArtifact(draftId, promotionId, "pack-application-plan.json");
+    const patchBytes = await this.promotions.readArtifact(draftId, promotionId, "pack-source.patch");
+    const sourceChangeBytes = await this.promotions.readArtifact(draftId, promotionId, "pack-source-change.json");
+    const decision = validatePackSourceChangeReviewDecision(decisionValue);
+    if (!decision.ok) throw new AdminError(decision.reason as never, decision.detail);
+    const decisionBytes = serializePackSourceChangeReviewDecision(decision.value);
+    const requestValue = JSON.parse(requestBytes.toString("utf8")) as unknown;
+    const requestValidation = validatePackDraftPromotionRequest(requestValue, this.promotionContext().channels);
+    if (!requestValidation.ok) throw new AdminError(requestValidation.reason as never, requestValidation.detail);
+    const draft = await this.draftArtifact(requestValidation.value.draftId);
+    const context = this.promotionContext();
+    const reviewed = reviewPackSourceChange({
+      promotionRequestValue: requestValue, promotionRequestBytes: requestBytes, promotionRequestSha256: promotionSha256(requestBytes),
+      draftBytes: draft.bytes, draftSha256: promotionSha256(draft.bytes),
+      proposalValue: JSON.parse(proposalBytes.toString("utf8")) as unknown, proposalBytes, proposalSha256: promotionSha256(proposalBytes),
+      planningAuthorizationValue: JSON.parse(planningAuthorizationBytes.toString("utf8")) as unknown, planningAuthorizationBytes, planningAuthorizationSha256: promotionSha256(planningAuthorizationBytes),
+      applicationPlanValue: JSON.parse(planBytes.toString("utf8")) as unknown, applicationPlanBytes: planBytes, applicationPlanSha256: promotionSha256(planBytes),
+      sourcePatchBytes: patchBytes, sourcePatchSha256: promotionSha256(patchBytes),
+      sourceChangeReceiptValue: JSON.parse(sourceChangeBytes.toString("utf8")) as unknown, sourceChangeReceiptBytes: sourceChangeBytes, sourceChangeReceiptSha256: promotionSha256(sourceChangeBytes),
+      reviewDecisionValue: decision.value, reviewDecisionBytes: decisionBytes, reviewDecisionSha256: promotionSha256(decisionBytes),
+      context, patchApplyCheckVerified: await verifyPackPatch(patchBytes, context.packsBytes),
+    });
+    if (!reviewed.ok) throw new AdminError(reviewed.reason as never, reviewed.detail);
+    const artifacts = await this.promotions.writeArtifacts(draftId, promotionId, {
+      "pack-review-decision.json": decisionBytes,
+      "pack-source-review.json": serializePackSourceChangeReviewReceipt(reviewed.receipt),
+    });
+    return Object.freeze({ promotionId, artifacts });
+  }
+
+  async storePackApplicationAuthorization(draftId: string, promotionId: string, authorizationValue: unknown): Promise<{ readonly promotionId: string; readonly artifacts: readonly unknown[] }> {
+    const authorization = validatePackSourceApplicationAuthorization(authorizationValue);
+    if (!authorization.ok) throw new AdminError(authorization.reason as never, authorization.detail);
+    const reviewBytes = await this.promotions.readArtifact(draftId, promotionId, "pack-source-review.json");
+    const sourceChangeBytes = await this.promotions.readArtifact(draftId, promotionId, "pack-source-change.json");
+    const planBytes = await this.promotions.readArtifact(draftId, promotionId, "pack-application-plan.json");
+    const patchBytes = await this.promotions.readArtifact(draftId, promotionId, "pack-source.patch");
+    const auth = authorization.value;
+    if (auth.packSourceChangeReviewSha256 !== promotionSha256(reviewBytes) || auth.packSourceChangeReceiptSha256 !== promotionSha256(sourceChangeBytes) || auth.packApplicationPlanSha256 !== promotionSha256(planBytes) || auth.sourcePatchSha256 !== promotionSha256(patchBytes)) {
+      throw new AdminError("application_authorization_hash_mismatch", "Application authorization does not bind the exact prepared artifacts.");
+    }
+    const bytes = serializePackSourceApplicationAuthorization(auth);
+    const artifacts = await this.promotions.writeArtifacts(draftId, promotionId, { "pack-application-authorization.json": bytes });
+    return Object.freeze({ promotionId, artifacts });
+  }
+
+  async applyPackPromotion(draftId: string, promotionId: string, confirmation: unknown): Promise<{ readonly promotionId: string; readonly receiptSha256: string; readonly receiptBytes: number; readonly receipt: unknown }> {
+    if (confirmation === undefined || confirmation === null || confirmation === "") throw new AdminError("application_confirmation_required", "Exact application confirmation is required.");
+    if (confirmation !== "APPLY PACK SOURCE CHANGE") throw new AdminError("application_confirmation_invalid", "Confirmation must equal APPLY PACK SOURCE CHANGE exactly.");
+    const names = {
+      promotionRequestPath: "promotion-request.json", proposalPath: "pack-proposal.json", planningAuthorizationPath: "planning-authorization.json",
+      planPath: "pack-application-plan.json", patchPath: "pack-source.patch", sourceChangePath: "pack-source-change.json",
+      reviewDecisionPath: "pack-review-decision.json", reviewPath: "pack-source-review.json", applicationAuthorizationPath: "pack-application-authorization.json",
+      receiptOutputPath: "pack-source-application.json",
+    } as const;
+    const paths = Object.fromEntries(await Promise.all(Object.entries(names).map(async ([key, name]) => [key, await this.promotions.artifactPath(draftId, promotionId, name)]))) as unknown as Record<keyof typeof names, string>;
+    const { applyPackSourceChangeFile } = await import("../packs/pack-source-application-file.ts");
+    const result = await applyPackSourceChangeFile({ repositoryRoot: this.repositoryRoot, workspaceRoot: this.workspace.root, ...paths });
+    if (!result.ok) throw new AdminError(result.reason as never, result.detail, result.reason === "output_already_exists" ? 409 : 400);
+    await this.refresh();
+    return Object.freeze({ promotionId, receiptSha256: result.receiptSha256, receiptBytes: result.receiptBytes, receipt: result.receipt });
+  }
+
+  async packPromotionApplicationStatus(draftId: string, promotionId: string): Promise<Readonly<Record<string, unknown>>> {
+    const artifacts = await this.promotions.listArtifacts(draftId, promotionId);
+    const application = artifacts.find((entry) => entry.name === "pack-source-application.json");
+    if (application === undefined) return Object.freeze({ schemaVersion: 1, promotionId, applicationStatus: "not_applied", applied: false, artifacts });
+    const bytes = await this.promotions.readArtifact(draftId, promotionId, "pack-source-application.json");
+    return Object.freeze({ schemaVersion: 1, promotionId, applicationStatus: "applied", applied: true, applicationReceiptSha256: promotionSha256(bytes), applicationReceiptBytes: bytes.length, artifacts });
   }
 
   async listPackPromotionArtifacts(draftId: string, promotionId: string): Promise<readonly unknown[]> {

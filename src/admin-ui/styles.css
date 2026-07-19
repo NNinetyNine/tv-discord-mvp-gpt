@@ -88,3 +88,9 @@ select:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .immutable-field { display: grid; gap: .35rem; padding: .55rem .65rem; border: 1px solid var(--border); border-radius: .45rem; background: var(--panel-raised); }
 .immutable-field span { font-weight: 650; }
 #planning-authorization-json { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+.trust-gate { display: grid; gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+.trust-gate h5 { margin-bottom: 0; }
+.danger-zone { border: 1px solid var(--danger); border-radius: .65rem; padding: 1rem; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+#planning-authorization-json, #pack-application-authorization-json { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }

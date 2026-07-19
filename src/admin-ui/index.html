@@ -201,6 +201,45 @@
               <p id="promotion-state" class="help-text">No promotion artifacts prepared.</p>
               <ul id="promotion-artifacts" class="selection-list"></ul>
             </section>
+            <section class="trust-gate" aria-labelledby="pack-review-heading">
+              <h5 id="pack-review-heading">Review prepared Pack source change</h5>
+              <p class="help-text"><strong>Review approval does not authorize application.</strong> The exact proposal, plan, patch, receipt, Pack channel, and ordered membership are independently reconstructed.</p>
+              <dl id="pack-review-bindings" class="definition-grid"></dl>
+              <div class="field-grid">
+                <label>Review decision
+                  <select id="pack-review-decision">
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
+                </label>
+                <label>Reviewer ID<input id="pack-reviewer-id" maxlength="64" value="visionx-pack-reviewer"></label>
+                <label>Decision timestamp<input id="pack-review-decided-at" maxlength="40" placeholder="2026-07-19T02:00:00Z"></label>
+                <label>Reference ID<input id="pack-review-reference-id" maxlength="96"></label>
+              </div>
+              <label>Review notes<textarea id="pack-review-notes" maxlength="500" rows="3"></textarea></label>
+              <div class="action-row"><button id="generate-pack-review" type="button">Generate independent review</button></div>
+              <p id="pack-review-status" role="status">No Pack source-change review exists.</p>
+            </section>
+
+            <section class="trust-gate" aria-labelledby="pack-authorization-heading">
+              <h5 id="pack-authorization-heading">Authorize Pack source application</h5>
+              <p class="help-text"><strong>Authorization is bound to one exact reviewed source change.</strong> Authorization does not apply it automatically.</p>
+              <label for="pack-application-authorization-json">Application authorization JSON</label>
+              <input id="pack-application-authorization-file" type="file" accept="application/json,.json">
+              <textarea id="pack-application-authorization-json" rows="12" spellcheck="false" placeholder="Paste the separate Pack application authorization JSON here."></textarea>
+              <div class="action-row"><button id="store-pack-application-authorization" type="button">Validate and store authorization artifact</button></div>
+              <p id="pack-authorization-status" role="status">No Pack application authorization exists.</p>
+            </section>
+
+            <section class="trust-gate danger-zone" aria-labelledby="pack-apply-heading">
+              <h5 id="pack-apply-heading">Apply authorized Pack source change</h5>
+              <p><strong>This operation modifies definitions/packs.json.</strong> It does not release or publish anything.</p>
+              <label>Exact confirmation phrase
+                <input id="pack-application-confirmation" autocomplete="off" placeholder="APPLY PACK SOURCE CHANGE">
+              </label>
+              <div class="action-row"><button id="apply-pack-source-change" class="danger" type="button" disabled>Apply authorized Pack source change</button></div>
+              <p id="pack-application-status" role="status">Not applied.</p>
+            </section>
           </section>
         </section>
       </div>

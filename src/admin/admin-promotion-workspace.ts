@@ -13,6 +13,10 @@ export const PACK_PROMOTION_ARTIFACT_NAMES = Object.freeze([
   "pack-source.patch",
   "pack-source-change.json",
   "packs-after.json",
+  "pack-review-decision.json",
+  "pack-source-review.json",
+  "pack-application-authorization.json",
+  "pack-source-application.json",
 ] as const);
 export type PackPromotionArtifactName = (typeof PACK_PROMOTION_ARTIFACT_NAMES)[number];
 const PROMOTION_ID = /^[a-f0-9]{64}$/u;
@@ -94,6 +98,21 @@ export class AdminPromotionWorkspace {
       for (const path of finals.reverse()) await rm(path, { force: true });
       throw new AdminError("finalize_failed", `Could not finalize promotion artifacts: ${error instanceof Error ? error.message : String(error)}`);
     } finally { for (const path of temps) await rm(path, { force: true }); }
+  }
+
+  async artifactPath(draftId: string, promotionId: string, name: PackPromotionArtifactName): Promise<string> {
+    if (!PACK_PROMOTION_ARTIFACT_NAMES.includes(name)) throw new AdminError("route_not_found", "Promotion artifact was not found.", 404);
+    const directory = this.#promotionDirectory(draftId, promotionId);
+    const path = join(directory, name);
+    if (await exists(path)) {
+      const stat = await lstat(path);
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new AdminError("workspace_path_unsafe", "Promotion artifact must be a regular non-symlink file.");
+      const canonical = await realpath(path);
+      if (!pathInside(directory, canonical)) throw new AdminError("workspace_path_unsafe", "Promotion artifact escapes its directory.");
+      return canonical;
+    }
+    const canonicalDirectory = await this.#ensureDirectory(draftId, promotionId);
+    return join(canonicalDirectory, name);
   }
 
   async readArtifact(draftId: string, promotionId: string, name: PackPromotionArtifactName): Promise<Buffer> {

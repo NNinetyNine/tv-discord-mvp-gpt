@@ -297,7 +297,7 @@ async function routeApi(
     return ok(response, await service.createPackPromotionProposal(promotionProposalRoute[1] ?? "", body.request), 201);
   }
 
-  const promotionActionRoute = /^\/api\/v1\/pack-drafts\/([^/]+)\/promotion\/([a-f0-9]{64})\/(plan|source-change|artifacts)(?:\/([^/]+))?$/u.exec(pathname);
+  const promotionActionRoute = /^\/api\/v1\/pack-drafts\/([^/]+)\/promotion\/([a-f0-9]{64})\/(plan|source-change|review|application-authorization|apply|application-status|artifacts)(?:\/([^/]+))?$/u.exec(pathname);
   if (promotionActionRoute !== null) {
     const draftId = promotionActionRoute[1] ?? "";
     const promotionId = promotionActionRoute[2] ?? "";
@@ -316,6 +316,31 @@ async function routeApi(
       if (!isRecord(body)) throw new AdminError("invalid_request", "Promotion source-change body must be an object.");
       exactFields(body, [], "Promotion source-change body");
       return ok(response, await service.generatePackPromotionSourceChange(draftId, promotionId), 201);
+    }
+    if (action === "review") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Pack source review body must be an object.");
+      exactFields(body, ["decision"], "Pack source review body");
+      return ok(response, await service.reviewPackPromotion(draftId, promotionId, body.decision), 201);
+    }
+    if (action === "application-authorization") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Pack application authorization body must be an object.");
+      exactFields(body, ["authorization"], "Pack application authorization body");
+      return ok(response, await service.storePackApplicationAuthorization(draftId, promotionId, body.authorization), 201);
+    }
+    if (action === "apply") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Pack source application body must be an object.");
+      exactFields(body, ["confirmation"], "Pack source application body");
+      return ok(response, await service.applyPackPromotion(draftId, promotionId, body.confirmation), 201);
+    }
+    if (action === "application-status") {
+      if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      return ok(response, await service.packPromotionApplicationStatus(draftId, promotionId));
     }
     if (action === "artifacts" && artifactName === undefined) {
       if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
