@@ -82,3 +82,9 @@ footer { padding: 1rem clamp(1rem, 4vw, 4rem); color: var(--muted); border-top: 
 @media (prefers-reduced-motion: no-preference) {
   button { transition: border-color .15s ease, background-color .15s ease; }
 }
+select { width: 100%; padding: .55rem .65rem; border: 1px solid var(--border); border-radius: .45rem; background: #0f100d; color: var(--text); font: inherit; }
+select:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.promotion-panel { display: grid; gap: 1rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+.immutable-field { display: grid; gap: .35rem; padding: .55rem .65rem; border: 1px solid var(--border); border-radius: .45rem; background: var(--panel-raised); }
+.immutable-field span { font-weight: 650; }
+#planning-authorization-json { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }

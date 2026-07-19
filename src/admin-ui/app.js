@@ -5,6 +5,8 @@ const state = {
   savedDraftBytes: null,
   draftAssets: [],
   unsaved: false,
+  promotionId: null,
+  logicalChannels: [],
 };
 
 const qs = (selector) => document.querySelector(selector);
@@ -52,6 +54,8 @@ function setView(view) {
   qsa("[data-view]").forEach((button) => button.setAttribute("aria-current", button.dataset.view === view ? "page" : "false"));
   qs("#main-content").focus();
   if (view === "dashboard") void loadDashboard();
+void loadLogicalChannels();
+void updatePromotionOperationUi();
   if (view === "registry") void searchAssets("");
   if (view === "packs") void loadPacks();
   if (view === "drafts") void loadDraftList();
@@ -248,6 +252,7 @@ function populateDraft(record, savedBytes = null) {
   state.currentDraft = draft;
   state.draftAssets = [...draft.assetIds];
   state.savedDraftBytes = savedBytes;
+  state.promotionId = null;
   qs("#draft-id").value = draft.id; qs("#draft-id").readOnly = draft.revision > 1 || savedBytes !== null;
   qs("#draft-display-name").value = draft.displayName;
   qs("#draft-description").value = draft.description ?? "";
@@ -324,6 +329,96 @@ async function deleteCurrentDraft() {
   } catch (error) { announce(error.message, true); }
 }
 
+async function loadLogicalChannels() {
+  try {
+    const result = await api("/api/v1/channels");
+    state.logicalChannels = [...result.logicalChannels];
+    const select = qs("#promotion-channel");
+    const current = select.value;
+    select.replaceChildren(new Option("Select explicitly", ""), ...state.logicalChannels.map((channel) => new Option(channel, channel)));
+    if (state.logicalChannels.includes(current)) select.value = current;
+  } catch (error) { announce(error.message, true); }
+}
+
+async function updatePromotionOperationUi() {
+  const operation = qs("#promotion-operation").value;
+  const create = operation === "create_pack";
+  qs("#promotion-channel-field").hidden = !create;
+  qs("#promotion-existing-channel-field").hidden = operation !== "replace_pack_assets";
+  if (operation === "replace_pack_assets" && state.currentDraft?.id) {
+    try {
+      const pack = await api(`/api/v1/packs/${encodeURIComponent(state.currentDraft.id)}`);
+      qs("#promotion-existing-channel").textContent = pack.logicalChannel;
+    } catch { qs("#promotion-existing-channel").textContent = "Pack does not exist"; }
+  }
+}
+
+function promotionRequestSnapshot() {
+  if (!state.currentDraft || state.savedDraftBytes === null) throw new Error("Save the draft before preparing a promotion.");
+  const operation = qs("#promotion-operation").value;
+  if (operation !== "create_pack" && operation !== "replace_pack_assets") throw new Error("Choose create_pack or replace_pack_assets explicitly.");
+  const channel = qs("#promotion-channel").value;
+  if (operation === "create_pack" && channel === "") throw new Error("Select a logical Pack channel explicitly.");
+  const notes = qs("#promotion-notes").value;
+  return {
+    schemaVersion: 1,
+    requestType: "visionx.pack-draft-promotion-request",
+    operation,
+    draftId: state.currentDraft.id,
+    expectedRevision: state.currentDraft.revision,
+    ...(operation === "create_pack" ? { channel } : {}),
+    curatorId: qs("#promotion-curator-id").value,
+    decidedAt: qs("#promotion-decided-at").value,
+    referenceId: qs("#promotion-reference-id").value,
+    ...(notes === "" ? {} : { notes }),
+  };
+}
+
+async function renderPromotionArtifacts() {
+  const list = qs("#promotion-artifacts"); list.replaceChildren();
+  if (!state.currentDraft?.id || !state.promotionId) { qs("#promotion-state").textContent = "No promotion artifacts prepared."; return; }
+  try {
+    const result = await api(`/api/v1/pack-drafts/${encodeURIComponent(state.currentDraft.id)}/promotion/${state.promotionId}/artifacts`);
+    qs("#promotion-state").textContent = `Prepared promotion ${state.promotionId.slice(0, 12)}… — canonical Pack source has not changed.`;
+    for (const artifact of result.artifacts) {
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = `/api/v1/pack-drafts/${encodeURIComponent(state.currentDraft.id)}/promotion/${state.promotionId}/artifacts/${encodeURIComponent(artifact.name)}`;
+      link.textContent = `Download ${artifact.name} — ${artifact.bytes} bytes — SHA-256 ${artifact.sha256}`;
+      item.append(link); list.append(item);
+    }
+  } catch (error) { announce(error.message, true); }
+}
+
+async function createPromotionProposal() {
+  try {
+    const request = promotionRequestSnapshot();
+    const result = await api(`/api/v1/pack-drafts/${encodeURIComponent(state.currentDraft.id)}/promotion/proposal`, { method: "POST", body: JSON.stringify({ request }) });
+    state.promotionId = result.promotionId;
+    await renderPromotionArtifacts();
+    announce("Deterministic Pack proposal prepared. Canonical Pack source has not changed.");
+  } catch (error) { announce(error.message, true); }
+}
+
+async function createPromotionPlan() {
+  if (!state.promotionId || !state.currentDraft?.id) return announce("Create the Pack proposal first.", true);
+  try {
+    const authorization = JSON.parse(qs("#planning-authorization-json").value);
+    await api(`/api/v1/pack-drafts/${encodeURIComponent(state.currentDraft.id)}/promotion/${state.promotionId}/plan`, { method: "POST", body: JSON.stringify({ authorization }) });
+    await renderPromotionArtifacts();
+    announce("Deterministic Pack application plan prepared. Nothing was applied.");
+  } catch (error) { announce(error.message, true); }
+}
+
+async function createPromotionSourceChange() {
+  if (!state.promotionId || !state.currentDraft?.id) return announce("Prepare the proposal and plan first.", true);
+  try {
+    await api(`/api/v1/pack-drafts/${encodeURIComponent(state.currentDraft.id)}/promotion/${state.promotionId}/source-change`, { method: "POST", body: "{}" });
+    await renderPromotionArtifacts();
+    announce("Source patch and receipt prepared for download. Canonical Pack source has not changed.");
+  } catch (error) { announce(error.message, true); }
+}
+
 qsa("[data-view]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
 qs("#refresh-live-state").addEventListener("click", () => void refreshLiveState());
 qs("#asset-search-form").addEventListener("submit", (event) => { event.preventDefault(); void searchAssets(qs("#asset-search").value); });
@@ -336,7 +431,17 @@ qs("#reload-draft").addEventListener("click", () => state.currentDraft?.id && vo
 qs("#validate-draft").addEventListener("click", () => void validateCurrentDraft());
 qs("#export-draft").addEventListener("click", () => void exportCurrentDraft());
 qs("#delete-draft").addEventListener("click", () => void deleteCurrentDraft());
+qs("#promotion-operation").addEventListener("change", () => void updatePromotionOperationUi());
+qs("#create-promotion-proposal").addEventListener("click", () => void createPromotionProposal());
+qs("#create-promotion-plan").addEventListener("click", () => void createPromotionPlan());
+qs("#create-promotion-source-change").addEventListener("click", () => void createPromotionSourceChange());
+qs("#planning-authorization-file").addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  if (file) qs("#planning-authorization-json").value = await file.text();
+});
 qsa("#draft-form input, #draft-form textarea").forEach((field) => field.addEventListener("input", () => setUnsaved(true)));
 window.addEventListener("beforeunload", (event) => { if (state.unsaved) event.preventDefault(); });
 
 void loadDashboard();
+void loadLogicalChannels();
+void updatePromotionOperationUi();

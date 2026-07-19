@@ -5,6 +5,7 @@ import { extname } from "node:path";
 
 import { AdminError, PACK_DRAFT_SCHEMA_VERSION, PACK_DRAFT_TYPE } from "./admin-types.ts";
 import { AdminService } from "./admin-service.ts";
+import { PACK_PROMOTION_ARTIFACT_NAMES, type PackPromotionArtifactName } from "./admin-promotion-workspace.ts";
 
 export const ADMIN_REQUEST_BODY_LIMIT = 65536 as const;
 export const ADMIN_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
@@ -260,6 +261,7 @@ async function routeApi(
 ): Promise<void> {
   const method = request.method ?? "GET";
   if (pathname === "/api/v1/status" && method === "GET") return ok(response, service.status());
+  if (pathname === "/api/v1/channels" && method === "GET") return ok(response, { schemaVersion: 1, logicalChannels: service.logicalChannels() });
   if (pathname === "/api/v1/refresh" && method === "POST") return ok(response, await service.refresh());
   if (pathname === "/api/v1/assets" && method === "GET") {
     return ok(response, service.searchAssets({
@@ -283,6 +285,53 @@ async function routeApi(
       return ok(response, await service.createDraft(body.draft), 201);
     }
     throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+  }
+
+
+  const promotionProposalRoute = /^\/api\/v1\/pack-drafts\/([^/]+)\/promotion\/proposal$/u.exec(pathname);
+  if (promotionProposalRoute !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Promotion proposal body must be an object.");
+    exactFields(body, ["request"], "Promotion proposal body");
+    return ok(response, await service.createPackPromotionProposal(promotionProposalRoute[1] ?? "", body.request), 201);
+  }
+
+  const promotionActionRoute = /^\/api\/v1\/pack-drafts\/([^/]+)\/promotion\/([a-f0-9]{64})\/(plan|source-change|artifacts)(?:\/([^/]+))?$/u.exec(pathname);
+  if (promotionActionRoute !== null) {
+    const draftId = promotionActionRoute[1] ?? "";
+    const promotionId = promotionActionRoute[2] ?? "";
+    const action = promotionActionRoute[3] ?? "";
+    const artifactName = promotionActionRoute[4];
+    if (action === "plan") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Promotion plan body must be an object.");
+      exactFields(body, ["authorization"], "Promotion plan body");
+      return ok(response, await service.planPackPromotion(draftId, promotionId, body.authorization), 201);
+    }
+    if (action === "source-change") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Promotion source-change body must be an object.");
+      exactFields(body, [], "Promotion source-change body");
+      return ok(response, await service.generatePackPromotionSourceChange(draftId, promotionId), 201);
+    }
+    if (action === "artifacts" && artifactName === undefined) {
+      if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      return ok(response, { schemaVersion: 1, promotionId, artifacts: await service.listPackPromotionArtifacts(draftId, promotionId) });
+    }
+    if (action === "artifacts" && artifactName !== undefined) {
+      if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      if (!PACK_PROMOTION_ARTIFACT_NAMES.includes(artifactName as PackPromotionArtifactName)) throw new AdminError("route_not_found", "Promotion artifact was not found.", 404);
+      const bytes = await service.readPackPromotionArtifact(draftId, promotionId, artifactName as PackPromotionArtifactName);
+      securityHeaders(response, true);
+      response.statusCode = 200;
+      response.setHeader("Content-Type", artifactName.endsWith(".patch") ? "text/x-diff; charset=utf-8" : "application/json; charset=utf-8");
+      response.setHeader("Content-Disposition", `attachment; filename="${artifactName}"`);
+      response.end(bytes);
+      return;
+    }
   }
 
   const draftRoute = /^\/api\/v1\/pack-drafts\/([^/]+)(?:\/(validate|export))?$/u.exec(pathname);

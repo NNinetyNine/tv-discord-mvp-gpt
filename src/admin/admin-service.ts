@@ -17,6 +17,22 @@ import {
   validatePackDraft,
 } from "./admin-types.ts";
 import { AdminWorkspace } from "./admin-workspace.ts";
+import { AdminPromotionWorkspace, type PackPromotionArtifactName } from "./admin-promotion-workspace.ts";
+import {
+  currentPackPromotionContext,
+  generatePackSourceChange,
+  planPackSourceChange,
+  proposePackDraftPromotion,
+  serializePackDraftPromotionRequest,
+  serializePackSourceApplicationPlan,
+  serializePackSourceChangeReceipt,
+  serializePackSourcePlanningAuthorization,
+  serializePackSourceProposal,
+  sha256 as promotionSha256,
+  validatePackDraftPromotionRequest,
+  validatePackSourcePlanningAuthorization,
+  type PackPromotionContext,
+} from "../packs/pack-draft-promotion.ts";
 
 const REGISTRY_RELATIVE_PATH = "definitions/registry.json" as const;
 const PACKS_RELATIVE_PATH = "definitions/packs.json" as const;
@@ -172,11 +188,13 @@ function assetSummary(asset: Asset, packIds: readonly string[]): AdminAssetSumma
 export class AdminService {
   readonly repositoryRoot: string;
   readonly workspace: AdminWorkspace;
+  readonly promotions: AdminPromotionWorkspace;
   #state: LiveState;
 
-  private constructor(repositoryRoot: string, workspace: AdminWorkspace, state: LiveState) {
+  private constructor(repositoryRoot: string, workspace: AdminWorkspace, promotions: AdminPromotionWorkspace, state: LiveState) {
     this.repositoryRoot = repositoryRoot;
     this.workspace = workspace;
+    this.promotions = promotions;
     this.#state = state;
   }
 
@@ -186,8 +204,9 @@ export class AdminService {
     if (pathInside(repositoryRoot, workspace.root) || pathInside(workspace.root, repositoryRoot)) {
       throw new AdminError("path_collision", "Repository root and administration workspace must be separate directories.");
     }
+    const promotions = await AdminPromotionWorkspace.open(workspace.root);
     const state = await AdminService.#loadState(repositoryRoot);
-    return new AdminService(repositoryRoot, workspace, state);
+    return new AdminService(repositoryRoot, workspace, promotions, state);
   }
 
   static async #loadState(repositoryRoot: string): Promise<LiveState> {
@@ -313,6 +332,27 @@ export class AdminService {
     return new Set(this.#state.assets.map((asset) => asset.id));
   }
 
+  logicalChannels(): readonly string[] {
+    return Object.freeze(Object.keys(this.#state.rawChannels).sort((a, b) => a.localeCompare(b, "en")));
+  }
+
+  promotionContext(): PackPromotionContext {
+    return currentPackPromotionContext({
+      assets: this.#state.assets,
+      packs: this.#state.packs,
+      channels: this.#state.rawChannels,
+      registryBytes: Buffer.from(this.#state.registryFile.bytes),
+      packsBytes: Buffer.from(this.#state.packsFile.bytes),
+      channelsBytes: Buffer.from(this.#state.channelsFile.bytes),
+    });
+  }
+
+  async draftArtifact(draftId: string): Promise<{ readonly draft: PackDraft; readonly bytes: Buffer }> {
+    const draft = await this.workspace.readDraft(draftId, this.validAssetIds());
+    const bytes = await this.workspace.exportDraft(draftId, this.validAssetIds());
+    return Object.freeze({ draft, bytes });
+  }
+
   searchAssets(options: { readonly query?: string; readonly offset?: number; readonly limit?: number } = {}): AdminAssetSearchResult {
     const query = options.query?.trim() ?? "";
     const offset = options.offset ?? 0;
@@ -398,5 +438,72 @@ export class AdminService {
 
   async exportDraft(draftId: string): Promise<Buffer> {
     return this.workspace.exportDraft(draftId);
+  }
+
+  async createPackPromotionProposal(draftId: string, requestValue: unknown): Promise<{ readonly promotionId: string; readonly artifacts: readonly unknown[] }> {
+    const context = this.promotionContext();
+    const validated = validatePackDraftPromotionRequest(requestValue, context.channels);
+    if (!validated.ok) throw new AdminError(validated.reason as never, validated.detail);
+    if (validated.value.draftId !== draftId) throw new AdminError("invalid_request", "Route draft id must match promotion request draftId.");
+    const requestBytes = serializePackDraftPromotionRequest(validated.value);
+    const draft = await this.draftArtifact(draftId);
+    const proposed = proposePackDraftPromotion({ requestValue: validated.value, requestBytes, draftBytes: draft.bytes, context });
+    if (!proposed.ok) throw new AdminError(proposed.reason as never, proposed.detail);
+    const proposalBytes = serializePackSourceProposal(proposed.value);
+    const promotionId = promotionSha256(requestBytes);
+    const artifacts = await this.promotions.writeArtifacts(draftId, promotionId, {
+      "promotion-request.json": requestBytes,
+      "pack-proposal.json": proposalBytes,
+    });
+    return Object.freeze({ promotionId, artifacts });
+  }
+
+  async planPackPromotion(draftId: string, promotionId: string, authorizationValue: unknown): Promise<{ readonly promotionId: string; readonly artifacts: readonly unknown[] }> {
+    const requestBytes = await this.promotions.readArtifact(draftId, promotionId, "promotion-request.json");
+    const proposalBytes = await this.promotions.readArtifact(draftId, promotionId, "pack-proposal.json");
+    const requestValue = JSON.parse(requestBytes.toString("utf8")) as unknown;
+    const proposalValue = JSON.parse(proposalBytes.toString("utf8")) as unknown;
+    const authorization = validatePackSourcePlanningAuthorization(authorizationValue);
+    if (!authorization.ok) throw new AdminError(authorization.reason as never, authorization.detail);
+    const authorizationBytes = serializePackSourcePlanningAuthorization(authorization.value);
+    const draft = await this.draftArtifact(draftId);
+    const planned = planPackSourceChange({ requestValue, requestBytes, draftBytes: draft.bytes, proposalValue, proposalBytes, authorizationValue: authorization.value, authorizationBytes, context: this.promotionContext() });
+    if (!planned.ok) throw new AdminError(planned.reason as never, planned.detail);
+    const planBytes = serializePackSourceApplicationPlan(planned.value);
+    const artifacts = await this.promotions.writeArtifacts(draftId, promotionId, {
+      "planning-authorization.json": authorizationBytes,
+      "pack-application-plan.json": planBytes,
+    });
+    return Object.freeze({ promotionId, artifacts });
+  }
+
+  async generatePackPromotionSourceChange(draftId: string, promotionId: string): Promise<{ readonly promotionId: string; readonly artifacts: readonly unknown[] }> {
+    const requestBytes = await this.promotions.readArtifact(draftId, promotionId, "promotion-request.json");
+    const proposalBytes = await this.promotions.readArtifact(draftId, promotionId, "pack-proposal.json");
+    const authorizationBytes = await this.promotions.readArtifact(draftId, promotionId, "planning-authorization.json");
+    const planBytes = await this.promotions.readArtifact(draftId, promotionId, "pack-application-plan.json");
+    const draft = await this.draftArtifact(draftId);
+    const generated = generatePackSourceChange({
+      requestValue: JSON.parse(requestBytes.toString("utf8")) as unknown, requestBytes, draftBytes: draft.bytes,
+      proposalValue: JSON.parse(proposalBytes.toString("utf8")) as unknown, proposalBytes,
+      authorizationValue: JSON.parse(authorizationBytes.toString("utf8")) as unknown, authorizationBytes,
+      planValue: JSON.parse(planBytes.toString("utf8")) as unknown, planBytes, context: this.promotionContext(),
+    });
+    if (!generated.ok) throw new AdminError(generated.reason as never, generated.detail);
+    const receiptBytes = serializePackSourceChangeReceipt(generated.value.receipt);
+    const artifacts = await this.promotions.writeArtifacts(draftId, promotionId, {
+      "pack-source.patch": generated.value.patch,
+      "pack-source-change.json": receiptBytes,
+      "packs-after.json": generated.value.packsAfter,
+    });
+    return Object.freeze({ promotionId, artifacts });
+  }
+
+  async listPackPromotionArtifacts(draftId: string, promotionId: string): Promise<readonly unknown[]> {
+    return this.promotions.listArtifacts(draftId, promotionId);
+  }
+
+  async readPackPromotionArtifact(draftId: string, promotionId: string, name: PackPromotionArtifactName): Promise<Buffer> {
+    return this.promotions.readArtifact(draftId, promotionId, name);
   }
 }

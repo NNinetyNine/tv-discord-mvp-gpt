@@ -156,6 +156,52 @@
             <button id="export-draft" type="button">Export canonical JSON</button>
             <button id="delete-draft" class="danger" type="button">Delete draft</button>
           </div>
+
+          <section class="promotion-panel" aria-labelledby="promotion-heading">
+            <div class="draft-banner" role="note">
+              <strong>Prepared only — canonical Pack source has not changed</strong>
+              <span>This creates review artifacts only. There is no Apply, review, release, publication, or Discord control here.</span>
+            </div>
+            <h4 id="promotion-heading">Prepare live Pack proposal</h4>
+            <p class="help-text">The Pack channel is an explicit curator-owned publication destination. It is not inferred from the Assets in the draft.</p>
+            <div class="field-grid">
+              <label>Operation
+                <select id="promotion-operation">
+                  <option value="">Select explicitly</option>
+                  <option value="create_pack">Create Pack</option>
+                  <option value="replace_pack_assets">Replace Pack Assets</option>
+                </select>
+              </label>
+              <label id="promotion-channel-field">Logical Pack channel
+                <select id="promotion-channel" required>
+                  <option value="">Select explicitly</option>
+                </select>
+              </label>
+              <div id="promotion-existing-channel-field" class="immutable-field" hidden>
+                <span>Existing immutable Pack channel</span>
+                <strong id="promotion-existing-channel">Unavailable</strong>
+              </div>
+              <label>Curator ID<input id="promotion-curator-id" maxlength="64" value="visionx-curator"></label>
+              <label>Decision timestamp<input id="promotion-decided-at" placeholder="2026-07-19T01:00:00Z" maxlength="40"></label>
+              <label>Reference ID<input id="promotion-reference-id" maxlength="96"></label>
+            </div>
+            <label>Promotion notes<textarea id="promotion-notes" maxlength="500" rows="3"></textarea></label>
+            <div class="action-row">
+              <button id="create-promotion-proposal" type="button">Create deterministic proposal</button>
+            </div>
+            <label for="planning-authorization-json">Planning authorization JSON</label>
+            <input id="planning-authorization-file" type="file" accept="application/json,.json">
+            <textarea id="planning-authorization-json" rows="10" spellcheck="false" placeholder="Paste the explicit planning authorization JSON here."></textarea>
+            <div class="action-row">
+              <button id="create-promotion-plan" type="button">Generate deterministic plan</button>
+              <button id="create-promotion-source-change" type="button">Generate source patch and receipt</button>
+            </div>
+            <section aria-labelledby="promotion-artifacts-heading">
+              <h5 id="promotion-artifacts-heading">Promotion artifacts</h5>
+              <p id="promotion-state" class="help-text">No promotion artifacts prepared.</p>
+              <ul id="promotion-artifacts" class="selection-list"></ul>
+            </section>
+          </section>
         </section>
       </div>
     </section>
