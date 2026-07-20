@@ -24,6 +24,7 @@
   <nav class="primary-nav" aria-label="Administration views">
     <button type="button" data-view="dashboard" aria-current="page">Dashboard</button>
     <button type="button" data-view="registry">Registry</button>
+    <button type="button" data-view="asset-registrations">Asset registrations</button>
     <button type="button" data-view="packs">Packs</button>
     <button type="button" data-view="drafts">Pack drafts</button>
   </nav>
@@ -60,6 +61,7 @@
             <input id="asset-search" name="q" type="search" placeholder="ID, display name, symbol, or channel" autocomplete="off">
             <button type="submit">Search</button>
           </form>
+          <p class="help-text">Registry source is canonical and read-only in this interface.</p>
           <p class="help-text">Results are deterministic and limited to 100 entries.</p>
           <div class="table-wrap">
             <table>
@@ -73,6 +75,125 @@
         <aside id="asset-detail" class="panel detail-panel" aria-live="polite">
           <h3>Asset details</h3>
           <p>Select an Asset to inspect its current Pack memberships.</p>
+        </aside>
+      </div>
+    </section>
+
+    <section class="view" data-view-panel="asset-registrations" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Controlled noncanonical workspace</p>
+          <h2>Asset registrations</h2>
+        </div>
+        <button id="asset-registration-refresh-status" type="button">Reload registration status</button>
+      </div>
+      <div class="draft-banner" role="note">
+        <strong>Registration input and generated artifacts are noncanonical workspace state.</strong>
+        <span>Only a separately reviewed, separately authorized, explicitly confirmed Apply action may modify <code>definitions/registry.json</code>. Packs and channels remain unchanged.</span>
+      </div>
+
+      <div class="registration-layout">
+        <section class="panel registration-workflow" aria-labelledby="asset-registration-input-heading">
+          <section class="trust-gate" aria-labelledby="asset-registration-input-heading">
+            <h3 id="asset-registration-input-heading">Prepare Asset registration proposal</h3>
+            <p class="help-text">All schema-v2 Asset identity fields and curator decision metadata are explicit. Target Pack IDs are fixed to an empty array for this Registry-only milestone.</p>
+            <div class="field-grid">
+              <label>Operation
+                <select id="asset-registration-operation">
+                  <option value="add">add</option>
+                  <option value="update_identity">update_identity</option>
+                </select>
+              </label>
+              <label>Asset ID (<code>asset.id</code>)<input id="asset-registration-id" required pattern="[a-z0-9][a-z0-9_-]{0,63}" maxlength="64" autocomplete="off"></label>
+              <label>Display name (<code>asset.displayName</code>)<input id="asset-registration-display-name" required autocomplete="off"></label>
+              <label>Symbol (<code>asset.symbol</code>)<input id="asset-registration-symbol" required autocomplete="off"></label>
+              <label>Market (<code>asset.market</code>)<input id="asset-registration-market" required autocomplete="off"></label>
+              <label>TradingView symbol (<code>asset.tradingViewSymbol</code>)<input id="asset-registration-trading-view-symbol" required autocomplete="off"></label>
+              <label>Currency (<code>asset.currency</code>)<input id="asset-registration-currency" required autocomplete="off"></label>
+              <label>Logical Asset channel (<code>asset.channel</code>)
+                <select id="asset-registration-channel" required><option value="">Select explicitly</option></select>
+              </label>
+              <div class="immutable-field"><span>Target Pack IDs</span><strong>[] — Packs are not modified</strong></div>
+              <label>Curator ID (<code>decision.reviewerId</code>)<input id="asset-registration-curator-id" maxlength="64" value="visionx-curator"></label>
+              <label>Decision timestamp (<code>decision.decidedAt</code>)<input id="asset-registration-decided-at" maxlength="40" placeholder="2026-07-19T12:00:00Z"></label>
+              <label>Reference ID (<code>decision.referenceId</code>)<input id="asset-registration-reference-id" maxlength="96"></label>
+            </div>
+            <label>Optional notes (<code>decision.notes</code>)<textarea id="asset-registration-notes" maxlength="500" rows="3"></textarea></label>
+            <fieldset id="asset-registration-expected-current" hidden>
+              <legend>Expected current identity for <code>update_identity</code></legend>
+              <div class="field-grid">
+                <label>Current display (<code>expectedCurrent.display</code>)<input id="asset-registration-current-display"></label>
+                <label>Current TradingView (<code>expectedCurrent.tradingView</code>)<input id="asset-registration-current-trading-view"></label>
+                <label>Current channel (<code>expectedCurrent.channel</code>)
+                  <select id="asset-registration-current-channel"><option value="">Select explicitly</option></select>
+                </label>
+              </div>
+            </fieldset>
+            <div class="action-row"><button id="asset-registration-create-proposal" type="button">Create proposal explicitly</button></div>
+            <p><strong>Proposal creation does not authorize planning or application.</strong></p>
+          </section>
+
+          <section class="trust-gate" aria-labelledby="asset-planning-authorization-heading">
+            <h3 id="asset-planning-authorization-heading">Authorize Asset application planning</h3>
+            <p class="help-text">Supply a strict planning-authorization artifact as JSON text or select a local JSON file. The browser filename and local path are not persisted.</p>
+            <label for="asset-planning-authorization-file">Planning authorization local JSON file</label>
+            <input id="asset-planning-authorization-file" type="file" accept="application/json,.json">
+            <label for="asset-planning-authorization-json">Planning authorization JSON</label>
+            <textarea id="asset-planning-authorization-json" rows="12" spellcheck="false"></textarea>
+            <div class="action-row">
+              <button id="asset-registration-store-planning-authorization" type="button">Validate and store planning authorization</button>
+              <button id="asset-registration-generate-plan" type="button">Generate deterministic application plan</button>
+            </div>
+            <p><strong>Planning authorization permits deterministic planning only.</strong></p>
+          </section>
+
+          <section class="trust-gate" aria-labelledby="asset-source-change-heading">
+            <h3 id="asset-source-change-heading">Generate Registry source patch and receipt</h3>
+            <p class="help-text">The future Registry is reconstructed by the existing domain transformation. Browser-supplied patch text or future Registry bytes are never accepted.</p>
+            <div class="action-row"><button id="asset-registration-generate-source-change" type="button">Generate Registry source patch and receipt</button></div>
+          </section>
+
+          <section class="trust-gate" aria-labelledby="asset-review-heading">
+            <h3 id="asset-review-heading">Review prepared Asset source change</h3>
+            <div class="field-grid">
+              <label>Decision<select id="asset-review-decision"><option value="approved">approved</option><option value="rejected">rejected</option></select></label>
+              <label>Reviewer ID<input id="asset-reviewer-id" maxlength="64" value="visionx-asset-reviewer"></label>
+              <label>Decision timestamp<input id="asset-review-decided-at" maxlength="40" placeholder="2026-07-19T13:00:00Z"></label>
+              <label>Reference ID<input id="asset-review-reference-id" maxlength="96"></label>
+            </div>
+            <label>Optional notes<textarea id="asset-review-notes" maxlength="500" rows="3"></textarea></label>
+            <div class="action-row"><button id="asset-registration-review" type="button">Generate independent review</button></div>
+            <p><strong>Review approval does not authorize application.</strong></p>
+            <p id="asset-review-status" role="status">No Asset source-change review exists.</p>
+          </section>
+
+          <section class="trust-gate" aria-labelledby="asset-application-authorization-heading">
+            <h3 id="asset-application-authorization-heading">Authorize Asset source application</h3>
+            <p class="help-text">Supply a strict application-authorization artifact as JSON text or select a local JSON file.</p>
+            <label for="asset-application-authorization-file">Application authorization local JSON file</label>
+            <input id="asset-application-authorization-file" type="file" accept="application/json,.json">
+            <label for="asset-application-authorization-json">Application authorization JSON</label>
+            <textarea id="asset-application-authorization-json" rows="12" spellcheck="false"></textarea>
+            <div class="action-row"><button id="asset-registration-store-application-authorization" type="button">Validate and store application authorization</button></div>
+            <p><strong>Authorization is bound to one exact reviewed source change. Authorization does not apply it automatically.</strong></p>
+            <p id="asset-authorization-status" role="status">No Asset application authorization exists.</p>
+          </section>
+
+          <section class="trust-gate danger-zone" aria-labelledby="asset-apply-heading">
+            <h3 id="asset-apply-heading">Apply authorized Asset source change</h3>
+            <p><strong>This operation modifies definitions/registry.json.</strong><br>It does not modify Packs or channels.<br>It does not release or publish anything.</p>
+            <label>Exact confirmation phrase<input id="asset-application-confirmation" autocomplete="off" placeholder="APPLY ASSET SOURCE CHANGE"></label>
+            <div class="action-row"><button id="asset-registration-apply" class="danger" type="button" disabled>Apply authorized Asset source change</button></div>
+            <p id="asset-application-status" role="status">Not applied. Complete every independent gate first.</p>
+          </section>
+        </section>
+
+        <aside class="panel registration-status" aria-labelledby="asset-registration-status-heading">
+          <h3 id="asset-registration-status-heading">Validated registration status</h3>
+          <p id="asset-registration-workspace-state" class="help-text">Enter an Asset ID and create a proposal to begin.</p>
+          <dl id="asset-registration-bindings" class="definition-grid"></dl>
+          <h4>Downloadable exact artifacts</h4>
+          <ul id="asset-registration-artifacts" class="selection-list"></ul>
         </aside>
       </div>
     </section>

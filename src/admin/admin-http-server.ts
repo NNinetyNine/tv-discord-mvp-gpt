@@ -6,6 +6,7 @@ import { extname } from "node:path";
 import { AdminError, PACK_DRAFT_SCHEMA_VERSION, PACK_DRAFT_TYPE } from "./admin-types.ts";
 import { AdminService } from "./admin-service.ts";
 import { PACK_PROMOTION_ARTIFACT_NAMES, type PackPromotionArtifactName } from "./admin-promotion-workspace.ts";
+import { ASSET_REGISTRATION_ARTIFACT_NAMES, type AssetRegistrationArtifactName } from "./admin-asset-registration-workspace.ts";
 
 export const ADMIN_REQUEST_BODY_LIMIT = 65536 as const;
 export const ADMIN_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
@@ -350,6 +351,83 @@ async function routeApi(
       if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
       if (!PACK_PROMOTION_ARTIFACT_NAMES.includes(artifactName as PackPromotionArtifactName)) throw new AdminError("route_not_found", "Promotion artifact was not found.", 404);
       const bytes = await service.readPackPromotionArtifact(draftId, promotionId, artifactName as PackPromotionArtifactName);
+      securityHeaders(response, true);
+      response.statusCode = 200;
+      response.setHeader("Content-Type", artifactName.endsWith(".patch") ? "text/x-diff; charset=utf-8" : "application/json; charset=utf-8");
+      response.setHeader("Content-Disposition", `attachment; filename="${artifactName}"`);
+      response.end(bytes);
+      return;
+    }
+  }
+
+  const assetRegistrationRoute = /^\/api\/v1\/asset-registrations\/([^/]+)\/(proposal|planning-authorization|plan|source-change|review|application-authorization|apply|status|artifacts)(?:\/([^/]+))?$/u.exec(pathname);
+  if (assetRegistrationRoute !== null) {
+    const registrationId = assetRegistrationRoute[1] ?? "";
+    const action = assetRegistrationRoute[2] ?? "";
+    const artifactName = assetRegistrationRoute[3];
+    if (action === "proposal") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Asset registration proposal body must be an object.");
+      exactFields(body, ["input"], "Asset registration proposal body");
+      return ok(response, await service.createAssetRegistrationProposal(registrationId, body.input), 201);
+    }
+    if (action === "planning-authorization") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Asset planning authorization body must be an object.");
+      exactFields(body, ["authorization"], "Asset planning authorization body");
+      return ok(response, await service.storeAssetRegistrationPlanningAuthorization(registrationId, body.authorization), 201);
+    }
+    if (action === "plan") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Asset application plan body must be an object.");
+      exactFields(body, [], "Asset application plan body");
+      return ok(response, await service.generateAssetRegistrationPlan(registrationId), 201);
+    }
+    if (action === "source-change") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Asset source-change body must be an object.");
+      exactFields(body, [], "Asset source-change body");
+      return ok(response, await service.generateAssetRegistrationSourceChange(registrationId), 201);
+    }
+    if (action === "review") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Asset source review body must be an object.");
+      exactFields(body, ["decision"], "Asset source review body");
+      return ok(response, await service.reviewAssetRegistration(registrationId, body.decision), 201);
+    }
+    if (action === "application-authorization") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Asset application authorization body must be an object.");
+      exactFields(body, ["authorization"], "Asset application authorization body");
+      return ok(response, await service.storeAssetRegistrationApplicationAuthorization(registrationId, body.authorization), 201);
+    }
+    if (action === "apply") {
+      if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Asset source application body must be an object.");
+      exactFields(body, ["confirmation"], "Asset source application body");
+      return ok(response, await service.applyAssetRegistration(registrationId, body.confirmation), 201);
+    }
+    if (action === "status") {
+      if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      return ok(response, await service.assetRegistrationStatus(registrationId));
+    }
+    if (action === "artifacts" && artifactName === undefined) {
+      if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      return ok(response, { schemaVersion: 1, registrationId, artifacts: await service.listAssetRegistrationArtifacts(registrationId) });
+    }
+    if (action === "artifacts" && artifactName !== undefined) {
+      if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+      if (!ASSET_REGISTRATION_ARTIFACT_NAMES.includes(artifactName as AssetRegistrationArtifactName)) {
+        throw new AdminError("route_not_found", "Asset registration artifact was not found.", 404);
+      }
+      const bytes = await service.readAssetRegistrationArtifact(registrationId, artifactName as AssetRegistrationArtifactName);
       securityHeaders(response, true);
       response.statusCode = 200;
       response.setHeader("Content-Type", artifactName.endsWith(".patch") ? "text/x-diff; charset=utf-8" : "application/json; charset=utf-8");

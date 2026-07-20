@@ -23,6 +23,7 @@ export type AssetRegistrationSourceApplicationFileFailureReason =
   | "temporary_write_failed"
   | "source_replace_failed"
   | "post_apply_validation_failed"
+  | "application_receipt_finalize_failed"
   | "finalize_failed"
   | "rollback_failed"
   | AssetRegistrationSourceApplicationFailureReason;
@@ -282,6 +283,7 @@ export async function applyAssetRegistrationSourceChangeFile(
   }
 
   let finalReceiptPublished = false;
+  let receiptFinalizationStarted = false;
   try {
     for (let index = 0; index < replacements.length; index += 1) {
       await dependencies.beforeReplacement?.(index);
@@ -295,6 +297,7 @@ export async function applyAssetRegistrationSourceChangeFile(
       if (sha256(await readFile(replacement.source.path)) !== sha256(replacement.after)) throw new Error(`post-state hash mismatch for ${replacement.source.relativePath}`);
     }
     if (sha256(await readFile(channels.path)) !== channels.sha256) throw new Error("channel configuration changed during application");
+    receiptFinalizationStarted = true;
     await dependencies.beforeReceiptFinalize?.();
     await link(receiptTemporary, output);
     finalReceiptPublished = true;
@@ -308,7 +311,7 @@ export async function applyAssetRegistrationSourceChangeFile(
     await unlink(receiptTemporary).catch(() => undefined);
     if (!restored) return failure("rollback_failed", `application failed and exact rollback could not be proven: ${error instanceof Error ? error.message : String(error)}`);
     const reason: AssetRegistrationSourceApplicationFileFailureReason = replacements.some((item) => item.replaced)
-      ? (finalReceiptPublished ? "finalize_failed" : "post_apply_validation_failed")
+      ? (receiptFinalizationStarted ? "application_receipt_finalize_failed" : "post_apply_validation_failed")
       : "source_replace_failed";
     return failure(reason, `application failed and sources were restored: ${error instanceof Error ? error.message : String(error)}`);
   }

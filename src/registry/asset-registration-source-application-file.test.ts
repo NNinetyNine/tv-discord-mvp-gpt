@@ -75,6 +75,19 @@ describe("authorized atomic source application", () => {
     expect(readdirSync(directory).some((name) => name.endsWith(".tmp"))).toBe(false);
   });
 
+  test("receipt-finalization failure restores exact source bytes with a distinct typed failure", async () => {
+    const { directory, fixture, files, registryPath } = setup();
+    const result = await applyAssetRegistrationSourceChangeFile(files, {
+      verifyPatch: async () => true,
+      beforeReceiptFinalize: async () => { throw new Error("simulated receipt finalization failure"); },
+    });
+    expect(result).toMatchObject({ ok: false, reason: "application_receipt_finalize_failed" });
+    expect(readFileSync(registryPath).equals(fixture.registryBytes)).toBe(true);
+    expect(existsSync(files.applicationReceiptOutputPath)).toBe(false);
+    expect(readdirSync(join(files.repositoryRoot, "definitions")).some((name) => name.includes("rollback.tmp") || name.includes("future.tmp"))).toBe(false);
+    expect(readdirSync(directory).some((name) => name.endsWith(".tmp"))).toBe(false);
+  });
+
   test("incomplete rollback is classified separately", async () => {
     const { files } = setup();
     expect(await applyAssetRegistrationSourceChangeFile(files, {

@@ -11,7 +11,7 @@ import {
 } from "./asset-registration-source-change.ts";
 
 export const ASSET_REGISTRATION_SOURCE_CHANGE_BASE = Object.freeze({
-  commit: "f5ba97bce499684aff210e253652a263dc887f81",
+  commit: "956c657a1bd7ef2ba5d1574bc804afe8d6fa132d",
   registrySha256: "1da65e9cade5d5dd516e726787ac9a9ac8f916543de35ccb9d823bd2bb4b1286",
   packsSha256: "29a8284033f1c67466f7a50b54a64d208e72e8dcce25e1cd897a650bdbc3c0b4",
   channelsSha256: "3adb7aa6a40e2a5ef7aa9c19440bfc771b5cbdc4f443ad10e0d3235fca550988",

@@ -21,6 +21,35 @@ import {
 import { AdminWorkspace } from "./admin-workspace.ts";
 import { AdminPromotionWorkspace, type PackPromotionArtifactName } from "./admin-promotion-workspace.ts";
 import {
+  AdminAssetRegistrationWorkspace,
+  type AssetRegistrationArtifactName,
+} from "./admin-asset-registration-workspace.ts";
+import {
+  proposeAssetRegistration,
+  serializeAssetRegistrationProposal,
+  validateAssetRegistrationInput,
+  validateAssetRegistrationProposalReceipt,
+} from "../registry/asset-registration-proposal.ts";
+import { proposeAssetRegistrationFile } from "../registry/asset-registration-proposal-file.ts";
+import {
+  serializeAssetRegistrationApplicationAuthorization,
+  validateAssetRegistrationApplicationAuthorization,
+} from "../registry/asset-registration-application-authorization.ts";
+import { validateAssetRegistrationApplicationPlanReceipt } from "../registry/asset-registration-application-plan.ts";
+import { planAssetRegistrationApplicationFile } from "../registry/asset-registration-application-plan-file.ts";
+import { generateAssetRegistrationSourceChangeFile } from "../registry/asset-registration-source-change-file.ts";
+import {
+  serializeAssetRegistrationSourceChangeReviewDecision,
+  validateAssetRegistrationSourceChangeReviewDecision,
+  validateAssetRegistrationSourceChangeReviewReceipt,
+} from "../registry/asset-registration-source-change-review.ts";
+import { reviewAssetRegistrationSourceChangeFile } from "../registry/asset-registration-source-change-review-file.ts";
+import {
+  serializeAssetRegistrationSourceApplicationAuthorization,
+  validateAssetRegistrationSourceApplicationAuthorization,
+} from "../registry/asset-registration-source-application-authorization.ts";
+import { applyAssetRegistrationSourceChangeFile } from "../registry/asset-registration-source-application-file.ts";
+import {
   currentPackPromotionContext,
   generatePackSourceChange,
   planPackSourceChange,
@@ -218,12 +247,20 @@ export class AdminService {
   readonly repositoryRoot: string;
   readonly workspace: AdminWorkspace;
   readonly promotions: AdminPromotionWorkspace;
+  readonly assetRegistrations: AdminAssetRegistrationWorkspace;
   #state: LiveState;
 
-  private constructor(repositoryRoot: string, workspace: AdminWorkspace, promotions: AdminPromotionWorkspace, state: LiveState) {
+  private constructor(
+    repositoryRoot: string,
+    workspace: AdminWorkspace,
+    promotions: AdminPromotionWorkspace,
+    assetRegistrations: AdminAssetRegistrationWorkspace,
+    state: LiveState,
+  ) {
     this.repositoryRoot = repositoryRoot;
     this.workspace = workspace;
     this.promotions = promotions;
+    this.assetRegistrations = assetRegistrations;
     this.#state = state;
   }
 
@@ -234,8 +271,9 @@ export class AdminService {
       throw new AdminError("path_collision", "Repository root and administration workspace must be separate directories.");
     }
     const promotions = await AdminPromotionWorkspace.open(workspace.root);
+    const assetRegistrations = await AdminAssetRegistrationWorkspace.open(workspace.root);
     const state = await AdminService.#loadState(repositoryRoot);
-    return new AdminService(repositoryRoot, workspace, promotions, state);
+    return new AdminService(repositoryRoot, workspace, promotions, assetRegistrations, state);
   }
 
   static async #loadState(repositoryRoot: string): Promise<LiveState> {
@@ -610,5 +648,398 @@ export class AdminService {
 
   async readPackPromotionArtifact(draftId: string, promotionId: string, name: PackPromotionArtifactName): Promise<Buffer> {
     return this.promotions.readArtifact(draftId, promotionId, name);
+  }
+
+  #assetRegistrationCanonicalPaths(): { readonly registryPath: string; readonly packsPath: string; readonly channelsPath: string } {
+    return Object.freeze({
+      registryPath: join(this.repositoryRoot, REGISTRY_RELATIVE_PATH),
+      packsPath: join(this.repositoryRoot, PACKS_RELATIVE_PATH),
+      channelsPath: join(this.repositoryRoot, CHANNELS_RELATIVE_PATH),
+    });
+  }
+
+  #assetFailure(reason: string, detail: string, context: "proposal" | "planning" | "source-change" | "review" | "authorization" | "apply"): never {
+    const aliases: Readonly<Record<string, string>> = Object.freeze({
+      invalid_registration_input: "invalid_asset_registration_input",
+      invalid_proposal: "invalid_asset_registration_proposal",
+      invalid_authorization: context === "planning" ? "invalid_asset_registration_planning_authorization" : "invalid_asset_registration_application_authorization",
+      invalid_application_plan: "invalid_asset_registration_application_plan",
+      invalid_source_patch: "invalid_asset_registration_source_change",
+      invalid_source_change_receipt: "invalid_asset_registration_source_change",
+      invalid_review_decision: "invalid_asset_registration_review_decision",
+      invalid_source_change_review: "invalid_asset_registration_source_change_review",
+      invalid_application_authorization: "invalid_asset_registration_application_authorization",
+      asset_already_exists: "asset_id_already_exists",
+      stale_channel_configuration: "stale_channel_state",
+      source_replace_failed: "source_write_failed",
+      post_apply_validation_failed: "source_write_verification_failed",
+      source_change_already_applied: "application_already_completed",
+      source_change_not_approved: "source_change_review_rejected",
+      input_changed_during_generation: "input_changed_during_operation",
+      finalize_failed: context === "apply" ? "application_receipt_finalize_failed" : "finalize_failed",
+    });
+    const code = aliases[reason] ?? reason;
+    const status = code === "output_already_exists" || code === "application_already_completed" ? 409
+      : code === "internal_error" ? 500
+      : 400;
+    throw new AdminError(code as never, detail, status);
+  }
+
+  async #validateAssetRegistrationInputProposalChain(registrationId: string): Promise<void> {
+    const [inputBytes, proposalBytes, currentState] = await Promise.all([
+      this.assetRegistrations.readArtifact(registrationId, "registration-input.json"),
+      this.assetRegistrations.readArtifact(registrationId, "asset-proposal.json"),
+      AdminService.#loadState(this.repositoryRoot),
+    ]);
+
+    let proposalValue: unknown;
+    try { proposalValue = JSON.parse(proposalBytes.toString("utf8")) as unknown; }
+    catch { throw new AdminError("invalid_asset_registration_proposal", "Stored Asset registration proposal is not valid JSON."); }
+    const proposal = validateAssetRegistrationProposalReceipt(proposalValue, this.#state.rawChannels);
+    if (!proposal.ok) this.#assetFailure(proposal.reason, proposal.detail, "proposal");
+
+    if (currentState.channelsFile.sha256 !== this.#state.channelsFile.sha256) {
+      throw new AdminError("stale_channel_state", "Canonical channel configuration no longer matches the state used to create the stored proposal.");
+    }
+    if (currentState.registryFile.sha256 !== this.#state.registryFile.sha256) {
+      const proposalAgainstCurrentRegistry = proposeAssetRegistration({
+        schemaVersion: proposal.proposal.schemaVersion,
+        operation: proposal.proposal.operation,
+        asset: proposal.proposal.asset,
+        targetPackIds: proposal.proposal.targetPacks.map((target) => target.packId),
+        decision: proposal.proposal.decision,
+        ...(proposal.proposal.expectedCurrent === undefined ? {} : { expectedCurrent: proposal.proposal.expectedCurrent }),
+      }, currentState.assets, currentState.packs, currentState.rawChannels);
+      if (!proposalAgainstCurrentRegistry.ok) {
+        this.#assetFailure(proposalAgainstCurrentRegistry.reason, proposalAgainstCurrentRegistry.detail, "proposal");
+      }
+      throw new AdminError("stale_registry_state", "Canonical Registry source no longer matches the state used to create the stored proposal.");
+    }
+    if (currentState.packsFile.sha256 !== this.#state.packsFile.sha256) {
+      throw new AdminError("stale_pack_state", "Canonical Packs source no longer matches the state used to create the stored proposal.");
+    }
+    if (
+      proposal.proposal.registryState.assetCount !== currentState.assets.length ||
+      proposal.proposal.registryState.registryFingerprint !== currentState.registryFingerprint
+    ) {
+      throw new AdminError("stale_registry_state", "Canonical Registry state no longer matches the Registry identity bound by the stored proposal.");
+    }
+
+    let inputValue: unknown;
+    try { inputValue = JSON.parse(inputBytes.toString("utf8")) as unknown; }
+    catch { throw new AdminError("invalid_asset_registration_input", "Stored Asset registration input is not valid JSON."); }
+    const input = validateAssetRegistrationInput(inputValue, currentState.rawChannels);
+    if (!input.ok) this.#assetFailure(input.reason, input.detail, "proposal");
+    const reconstructed = proposeAssetRegistration(input.input, currentState.assets, currentState.packs, currentState.rawChannels);
+    if (!reconstructed.ok) this.#assetFailure(reconstructed.reason, reconstructed.detail, "proposal");
+    if (!serializeAssetRegistrationProposal(reconstructed.proposal).equals(proposalBytes)) {
+      throw new AdminError("proposal_reconstruction_mismatch", "Stored registration input no longer reconstructs the exact stored proposal.");
+    }
+  }
+
+  async createAssetRegistrationProposal(registrationId: string, inputValue: unknown): Promise<Readonly<Record<string, unknown>>> {
+    this.assetRegistrations.validateRegistrationId(registrationId);
+    const validated = validateAssetRegistrationInput(inputValue, this.#state.rawChannels);
+    if (!validated.ok) this.#assetFailure(validated.reason, validated.detail, "proposal");
+    if (validated.input.schemaVersion !== 2) {
+      throw new AdminError("invalid_asset_registration_input", "Administration Asset registrations require schemaVersion 2.");
+    }
+    if (validated.input.asset.id !== registrationId) {
+      throw new AdminError("invalid_asset_registration_input", "Route registration id must match input.asset.id.");
+    }
+    const inputBytes = Buffer.from(`${JSON.stringify(validated.input, null, 2)}\n`, "utf8");
+    await this.assetRegistrations.writeArtifact(registrationId, "registration-input.json", inputBytes);
+    const inputPath = await this.assetRegistrations.artifactPath(registrationId, "registration-input.json", false);
+    const outputPath = await this.assetRegistrations.artifactPath(registrationId, "asset-proposal.json");
+    const result = await proposeAssetRegistrationFile({ inputPath, outputPath, ...this.#assetRegistrationCanonicalPaths() });
+    if (!result.ok) {
+      await this.assetRegistrations.removeArtifact(registrationId, "registration-input.json").catch(() => undefined);
+      this.#assetFailure(result.reason, result.detail, "proposal");
+    }
+    return this.assetRegistrationStatus(registrationId);
+  }
+
+  async storeAssetRegistrationPlanningAuthorization(registrationId: string, authorizationValue: unknown): Promise<Readonly<Record<string, unknown>>> {
+    await this.#validateAssetRegistrationInputProposalChain(registrationId);
+    const proposalBytes = await this.assetRegistrations.readArtifact(registrationId, "asset-proposal.json");
+    const validated = validateAssetRegistrationApplicationAuthorization(authorizationValue);
+    if (!validated.ok) this.#assetFailure(validated.reason, validated.detail, "planning");
+    if (validated.authorization.proposalSha256 !== sha256(proposalBytes)) {
+      throw new AdminError("planning_authorization_hash_mismatch", "Planning authorization does not bind the exact stored proposal.");
+    }
+    const bytes = serializeAssetRegistrationApplicationAuthorization(validated.authorization);
+    await this.assetRegistrations.writeArtifact(registrationId, "planning-authorization.json", bytes);
+    return this.assetRegistrationStatus(registrationId);
+  }
+
+  async generateAssetRegistrationPlan(registrationId: string): Promise<Readonly<Record<string, unknown>>> {
+    await this.#validateAssetRegistrationInputProposalChain(registrationId);
+    const authorizationBytes = await this.assetRegistrations.readArtifact(registrationId, "planning-authorization.json");
+    let authorizationValue: unknown;
+    try { authorizationValue = JSON.parse(authorizationBytes.toString("utf8")) as unknown; }
+    catch { throw new AdminError("invalid_asset_registration_planning_authorization", "Stored planning authorization is not valid JSON."); }
+    const authorization = validateAssetRegistrationApplicationAuthorization(authorizationValue);
+    if (!authorization.ok) this.#assetFailure(authorization.reason, authorization.detail, "planning");
+    if (authorization.authorization.decision !== "approved") {
+      throw new AdminError("planning_authorization_rejected", "Rejected planning authorization blocks application planning.");
+    }
+    const proposalPath = await this.assetRegistrations.artifactPath(registrationId, "asset-proposal.json", false);
+    const authorizationPath = await this.assetRegistrations.artifactPath(registrationId, "planning-authorization.json", false);
+    const outputPath = await this.assetRegistrations.artifactPath(registrationId, "asset-application-plan.json");
+    const result = await planAssetRegistrationApplicationFile({ proposalPath, authorizationPath, outputPath, ...this.#assetRegistrationCanonicalPaths() });
+    if (!result.ok) this.#assetFailure(result.reason, result.detail, "planning");
+    return this.assetRegistrationStatus(registrationId);
+  }
+
+  async generateAssetRegistrationSourceChange(registrationId: string): Promise<Readonly<Record<string, unknown>>> {
+    await this.#validateAssetRegistrationInputProposalChain(registrationId);
+    const paths = this.#assetRegistrationCanonicalPaths();
+    const result = await generateAssetRegistrationSourceChangeFile({
+      proposalPath: await this.assetRegistrations.artifactPath(registrationId, "asset-proposal.json", false),
+      authorizationPath: await this.assetRegistrations.artifactPath(registrationId, "planning-authorization.json", false),
+      planPath: await this.assetRegistrations.artifactPath(registrationId, "asset-application-plan.json", false),
+      patchOutputPath: await this.assetRegistrations.artifactPath(registrationId, "asset-source.patch"),
+      receiptOutputPath: await this.assetRegistrations.artifactPath(registrationId, "asset-source-change.json"),
+      ...paths,
+      repositoryRoot: this.repositoryRoot,
+      expectedRegistrySha256: this.#state.registryFile.sha256,
+      expectedPacksSha256: this.#state.packsFile.sha256,
+      expectedChannelsSha256: this.#state.channelsFile.sha256,
+    });
+    if (!result.ok) this.#assetFailure(result.reason, result.detail, "source-change");
+    return this.assetRegistrationStatus(registrationId);
+  }
+
+  async reviewAssetRegistration(registrationId: string, decisionValue: unknown): Promise<Readonly<Record<string, unknown>>> {
+    await this.#validateAssetRegistrationInputProposalChain(registrationId);
+    const decision = validateAssetRegistrationSourceChangeReviewDecision(decisionValue);
+    if (!decision.ok) this.#assetFailure(decision.reason, decision.detail, "review");
+    const decisionBytes = serializeAssetRegistrationSourceChangeReviewDecision(decision.decision);
+    await this.assetRegistrations.writeArtifact(registrationId, "asset-review-decision.json", decisionBytes);
+    const result = await reviewAssetRegistrationSourceChangeFile({
+      proposalPath: await this.assetRegistrations.artifactPath(registrationId, "asset-proposal.json", false),
+      planningAuthorizationPath: await this.assetRegistrations.artifactPath(registrationId, "planning-authorization.json", false),
+      planPath: await this.assetRegistrations.artifactPath(registrationId, "asset-application-plan.json", false),
+      patchPath: await this.assetRegistrations.artifactPath(registrationId, "asset-source.patch", false),
+      sourceChangeReceiptPath: await this.assetRegistrations.artifactPath(registrationId, "asset-source-change.json", false),
+      decisionPath: await this.assetRegistrations.artifactPath(registrationId, "asset-review-decision.json", false),
+      outputPath: await this.assetRegistrations.artifactPath(registrationId, "asset-source-review.json"),
+      repositoryRoot: this.repositoryRoot,
+    });
+    if (!result.ok) {
+      await this.assetRegistrations.removeArtifact(registrationId, "asset-review-decision.json").catch(() => undefined);
+      this.#assetFailure(result.reason, result.detail, "review");
+    }
+    return this.assetRegistrationStatus(registrationId);
+  }
+
+  async storeAssetRegistrationApplicationAuthorization(registrationId: string, authorizationValue: unknown): Promise<Readonly<Record<string, unknown>>> {
+    await this.#validateAssetRegistrationInputProposalChain(registrationId);
+    const validated = validateAssetRegistrationSourceApplicationAuthorization(authorizationValue);
+    if (!validated.ok) this.#assetFailure(validated.reason, validated.detail, "authorization");
+    const [reviewBytes, patchBytes, receiptBytes] = await Promise.all([
+      this.assetRegistrations.readArtifact(registrationId, "asset-source-review.json"),
+      this.assetRegistrations.readArtifact(registrationId, "asset-source.patch"),
+      this.assetRegistrations.readArtifact(registrationId, "asset-source-change.json"),
+    ]);
+    const reviewValue = JSON.parse(reviewBytes.toString("utf8")) as unknown;
+    const review = validateAssetRegistrationSourceChangeReviewReceipt(reviewValue);
+    if (!review.ok) this.#assetFailure(review.reason, review.detail, "authorization");
+    if (validated.authorization.decision === "approved" && review.receipt.reviewStatus !== "approved") {
+      throw new AdminError("source_change_review_rejected", "Approved application authorization requires an approved source-change review.");
+    }
+    if (
+      validated.authorization.sourceChangeReviewSha256 !== sha256(reviewBytes) ||
+      validated.authorization.sourcePatchSha256 !== sha256(patchBytes) ||
+      validated.authorization.sourceChangeReceiptSha256 !== sha256(receiptBytes)
+    ) {
+      throw new AdminError("application_authorization_hash_mismatch", "Application authorization does not bind the exact reviewed source change.");
+    }
+    await this.assetRegistrations.writeArtifact(
+      registrationId,
+      "asset-application-authorization.json",
+      serializeAssetRegistrationSourceApplicationAuthorization(validated.authorization),
+    );
+    return this.assetRegistrationStatus(registrationId);
+  }
+
+  async applyAssetRegistration(registrationId: string, confirmation: unknown): Promise<Readonly<Record<string, unknown>>> {
+    if (confirmation === undefined || confirmation === null || confirmation === "") {
+      throw new AdminError("application_confirmation_required", "Exact application confirmation is required.");
+    }
+    if (confirmation !== "APPLY ASSET SOURCE CHANGE") {
+      throw new AdminError("application_confirmation_invalid", "Confirmation must equal APPLY ASSET SOURCE CHANGE exactly.");
+    }
+    if ((await this.assetRegistrations.listArtifacts(registrationId)).some((artifact) => artifact.name === "asset-source-application.json")) {
+      throw new AdminError("application_already_completed", "This exact Asset source application already has a successful receipt.", 409);
+    }
+    await this.#validateAssetRegistrationInputProposalChain(registrationId);
+    const result = await applyAssetRegistrationSourceChangeFile({
+      proposalPath: await this.assetRegistrations.artifactPath(registrationId, "asset-proposal.json", false),
+      planningAuthorizationPath: await this.assetRegistrations.artifactPath(registrationId, "planning-authorization.json", false),
+      planPath: await this.assetRegistrations.artifactPath(registrationId, "asset-application-plan.json", false),
+      patchPath: await this.assetRegistrations.artifactPath(registrationId, "asset-source.patch", false),
+      sourceChangeReceiptPath: await this.assetRegistrations.artifactPath(registrationId, "asset-source-change.json", false),
+      reviewPath: await this.assetRegistrations.artifactPath(registrationId, "asset-source-review.json", false),
+      applicationAuthorizationPath: await this.assetRegistrations.artifactPath(registrationId, "asset-application-authorization.json", false),
+      repositoryRoot: this.repositoryRoot,
+      applicationReceiptOutputPath: await this.assetRegistrations.artifactPath(registrationId, "asset-source-application.json"),
+    });
+    if (!result.ok) this.#assetFailure(result.reason, result.detail, "apply");
+    await this.refresh();
+    const receiptBytes = await this.assetRegistrations.readArtifact(registrationId, "asset-source-application.json");
+    return Object.freeze({
+      registrationId,
+      receiptSha256: sha256(receiptBytes),
+      receiptBytes: receiptBytes.length,
+      receipt: result.receipt,
+      status: await this.assetRegistrationStatus(registrationId),
+    });
+  }
+
+  async assetRegistrationStatus(registrationId: string): Promise<Readonly<Record<string, unknown>>> {
+    this.assetRegistrations.validateRegistrationId(registrationId);
+    const currentState = await AdminService.#loadState(this.repositoryRoot);
+    const artifacts = await this.assetRegistrations.listArtifacts(registrationId);
+    const byName = new Map(artifacts.map((artifact) => [artifact.name, artifact] as const));
+    const readJson = async (name: AssetRegistrationArtifactName): Promise<unknown | null> => {
+      if (!byName.has(name)) return null;
+      try { return JSON.parse((await this.assetRegistrations.readArtifact(registrationId, name)).toString("utf8")) as unknown; }
+      catch { return null; }
+    };
+    const [input, proposal, planningAuthorization, plan, sourceChange, review, applicationAuthorization, applicationReceipt] = await Promise.all([
+      readJson("registration-input.json"), readJson("asset-proposal.json"), readJson("planning-authorization.json"),
+      readJson("asset-application-plan.json"), readJson("asset-source-change.json"), readJson("asset-source-review.json"),
+      readJson("asset-application-authorization.json"), readJson("asset-source-application.json"),
+    ]);
+    const record = (value: unknown): Readonly<Record<string, unknown>> | null => isRecord(value) ? value : null;
+    const proposalRecord = record(proposal);
+    const planningAuthorizationRecord = record(planningAuthorization);
+    const planRecord = record(plan);
+    const reviewRecord = record(review);
+    const authorizationRecord = record(applicationAuthorization);
+    const applicationReceiptRecord = record(applicationReceipt);
+    const sourceRecord = record(sourceChange);
+    const sourceState = record(sourceRecord?.sourceState);
+    const registryState = record(sourceState?.registry);
+    const packsState = record(sourceState?.packs);
+    const channelsState = record(sourceState?.channels);
+    const inputValidation = input === null ? null : validateAssetRegistrationInput(input, currentState.rawChannels);
+    const proposalValidation = proposal === null ? null : validateAssetRegistrationProposalReceipt(proposal, currentState.rawChannels);
+    const planningAuthorizationValidation = planningAuthorization === null ? null : validateAssetRegistrationApplicationAuthorization(planningAuthorization);
+    const planValidation = plan === null ? null : validateAssetRegistrationApplicationPlanReceipt(plan, currentState.rawChannels);
+    const reviewValidation = review === null ? null : validateAssetRegistrationSourceChangeReviewReceipt(review);
+    const authorizationValidation = applicationAuthorization === null ? null : validateAssetRegistrationSourceApplicationAuthorization(applicationAuthorization);
+    const inputMatchesProposal = inputValidation?.ok === true && proposalValidation?.ok === true &&
+      JSON.stringify({
+        operation: inputValidation.input.operation,
+        asset: inputValidation.input.asset,
+        targetPackIds: inputValidation.input.targetPackIds,
+        decision: inputValidation.input.decision,
+        expectedCurrent: inputValidation.input.expectedCurrent,
+      }) === JSON.stringify({
+        operation: proposalValidation.proposal.operation,
+        asset: proposalValidation.proposal.asset,
+        targetPackIds: proposalValidation.proposal.targetPacks.map((target) => target.packId),
+        decision: proposalValidation.proposal.decision,
+        expectedCurrent: proposalValidation.proposal.expectedCurrent,
+      });
+    const reviewApproved = reviewValidation?.ok === true && reviewRecord?.reviewStatus === "approved" && reviewRecord.applicationEligible === true;
+    const authorizationApproved = authorizationValidation?.ok === true && authorizationRecord?.decision === "approved";
+    const planTechnical = record(planRecord?.technicalValidation);
+    const sourceInputs = record(sourceRecord?.inputs);
+    const sourcePatch = record(sourceRecord?.patch);
+    const reviewInputs = record(reviewRecord?.inputs);
+    const reviewDecision = record(reviewRecord?.reviewDecision);
+    const changedPaths = Array.isArray(sourcePatch?.changedPaths) ? sourcePatch.changedPaths : [];
+    const bindingsValid = inputMatchesProposal && proposalValidation?.ok === true && planningAuthorizationValidation?.ok === true && planValidation?.ok === true &&
+      reviewValidation?.ok === true && authorizationValidation?.ok === true && sourceRecord !== null &&
+      planningAuthorizationRecord?.proposalSha256 === byName.get("asset-proposal.json")?.sha256 &&
+      planTechnical?.proposalSha256 === byName.get("asset-proposal.json")?.sha256 &&
+      planTechnical?.authorizationSha256 === byName.get("planning-authorization.json")?.sha256 &&
+      sourceInputs?.proposalSha256 === byName.get("asset-proposal.json")?.sha256 &&
+      sourceInputs?.authorizationSha256 === byName.get("planning-authorization.json")?.sha256 &&
+      sourceInputs?.applicationPlanSha256 === byName.get("asset-application-plan.json")?.sha256 &&
+      reviewInputs?.proposalSha256 === byName.get("asset-proposal.json")?.sha256 &&
+      reviewInputs?.planningAuthorizationSha256 === byName.get("planning-authorization.json")?.sha256 &&
+      reviewInputs?.applicationPlanSha256 === byName.get("asset-application-plan.json")?.sha256 &&
+      reviewInputs?.sourcePatchSha256 === byName.get("asset-source.patch")?.sha256 &&
+      reviewInputs?.sourceChangeReceiptSha256 === byName.get("asset-source-change.json")?.sha256 &&
+      reviewInputs?.reviewDecisionSha256 === byName.get("asset-review-decision.json")?.sha256 &&
+      authorizationRecord?.sourceChangeReviewSha256 === byName.get("asset-source-review.json")?.sha256 &&
+      authorizationRecord?.sourcePatchSha256 === byName.get("asset-source.patch")?.sha256 &&
+      authorizationRecord?.sourceChangeReceiptSha256 === byName.get("asset-source-change.json")?.sha256 &&
+      reviewDecision?.decision === reviewRecord?.reviewStatus &&
+      changedPaths.length === 1 && changedPaths[0] === REGISTRY_RELATIVE_PATH &&
+      packsState?.changed === false && channelsState?.changed === false;
+    const currentBeforeStateMatches = sourceRecord === null || (
+      registryState?.beforeSha256 === currentState.registryFile.sha256 &&
+      packsState?.beforeSha256 === currentState.packsFile.sha256 &&
+      channelsState?.sha256 === currentState.channelsFile.sha256
+    );
+    const applicationReceiptInputs = record(applicationReceiptRecord?.inputs);
+    const applicationReceiptSourceState = record(applicationReceiptRecord?.sourceState);
+    const applicationReceiptRegistryState = record(applicationReceiptSourceState?.registry);
+    const applicationReceiptPacksState = record(applicationReceiptSourceState?.packs);
+    const applicationReceiptChannelsState = record(applicationReceiptSourceState?.channels);
+    const applied = applicationReceiptRecord?.schemaVersion === 1 &&
+      applicationReceiptRecord.applicationType === "visionx.asset-registration.source-application" &&
+      applicationReceiptRecord.applicationStatus === "applied" && applicationReceiptRecord.sourceChangesApplied === true &&
+      applicationReceiptInputs?.proposalSha256 === byName.get("asset-proposal.json")?.sha256 &&
+      applicationReceiptInputs?.planningAuthorizationSha256 === byName.get("planning-authorization.json")?.sha256 &&
+      applicationReceiptInputs?.applicationPlanSha256 === byName.get("asset-application-plan.json")?.sha256 &&
+      applicationReceiptInputs?.sourcePatchSha256 === byName.get("asset-source.patch")?.sha256 &&
+      applicationReceiptInputs?.sourceChangeReceiptSha256 === byName.get("asset-source-change.json")?.sha256 &&
+      applicationReceiptInputs?.sourceChangeReviewSha256 === byName.get("asset-source-review.json")?.sha256 &&
+      applicationReceiptInputs?.applicationAuthorizationSha256 === byName.get("asset-application-authorization.json")?.sha256 &&
+      applicationReceiptRegistryState?.afterSha256 === currentState.registryFile.sha256 &&
+      applicationReceiptPacksState?.afterSha256 === currentState.packsFile.sha256 &&
+      applicationReceiptChannelsState?.sha256 === currentState.channelsFile.sha256;
+    return Object.freeze({
+      schemaVersion: 1,
+      registrationId,
+      workspaceState: "noncanonical",
+      canonicalChangedOnlyByExplicitApply: true,
+      input,
+      proposal,
+      planningAuthorization,
+      applicationPlan: plan,
+      sourceChange,
+      sourceChangeReview: review,
+      applicationAuthorization,
+      applicationReceipt,
+      artifacts,
+      gates: Object.freeze({
+        inputMatchesProposal,
+        proposalCreated: proposalValidation?.ok === true && inputMatchesProposal,
+        planningAuthorizationStored: planningAuthorizationValidation?.ok === true,
+        planningAuthorized: planningAuthorizationValidation?.ok === true && planningAuthorizationRecord?.decision === "approved",
+        planCreated: planValidation?.ok === true,
+        sourceChangeCreated: sourceChange !== null && sourceRecord !== null,
+        reviewCreated: reviewValidation?.ok === true,
+        reviewApproved,
+        applicationAuthorizationStored: authorizationValidation?.ok === true,
+        applicationAuthorizationApproved: authorizationApproved,
+        exactBindingsValid: bindingsValid,
+        currentCanonicalBeforeStateMatches: currentBeforeStateMatches,
+        applied,
+        applyEnabled: reviewApproved && authorizationApproved && bindingsValid && currentBeforeStateMatches && !applied,
+      }),
+      currentCanonicalState: Object.freeze({
+        registrySha256: currentState.registryFile.sha256,
+        packsSha256: currentState.packsFile.sha256,
+        channelsSha256: currentState.channelsFile.sha256,
+        registryFingerprint: currentState.registryFingerprint,
+        registryAssetCount: currentState.assets.length,
+      }),
+    });
+  }
+
+  async listAssetRegistrationArtifacts(registrationId: string): Promise<readonly unknown[]> {
+    return this.assetRegistrations.listArtifacts(registrationId);
+  }
+
+  async readAssetRegistrationArtifact(registrationId: string, name: AssetRegistrationArtifactName): Promise<Buffer> {
+    return this.assetRegistrations.readArtifact(registrationId, name);
   }
 }

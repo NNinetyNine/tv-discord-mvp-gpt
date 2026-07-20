@@ -94,3 +94,15 @@ select:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .danger-zone { border: 1px solid var(--danger); border-radius: .65rem; padding: 1rem; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 #planning-authorization-json, #pack-application-authorization-json { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+[hidden] { display: none !important; }
+.registration-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(20rem, 1fr); gap: 1rem; align-items: start; }
+.registration-workflow { display: grid; gap: 1.25rem; }
+.registration-status { position: sticky; top: 4.5rem; max-height: calc(100vh - 6rem); overflow: auto; }
+.registration-workflow fieldset { border: 1px solid var(--border); border-radius: .6rem; padding: 1rem; }
+.registration-workflow legend { padding: 0 .4rem; font-weight: 700; }
+#asset-planning-authorization-json, #asset-application-authorization-json { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+@media (max-width: 1050px) {
+  .registration-layout { grid-template-columns: 1fr; }
+  .registration-status { position: static; max-height: none; }
+}
