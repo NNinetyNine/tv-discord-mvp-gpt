@@ -8,13 +8,14 @@ const CHANNELS = Object.freeze({
   indices: "1527847099394162688",
   commodities: "1527847314889244893",
   etfs: "1527847370807705852",
+  forex: "1528609079822516305",
 });
 
 describe("Asset registration logical channel", () => {
-  it("accepts an explicit configured logical key", () => {
-    expect(validateAssetRegistrationChannel("stocks", CHANNELS)).toEqual({
+  it.each(["stocks", "forex"])("accepts explicit configured logical key %s", (channel) => {
+    expect(validateAssetRegistrationChannel(channel, CHANNELS)).toEqual({
       ok: true,
-      channel: "stocks",
+      channel,
     });
   });
 

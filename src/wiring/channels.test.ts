@@ -41,6 +41,7 @@ describe("loadChannelResolver — real config", () => {
     const resolve = loadChannelResolver(resolvePath(process.cwd(), "config", "channels.json"));
     expect(typeof resolve).toBe("function");
     expect(resolve("crypto")).toBe("1527846955668078663");
+    expect(resolve("forex")).toBe("1528609079822516305");
   });
 });
 
@@ -50,6 +51,7 @@ describe("loadChannels — the channel-NAME universe", () => {
     const names = new Set(Object.keys(channels));
     expect(names.has("crypto")).toBe(true);
     expect(names.has("stocks")).toBe(true);
+    expect(names.has("forex")).toBe(true);
   });
 
   it("fails loud on an unreadable file", () => {

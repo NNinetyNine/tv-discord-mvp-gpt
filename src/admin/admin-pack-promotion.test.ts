@@ -24,8 +24,9 @@ function promotionRequest() {
 describe("Administration Pack promotion integration", () => {
   it("exposes configured logical channels without numeric Discord destinations", async () => {
     const { service } = await serviceWithDraft();
-    expect(service.logicalChannels()).toEqual(["commodities", "crypto", "etfs", "indices", "stocks"]);
+    expect(service.logicalChannels()).toEqual(["commodities", "crypto", "etfs", "forex", "indices", "stocks"]);
     expect(JSON.stringify(service.logicalChannels())).not.toContain("152784");
+    expect(JSON.stringify(service.logicalChannels())).not.toContain("1528609079822516305");
   });
   it("creates proposal, plan, and source-change artifacts only beneath the workspace", async () => {
     const { service, workspaceRoot } = await serviceWithDraft();
@@ -50,7 +51,7 @@ describe("Administration Pack promotion integration", () => {
     const { service } = await serviceWithDraft(); const server = await startAdminHttpServer({ service, port: 0 });
     try {
       const channels = await fetch(`${server.url}/api/v1/channels`).then((response) => response.json()) as any;
-      expect(channels.data.logicalChannels).toContain("stocks");
+      expect(channels.data.logicalChannels).toEqual(["commodities", "crypto", "etfs", "forex", "indices", "stocks"]);
       const proposalResponse = await fetch(`${server.url}/api/v1/pack-drafts/qa-pack/promotion/proposal`, { method: "POST", headers: { "Content-Type": "application/json", Origin: server.url }, body: JSON.stringify({ request: promotionRequest() }) });
       expect(proposalResponse.status).toBe(201);
       const proposalData = await proposalResponse.json() as any; const promotionId = proposalData.data.promotionId as string;
@@ -67,7 +68,7 @@ describe("Administration Pack promotion integration", () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8"); const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
     expect(html).toContain("Logical Pack channel"); expect(html).toContain("Select explicitly"); expect(html).toContain("Existing immutable Pack channel"); expect(html).toContain("Prepared only — canonical Pack source has not changed");
     expect(html).not.toMatch(/<button[^>]*>\s*Apply\s*<\/button>/iu);
-    expect(js).toContain('/api/v1/channels'); expect(js).toContain('operation === "create_pack" ? { channel } : {}'); expect(js).not.toContain("majority");
+    expect(js).toContain('/api/v1/channels'); expect(js).toContain('#promotion-channel'); expect(js).toContain('#asset-registration-channel'); expect(js).toContain('operation === "create_pack" ? { channel } : {}'); expect(js).not.toContain("majority");
   });
   it("foreign-origin promotion writes remain rejected", async () => {
     const { service } = await serviceWithDraft(); const server = await startAdminHttpServer({ service, port: 0 });

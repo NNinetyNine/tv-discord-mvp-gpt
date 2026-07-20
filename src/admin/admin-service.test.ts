@@ -36,7 +36,7 @@ describe("AdminService", () => {
     expect(service.status()).toMatchObject({
       registrySourceSha256: "1da65e9cade5d5dd516e726787ac9a9ac8f916543de35ccb9d823bd2bb4b1286",
       packSourceSha256: "29a8284033f1c67466f7a50b54a64d208e72e8dcce25e1cd897a650bdbc3c0b4",
-      channelConfigurationSha256: "3adb7aa6a40e2a5ef7aa9c19440bfc771b5cbdc4f443ad10e0d3235fca550988",
+      channelConfigurationSha256: "a33158a14b8442a7f02d238f415869bc2d0bcc5e4c514a75cc6934d5d5363bed",
     });
   });
 

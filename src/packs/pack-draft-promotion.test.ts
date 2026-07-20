@@ -91,7 +91,7 @@ describe("Pack draft promotion domain", () => {
   it.each([
     ["", "pack_channel_invalid"],
     ["Stocks", "pack_channel_not_configured"],
-    ["forex", "pack_channel_not_configured"],
+    ["futures", "pack_channel_not_configured"],
     ["1527846988270534827", "numeric_channel_id_not_allowed"],
   ])("rejects invalid channel %s", (channel, reason) => expect(validatePackDraftPromotionRequest(request({ channel }), fixture().channels)).toMatchObject({ ok: false, reason }));
   it("does not infer channel from first or majority Asset membership", () => {
