@@ -204,6 +204,16 @@ function removeMember(index) {
 
 function renderMembers() {
   const list = qs("#member-list");
+  const activeElement = document.activeElement;
+  const activeRow = activeElement?.closest?.("[data-member-index]");
+  const activeMemberIndex = activeRow?.dataset.memberIndex ?? null;
+  const activeFieldClass = activeElement instanceof HTMLInputElement
+    ? [...activeElement.classList].find((className) => className.startsWith("member-")) ?? null
+    : null;
+  const activeSelection = activeElement instanceof HTMLInputElement
+    ? { start: activeElement.selectionStart, end: activeElement.selectionEnd }
+    : null;
+
   list.textContent = "";
   qs("#empty-members").hidden = state.members.length > 0;
   qs("#member-count").textContent = `${state.members.length} MEMBER${state.members.length === 1 ? "" : "S"}`;
@@ -253,6 +263,18 @@ function renderMembers() {
     li.querySelector('[data-action="remove"]').addEventListener("click", () => removeMember(index));
     list.append(li);
   });
+
+  if (activeMemberIndex !== null && activeFieldClass !== null) {
+    const restored = list.querySelector(
+      `[data-member-index="${activeMemberIndex}"] .${activeFieldClass}`,
+    );
+    if (restored instanceof HTMLInputElement) {
+      restored.focus();
+      if (activeSelection?.start !== null && activeSelection?.end !== null) {
+        restored.setSelectionRange(activeSelection.start, activeSelection.end);
+      }
+    }
+  }
 }
 
 function escapeHtml(value) {
