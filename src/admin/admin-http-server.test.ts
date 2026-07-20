@@ -154,7 +154,7 @@ describe("Admin HTTP server", () => {
     expect(JSON.stringify(result.body)).not.toContain(tmpdir());
   });
 
-  it.each(["/", "/styles.css", "/app.js"])("serves static UI asset %s with security headers", async (path) => {
+  it.each(["/", "/styles.css", "/app.js", "/visionx-emblem.png", "/visionx-wordmark.png"])("serves static UI asset %s with security headers", async (path) => {
     const { server } = await start();
     const response = await fetch(`${server.url}${path}`);
     expect(response.status).toBe(200);
@@ -162,14 +162,16 @@ describe("Admin HTTP server", () => {
     expect(response.headers.get("content-security-policy")).toBe(ADMIN_CSP);
   });
 
-  it("serves a UI with required views and no external resources", async () => {
+  it("serves the task-oriented Pack builder and read-only Registry without external resources", async () => {
     const { server } = await start();
     const html = await (await fetch(`${server.url}/`)).text();
-    expect(html).toContain("Dashboard");
-    expect(html).toContain("Registry");
-    expect(html).toContain("Packs");
-    expect(html).toContain("Pack drafts");
-    expect(html).toContain("Draft only — not live, not applied, not released, not published");
+    expect(html).toContain("PACK BUILDER");
+    expect(html).toContain("/visionx-emblem.png");
+    expect(html).toContain("/visionx-wordmark.png");
+    expect(html).toContain("CREATE PACK");
+    expect(html).toContain("REGISTRY");
+    expect(html).not.toContain("Asset registrations");
+    expect(html).not.toContain("Pack drafts");
     expect(html).not.toMatch(/https?:\/\//u);
   });
 

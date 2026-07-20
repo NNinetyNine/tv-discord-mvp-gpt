@@ -97,6 +97,8 @@ export interface Asset {
   readonly tradingViewAliases?: readonly string[];
   /** Human-readable display name. */
   readonly display: string;
+  /** Canonical chart currency when known; historical Assets may omit it. */
+  readonly currency?: string;
   /** Logical destination channel, e.g. "stocks". */
   readonly channel: string;
 }

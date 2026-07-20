@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import type { Asset } from "../types.ts";
+import { validatePublicationCurrency } from "./asset-market-identity.ts";
 /**
  * Asset registry. Keyed by stable internal id (e.g. "btc"); the `tradingView`
  * field is what filenames resolve against, and `tradingViewAliases` lists
@@ -31,6 +32,7 @@ interface RawEntry {
   tradingView?: unknown;
   tradingViewAliases?: unknown;
   display?: unknown;
+  currency?: unknown;
   channel?: unknown;
 }
 function isNonEmptyString(v: unknown): v is string {
@@ -73,6 +75,14 @@ export function buildRegistry(
     if (!isNonEmptyString(entry.display)) {
       throw new RegistryError(`asset "${id}".display must be a non-empty string`);
     }
+    let currency: string | undefined;
+    if (entry.currency !== undefined) {
+      const validatedCurrency = validatePublicationCurrency(entry.currency);
+      if (!validatedCurrency.ok) {
+        throw new RegistryError(`asset "${id}".currency is invalid: ${validatedCurrency.detail}`);
+      }
+      currency = validatedCurrency.currency;
+    }
     if (!isNonEmptyString(entry.channel)) {
       throw new RegistryError(`asset "${id}".channel must be a non-empty string`);
     }
@@ -105,6 +115,7 @@ export function buildRegistry(
       id,
       tradingView: tv,
       display: entry.display,
+      ...(currency === undefined ? {} : { currency }),
       channel: entry.channel,
       ...(aliases ? { tradingViewAliases: aliases } : {}),
     };
@@ -181,6 +192,7 @@ export interface CreateAssetInput {
   readonly id: string;
   readonly tradingView: string;
   readonly display: string;
+  readonly currency?: string;
   readonly channel: string;
   readonly tradingViewAliases?: readonly string[];
 }
@@ -262,6 +274,7 @@ export function createAsset(
       ? { tradingViewAliases: [...input.tradingViewAliases] }
       : {}),
     display: input.display,
+    ...(input.currency === undefined ? {} : { currency: input.currency }),
     channel: input.channel,
   };
   const candidate: Record<string, RawEntry> = { ...current, [input.id]: entry };
@@ -286,6 +299,7 @@ export function createAsset(
   const entryLine =
     `  ${JSON.stringify(input.id)}: { "tradingView": ${JSON.stringify(input.tradingView)},` +
     `${aliasPart} "display": ${JSON.stringify(input.display)},` +
+    `${input.currency === undefined ? "" : ` "currency": ${JSON.stringify(input.currency)},`}` +
     ` "channel": ${JSON.stringify(input.channel)} }`;
   const newText = `${body}${separator}${entryLine}\n}${hadTrailingNewline ? "\n" : ""}`;
 

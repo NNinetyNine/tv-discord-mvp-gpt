@@ -1,6 +1,6 @@
 # VisionX Architecture
 
-**Version:** 1.1 · **Recorded:** 2026-07-10 · **Amended:** 2026-07-11 (session evolution phase close) · **Subordinate to:** `docs/CONSTITUTION.md`
+**Version:** 1.2 · **Recorded:** 2026-07-10 · **Amended:** 2026-07-20 (task-oriented Pack builder) · **Subordinate to:** `docs/CONSTITUTION.md`
 
 > The Constitution governs what VisionX must do. This document records how the
 > current implementation satisfies it. Where they conflict, the Constitution is
@@ -187,3 +187,47 @@ path — were removed by the session evolution phase and are struck.)
 *Everything above traces to the current repository or to a ratified
 implementation decision. Anything about the future that is not a scheduled
 dissolution belongs in Constitution §9–§10, not here.*
+
+## 9. Task-oriented definition editing
+
+The administration front door now expresses one operator use case: **Create Pack**.
+It resolves existing Registry Assets, reconciles missing Assets inline, previews the
+complete business change, then applies the future Registry and Packs sources as one
+transaction. Legacy Asset-registration and Pack-promotion custody APIs remain readable
+and testable during transition, but their proposal, planning, review, authorization,
+and confirmation controls are no longer primary product navigation. Deterministic
+hashes, diffs, and receipts remain internal evidence exposed only through read-only
+technical details.
+
+### Canonical Asset currency
+
+`definitions/registry.json` is the authority for Asset-owned chart currency. The loaded
+`Asset` model accepts optional `currency` so historical entries remain compatible,
+while every missing Asset created by the Pack builder requires strict uppercase
+alphanumeric currency. The Registry fingerprint includes currency when present and
+omits the property when absent, preserving the historical baseline representation.
+The first-party chart-metadata constructor derives market and symbol from the qualified
+canonical TradingView token and combines them with canonical display and currency;
+render callers cannot override those Asset-owned facts. No second metadata store is
+authoritative.
+
+### Combined Registry and Packs transaction
+
+Preview constructs and reloads both complete future definitions without mutation. On
+Create, the application re-reads Registry, Packs, and channels, verifies exact preview-
+bound state, prepares both future files and both rollback backups, then replaces
+Registry and Packs under one business transaction. A failure after either replacement
+or during receipt finalization restores and verifies both immediately preceding source
+files. A successful no-overwrite receipt, advanced source state, occupied Asset IDs,
+and occupied Pack ID jointly reject replay. Channel configuration is verified but never
+written. Rendering, publication, release, Discord, and external network paths are not
+reachable from this use case.
+
+### Administration presentation
+
+The current delivery surface uses the first-party VisionX terminal language: one
+near-black canvas with a restrained root-level gold atmosphere, translucent charcoal
+windows, compact tracked headings, dense controls, one filled-gold Create action, and
+semantic green/red feedback. Operator input is preserved in confined workspace state
+and browser local storage after validation, stale-state, or safely restored transaction
+failures. The Registry remains a read-only inspection view.

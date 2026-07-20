@@ -5,6 +5,13 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 
 import type { Asset } from "../types.ts";
+import {
+  prepareCreatePackWithMissingAssets,
+  serializeCreatePackPreview,
+  serializeCreatePackWithMissingAssetsInput,
+  type CreatePackPreview,
+} from "../application/create-pack-with-missing-assets.ts";
+import { applyCreatePackWithMissingAssetsFile } from "../application/create-pack-with-missing-assets-file.ts";
 import type { Pack } from "../packs/packs.ts";
 import { buildPacks } from "../packs/packs.ts";
 import { buildRegistry } from "../registry/registry.ts";
@@ -19,6 +26,7 @@ import {
   validatePackDraft,
 } from "./admin-types.ts";
 import { AdminWorkspace } from "./admin-workspace.ts";
+import { AdminPackBuilderWorkspace } from "./admin-pack-builder-workspace.ts";
 import { AdminPromotionWorkspace, type PackPromotionArtifactName } from "./admin-promotion-workspace.ts";
 import {
   AdminAssetRegistrationWorkspace,
@@ -107,8 +115,8 @@ interface LiveState {
 
 export interface AdminStatus {
   readonly schemaVersion: 1;
-  readonly canonicalState: "read_only";
-  readonly canonicalStateReadOnly: true;
+  readonly canonicalState: "controlled_write";
+  readonly canonicalStateReadOnly: false;
   readonly registryAssetCount: number;
   readonly packCount: number;
   readonly packMembershipCount: number;
@@ -127,6 +135,8 @@ export interface AdminAssetSummary {
   readonly logicalChannel: string;
   readonly packMembershipCount: number;
   readonly packIds: readonly string[];
+  readonly currency?: string;
+  readonly tradingViewAliases?: readonly string[];
 }
 
 export interface AdminAssetSearchResult {
@@ -240,6 +250,8 @@ function assetSummary(asset: Asset, packIds: readonly string[]): AdminAssetSumma
     logicalChannel: asset.channel,
     packMembershipCount: packIds.length,
     packIds: Object.freeze([...packIds]),
+    ...(asset.currency === undefined ? {} : { currency: asset.currency }),
+    ...(asset.tradingViewAliases === undefined ? {} : { tradingViewAliases: Object.freeze([...asset.tradingViewAliases]) }),
   });
 }
 
@@ -248,6 +260,7 @@ export class AdminService {
   readonly workspace: AdminWorkspace;
   readonly promotions: AdminPromotionWorkspace;
   readonly assetRegistrations: AdminAssetRegistrationWorkspace;
+  readonly packBuilder: AdminPackBuilderWorkspace;
   #state: LiveState;
 
   private constructor(
@@ -255,12 +268,14 @@ export class AdminService {
     workspace: AdminWorkspace,
     promotions: AdminPromotionWorkspace,
     assetRegistrations: AdminAssetRegistrationWorkspace,
+    packBuilder: AdminPackBuilderWorkspace,
     state: LiveState,
   ) {
     this.repositoryRoot = repositoryRoot;
     this.workspace = workspace;
     this.promotions = promotions;
     this.assetRegistrations = assetRegistrations;
+    this.packBuilder = packBuilder;
     this.#state = state;
   }
 
@@ -272,8 +287,9 @@ export class AdminService {
     }
     const promotions = await AdminPromotionWorkspace.open(workspace.root);
     const assetRegistrations = await AdminAssetRegistrationWorkspace.open(workspace.root);
+    const packBuilder = await AdminPackBuilderWorkspace.open(workspace.root);
     const state = await AdminService.#loadState(repositoryRoot);
-    return new AdminService(repositoryRoot, workspace, promotions, assetRegistrations, state);
+    return new AdminService(repositoryRoot, workspace, promotions, assetRegistrations, packBuilder, state);
   }
 
   static async #loadState(repositoryRoot: string): Promise<LiveState> {
@@ -332,17 +348,8 @@ export class AdminService {
       assetPackIds.set(asset.id, Object.freeze([...(memberships.get(asset.id) ?? [])]));
     }
 
-    const auditableAssets = assets.map((asset) => {
-      const raw = (registryValue as Record<string, Record<string, unknown>>)[asset.id] ?? {};
-      return Object.freeze({
-        ...asset,
-        ...(raw.market === undefined ? {} : { market: raw.market }),
-        ...(raw.tradingViewSymbol === undefined ? {} : { tradingViewSymbol: raw.tradingViewSymbol }),
-        ...(raw.currency === undefined ? {} : { currency: raw.currency }),
-      });
-    });
     const audit = auditAssetMarketIdentity(
-      auditableAssets,
+      assets,
       packs.map((pack) => Object.freeze({ id: pack.id, assets: Object.freeze([...pack.assets]) })),
     );
 
@@ -377,8 +384,8 @@ export class AdminService {
     const state = this.#state;
     return Object.freeze({
       schemaVersion: 1,
-      canonicalState: "read_only",
-      canonicalStateReadOnly: true,
+      canonicalState: "controlled_write",
+      canonicalStateReadOnly: false,
       registryAssetCount: state.assets.length,
       packCount: state.packs.length,
       packMembershipCount: state.packs.reduce((sum, pack) => sum + pack.assets.length, 0),
@@ -412,6 +419,96 @@ export class AdminService {
       packsBytes: Buffer.from(this.#state.packsFile.bytes),
       channelsBytes: Buffer.from(this.#state.channelsFile.bytes),
     });
+  }
+
+  async previewPackCreation(value: unknown): Promise<CreatePackPreview> {
+    await this.refresh();
+    const prepared = prepareCreatePackWithMissingAssets({
+      value,
+      registryBytes: Buffer.from(this.#state.registryFile.bytes),
+      packsBytes: Buffer.from(this.#state.packsFile.bytes),
+      channelsBytes: Buffer.from(this.#state.channelsFile.bytes),
+    });
+    if (!prepared.ok) {
+      const code = prepared.reason === "existing_asset_currency_missing"
+        ? "existing_asset_currency_missing"
+        : prepared.reason === "tradingview_conflict"
+          ? "tradingview_conflict"
+          : prepared.reason === "display_conflict"
+            ? "display_conflict"
+            : prepared.reason === "pack_already_exists"
+              ? "pack_already_exists"
+              : prepared.reason === "unknown_channel"
+                ? "pack_channel_not_configured"
+                : prepared.reason === "unresolved_channel"
+                  ? "pack_channel_not_configured"
+                  : "invalid_pack_builder_input";
+      throw new AdminError(code, prepared.detail, code === "pack_already_exists" ? 409 : 400, {
+        ...(prepared.memberIndex === undefined ? {} : { memberIndex: prepared.memberIndex }),
+        ...(prepared.field === undefined ? {} : { field: prepared.field }),
+      });
+    }
+    await this.packBuilder.savePreview(
+      prepared.value.input.pack.id,
+      serializeCreatePackWithMissingAssetsInput(prepared.value.input),
+      serializeCreatePackPreview(prepared.value.preview),
+    );
+    return prepared.value.preview;
+  }
+
+  async createPackFromPreview(packId: string, previewId: unknown): Promise<Readonly<Record<string, unknown>>> {
+    if (typeof previewId !== "string" || !/^[a-f0-9]{64}$/u.test(previewId)) {
+      throw new AdminError("invalid_request", "previewId must be a lowercase SHA-256 identity.");
+    }
+    const state = await this.packBuilder.readState(packId);
+    if (state.input === undefined || state.preview === undefined) {
+      throw new AdminError("pack_builder_preview_not_found", "Create a current Pack preview before applying.", 404);
+    }
+    if (!isRecord(state.preview) || state.preview.previewId !== previewId) {
+      throw new AdminError("pack_builder_preview_mismatch", "The submitted preview is not the current stored preview.", 409);
+    }
+    const paths = await this.packBuilder.paths(packId);
+    const applied = await applyCreatePackWithMissingAssetsFile({
+      repositoryRoot: this.repositoryRoot,
+      inputPath: paths.input,
+      previewPath: paths.preview,
+      receiptOutputPath: paths.receipt,
+    });
+    if (!applied.ok) {
+      const code = applied.reason === "stale_registry_state"
+        ? "stale_registry_state"
+        : applied.reason === "stale_pack_state"
+          ? "stale_pack_state"
+          : applied.reason === "stale_channel_state"
+            ? "stale_channel_state"
+            : applied.reason === "preview_mismatch"
+              ? "pack_builder_preview_mismatch"
+              : applied.reason === "application_already_completed"
+                ? "application_already_completed"
+                : applied.reason === "rollback_failed"
+                  ? "rollback_failed"
+                  : applied.reason === "rollback_verification_failed"
+                    ? "rollback_verification_failed"
+                    : applied.reason === "application_receipt_finalize_failed"
+                      ? "application_receipt_finalize_failed"
+                      : "pack_builder_transaction_failed";
+      throw new AdminError(code, applied.detail, new Set(["stale_registry_state", "stale_pack_state", "stale_channel_state", "pack_builder_preview_mismatch", "application_already_completed"]).has(code) ? 409 : 500, { safelyRestored: applied.safelyRestored });
+    }
+    await this.refresh();
+    return Object.freeze({
+      schemaVersion: 1,
+      created: true,
+      packId,
+      receiptSha256: applied.receiptSha256,
+      receiptByteSize: applied.receiptByteSize,
+      receipt: applied.receipt,
+      status: this.status(),
+    });
+  }
+
+  async packCreationState(packId: string): Promise<Readonly<Record<string, unknown>>> {
+    const state = await this.packBuilder.readState(packId);
+    return Object.freeze({ schemaVersion: 1, packId, ...state });
   }
 
   async draftArtifact(draftId: string): Promise<{ readonly draft: PackDraft; readonly bytes: Buffer }> {

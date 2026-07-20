@@ -196,11 +196,12 @@ describe("Asset registration source-change generation", () => {
     expect(registry.source_change_test_asset).toEqual({
       tradingView: "NASDAQ:SOURCECHANGETESTASSET",
       display: "Example Asset",
+      currency: "USD",
       channel: "stocks",
     });
     expect(result.packsAfterBytes.equals(readFileSync(resolve("definitions/packs.json")))).toBe(true);
     expect(result.patchBytes.toString("utf8")).not.toContain("1527846988270534827");
-    expect(result.patchBytes.toString("utf8")).not.toContain('"currency"');
+    expect(result.patchBytes.toString("utf8")).toContain('"currency": "USD"');
     expect(result.patchBytes.toString("utf8").endsWith("\n")).toBe(true);
     expect(result.receiptBytes.toString("utf8").endsWith("\n")).toBe(true);
   });

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Pack } from "../packs/packs.ts";
 import type { Asset } from "../types.ts";
 import {
+  computeAssetRegistrationRegistryFingerprint,
   proposeAssetRegistration,
   serializeAssetRegistrationProposal,
   validateAssetRegistrationInput,
@@ -159,6 +160,18 @@ describe("Asset registration proposals schemaVersion 2", () => {
   it("rejects unsupported schema versions and operations", () => {
     expect(validateAssetRegistrationInput({ ...ADD_V2, schemaVersion: 3 }, CHANNELS)).toMatchObject({ ok: false, reason: "unsupported_schema_version" });
     expect(validateAssetRegistrationInput({ ...ADD_V2, operation: "remove" }, CHANNELS)).toMatchObject({ ok: false, reason: "unsupported_operation" });
+  });
+});
+
+
+describe("Asset registration Registry fingerprint currency compatibility", () => {
+  it("preserves the historical representation when currency is absent and binds currency when present", () => {
+    const historical = computeAssetRegistrationRegistryFingerprint(ASSETS, PACKS);
+    expect(computeAssetRegistrationRegistryFingerprint(ASSETS.map((asset) => ({ ...asset, currency: undefined })), PACKS)).toBe(historical);
+    const withCurrency = ASSETS.map((asset, index) => index === 0 ? Object.freeze({ ...asset, currency: "USD" }) : asset);
+    expect(computeAssetRegistrationRegistryFingerprint(withCurrency, PACKS)).not.toBe(historical);
+    const changedCurrency = withCurrency.map((asset, index) => index === 0 ? Object.freeze({ ...asset, currency: "CAD" }) : asset);
+    expect(computeAssetRegistrationRegistryFingerprint(changedCurrency, PACKS)).not.toBe(computeAssetRegistrationRegistryFingerprint(withCurrency, PACKS));
   });
 });
 

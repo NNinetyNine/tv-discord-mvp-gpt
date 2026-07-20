@@ -14,9 +14,10 @@ entry has:
 
 - `tradingView` — the symbol as extracted from our Discord cashtags
 - `display` — human-readable name
+- `currency` — optional canonical chart currency. Historical Assets may omit it; every Asset created through the task-oriented Pack builder must provide it explicitly. Currency is never inferred or defaulted.
 - `channel` — the single grouping field (see `config/channels.json`)
 
-Entries are grouped by channel for easier review.
+Entries are grouped by channel for easier review. New entries are appended without reserializing historical entries. When present, the deterministic field order is `tradingView`, `tradingViewAliases`, `display`, `currency`, `channel`.
 
 ## packs.json
 

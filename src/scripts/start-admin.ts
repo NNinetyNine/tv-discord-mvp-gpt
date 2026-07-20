@@ -55,8 +55,9 @@ export async function main(
       url: server.url,
       host: server.host,
       port: server.port,
-      canonicalStateReadOnly: true,
-      workspaceType: "pack-drafts",
+      canonicalState: "controlled_write",
+      canonicalStateReadOnly: false,
+      workspaceType: "pack-builder",
     }, null, 2));
 
     let closing = false;

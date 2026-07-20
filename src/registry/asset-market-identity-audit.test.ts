@@ -6,11 +6,9 @@ const ASSETS = Object.freeze([
   Object.freeze({ id: "aem", tradingView: "AEM", display: "Agnico Eagle Mines", channel: "stocks" }),
   Object.freeze({
     id: "btc",
-    tradingView: "BTC",
+    tradingView: "BINANCE:BTCUSDT",
     display: "Bitcoin",
     channel: "crypto",
-    market: "BINANCE",
-    tradingViewSymbol: "BINANCE:BTCUSDT",
     currency: "USDT",
   }),
 ]);
@@ -32,6 +30,22 @@ describe("Asset market identity audit", () => {
     });
     expect(aem).not.toHaveProperty("market");
     expect(aem).not.toHaveProperty("currency");
+  });
+
+
+  it("derives market and symbol identity from a qualified token and typed canonical currency", () => {
+    const audit = auditAssetMarketIdentity([
+      Object.freeze({ id: "dxy", tradingView: "TVC:DXY", display: "U.S. Dollar Currency Index", currency: "USD", channel: "forex" }),
+    ], []);
+    expect(audit).toMatchObject({ ok: true, registryAssetCount: 1, gaps: [] });
+    expect(audit.assets[0]).toMatchObject({
+      marketIdentityStatus: "complete", currencyStatus: "valid", market: "TVC", tradingViewSymbol: "TVC:DXY", currency: "USD", issues: [],
+    });
+  });
+
+  it("reports only missing currency for a valid qualified token without canonical currency", () => {
+    const audit = auditAssetMarketIdentity([Object.freeze({ id: "dxy", tradingView: "TVC:DXY", display: "DXY", channel: "forex" })], []);
+    expect(audit.assets[0]).toMatchObject({ marketIdentityStatus: "complete", currencyStatus: "missing", issues: ["missing_publication_currency"] });
   });
 
   it("is deterministic and includes every Asset and membership once", () => {

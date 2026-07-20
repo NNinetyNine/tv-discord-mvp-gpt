@@ -240,15 +240,31 @@ function parseInteger(value: string | null, fallback: number): number {
 
 async function serveStatic(response: ServerResponse, path: string): Promise<void> {
   const route = path === "/" ? "/index.html" : path;
-  if (!new Set(["/index.html", "/styles.css", "/app.js"]).has(route)) {
+  const staticAssets = new Map<string, URL>([
+    ["/index.html", new URL("../admin-ui/index.html", import.meta.url)],
+    ["/styles.css", new URL("../admin-ui/styles.css", import.meta.url)],
+    ["/app.js", new URL("../admin-ui/app.js", import.meta.url)],
+    ["/visionx-emblem.png", new URL("../../assets/branding/visionx-emblem.png", import.meta.url)],
+    ["/visionx-wordmark.png", new URL("../../assets/branding/visionx-wordmark.png", import.meta.url)],
+  ]);
+  const assetUrl = staticAssets.get(route);
+  if (assetUrl === undefined) {
     throw new AdminError("route_not_found", "Route was not found.", 404);
   }
-  const assetUrl = new URL(`../admin-ui${route}`, import.meta.url);
   const bytes = await readFile(fileURLToPath(assetUrl));
   securityHeaders(response, false);
   response.statusCode = 200;
   const extension = extname(route);
-  response.setHeader("Content-Type", extension === ".html" ? "text/html; charset=utf-8" : extension === ".css" ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8");
+  response.setHeader(
+    "Content-Type",
+    extension === ".html"
+      ? "text/html; charset=utf-8"
+      : extension === ".css"
+        ? "text/css; charset=utf-8"
+        : extension === ".png"
+          ? "image/png"
+          : "text/javascript; charset=utf-8",
+  );
   response.setHeader("Cache-Control", "no-cache");
   response.end(bytes);
 }
@@ -273,6 +289,26 @@ async function routeApi(
   }
   const assetMatch = /^\/api\/v1\/assets\/([^/]+)$/u.exec(pathname);
   if (assetMatch !== null && method === "GET") return ok(response, service.getAsset(assetMatch[1] ?? ""));
+  if (pathname === "/api/v1/packs/create/preview") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Create Pack preview body must be an object.");
+    exactFields(body, ["input"], "Create Pack preview body");
+    return ok(response, await service.previewPackCreation(body.input));
+  }
+  if (pathname === "/api/v1/packs/create") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Create Pack body must be an object.");
+    exactFields(body, ["packId", "previewId"], "Create Pack body");
+    if (typeof body.packId !== "string") throw new AdminError("invalid_request", "packId must be a string.");
+    return ok(response, await service.createPackFromPreview(body.packId, body.previewId), 201);
+  }
+  const packCreationState = /^\/api\/v1\/packs\/create\/([^/]+)\/state$/u.exec(pathname);
+  if (packCreationState !== null) {
+    if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    return ok(response, await service.packCreationState(packCreationState[1] ?? ""));
+  }
   if (pathname === "/api/v1/packs" && method === "GET") return ok(response, service.listPacks());
   const packMatch = /^\/api\/v1\/packs\/([^/]+)$/u.exec(pathname);
   if (packMatch !== null && method === "GET") return ok(response, service.getPack(packMatch[1] ?? ""));

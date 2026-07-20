@@ -164,6 +164,7 @@ describe("Asset registration application planning schemaVersion 2", () => {
       id: "example_asset",
       tradingView: "NASDAQ:EXAMPLE",
       display: "Example Asset",
+      currency: "USD",
       channel: "stocks",
     });
     expect(result.plan.simulatedResult.registryFingerprintAfter).toBe(

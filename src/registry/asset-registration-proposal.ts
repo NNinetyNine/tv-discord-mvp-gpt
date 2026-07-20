@@ -415,6 +415,7 @@ export function computeAssetRegistrationRegistryFingerprint(
         tradingView: asset.tradingView,
         tradingViewAliases: asset.tradingViewAliases === undefined ? [] : [...asset.tradingViewAliases],
         display: asset.display,
+        ...(asset.currency === undefined ? {} : { currency: asset.currency }),
         channel: asset.channel,
       })),
     packs: packs.map((pack) => ({ id: pack.id, display: pack.display, channel: pack.channel, assets: [...pack.assets] })),

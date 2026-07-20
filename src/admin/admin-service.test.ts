@@ -22,7 +22,8 @@ describe("AdminService", () => {
   it("loads exact canonical counts and fingerprint", async () => {
     const service = await createService();
     expect(service.status()).toMatchObject({
-      canonicalStateReadOnly: true,
+      canonicalState: "controlled_write",
+      canonicalStateReadOnly: false,
       registryAssetCount: 131,
       packCount: 5,
       packMembershipCount: 131,

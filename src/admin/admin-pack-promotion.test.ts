@@ -64,11 +64,18 @@ describe("Administration Pack promotion integration", () => {
       expect(artifactList.data.artifacts.some((entry: any) => entry.name === "pack-source.patch")).toBe(true);
     } finally { await server.close(); }
   });
-  it("UI requires explicit channel selection and contains no Apply control", async () => {
+  it("keeps legacy promotion APIs compatible but removes their custody controls from the primary UI", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8"); const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
-    expect(html).toContain("Logical Pack channel"); expect(html).toContain("Select explicitly"); expect(html).toContain("Existing immutable Pack channel"); expect(html).toContain("Prepared only — canonical Pack source has not changed");
-    expect(html).not.toMatch(/<button[^>]*>\s*Apply\s*<\/button>/iu);
-    expect(js).toContain('/api/v1/channels'); expect(js).toContain('#promotion-channel'); expect(js).toContain('#asset-registration-channel'); expect(js).toContain('operation === "create_pack" ? { channel } : {}'); expect(js).not.toContain("majority");
+    expect(html).toContain("LOGICAL CHANNEL");
+    expect(html).toContain('id="pack-channel"');
+    expect(html).toContain("CREATE PACK");
+    expect(html).not.toContain("Existing immutable Pack channel");
+    expect(html).not.toContain("Planning authorization");
+    expect(html).not.toContain("APPLY PACK SOURCE CHANGE");
+    expect(js).toContain('/api/v1/channels');
+    expect(js).toContain('#pack-channel');
+    expect(js).not.toContain('#promotion-channel');
+    expect(js).not.toContain("majority");
   });
   it("foreign-origin promotion writes remain rejected", async () => {
     const { service } = await serviceWithDraft(); const server = await startAdminHttpServer({ service, port: 0 });

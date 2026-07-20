@@ -396,6 +396,7 @@ function transformRegistrySource(
     const entry = Object.freeze({
       tradingView: asset.tradingViewSymbol,
       display: asset.displayName,
+      currency: asset.currency,
       channel: asset.channel,
     });
     candidate = { ...current, [asset.id]: entry };
@@ -413,6 +414,7 @@ function transformRegistrySource(
     const entryLine =
       `  ${JSON.stringify(asset.id)}: { "tradingView": ${JSON.stringify(asset.tradingViewSymbol)},` +
       ` "display": ${JSON.stringify(asset.displayName)},` +
+      ` "currency": ${JSON.stringify(asset.currency)},` +
       ` "channel": ${JSON.stringify(asset.channel)} }`;
     newText = `${body}${separator}${entryLine}\n}\n`;
   } else {

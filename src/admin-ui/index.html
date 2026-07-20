@@ -3,372 +3,99 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>VisionX Administration</title>
+  <title>VisionX Pack Builder</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <a class="skip-link" href="#main-content">Skip to Pack builder</a>
+  <div class="ambient-layer" aria-hidden="true"></div>
   <header class="app-header">
-    <div>
-      <p class="eyebrow">VisionX local administration</p>
-      <h1>Curator workspace</h1>
+    <div class="brand-lockup" aria-label="VisionX Pack builder">
+      <img class="brand-emblem" src="/visionx-emblem.png" alt="" aria-hidden="true">
+      <span class="brand-rule" aria-hidden="true"></span>
+      <span class="brand-copy"><img class="brand-wordmark" src="/visionx-wordmark.png" alt="VISIONX"><small>PACK BUILDER</small></span>
     </div>
-    <div class="header-status" role="status">
-      <strong>Read-only canonical state</strong>
-      <span>Draft saves never modify live Pack definitions.</span>
+    <div class="canonical-context" aria-live="polite">
+      <span id="source-state">CANONICAL STATE · LOADING</span>
+      <span id="inventory-context">— ASSETS · — PACKS</span>
     </div>
   </header>
 
-  <nav class="primary-nav" aria-label="Administration views">
-    <button type="button" data-view="dashboard" aria-current="page">Dashboard</button>
-    <button type="button" data-view="registry">Registry</button>
-    <button type="button" data-view="asset-registrations">Asset registrations</button>
-    <button type="button" data-view="packs">Packs</button>
-    <button type="button" data-view="drafts">Pack drafts</button>
+  <nav class="primary-nav" aria-label="Primary">
+    <button type="button" data-view="packs" aria-current="page">PACKS</button>
+    <button type="button" data-view="registry">REGISTRY</button>
   </nav>
 
-  <main id="main-content" tabindex="-1">
-    <section id="global-message" class="message" aria-live="polite" hidden></section>
+  <main id="main-content">
+    <div id="message" class="message" role="alert" tabindex="-1" hidden></div>
 
-    <section class="view" data-view-panel="dashboard">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Live source overview</p>
-          <h2>Dashboard</h2>
+    <section class="view" data-view-panel="packs">
+      <section class="window pack-controls" aria-labelledby="pack-controls-heading">
+        <header class="window-header">
+          <div><p class="micro-label">CREATE PACK</p><h1 id="pack-controls-heading">PACK IDENTITY</h1></div>
+          <span id="member-count" class="context-fact">0 MEMBERS</span>
+        </header>
+        <div class="compact-fields">
+          <label><span>PACK ID</span><input id="pack-id" autocomplete="off" maxlength="64" pattern="[a-z0-9][a-z0-9_-]{0,63}" placeholder="forex"></label>
+          <label><span>DISPLAY NAME</span><input id="pack-display" autocomplete="off" maxlength="120" placeholder="Forex"></label>
+          <label><span>LOGICAL CHANNEL</span><select id="pack-channel"><option value="">SELECT CHANNEL</option></select></label>
+          <div class="derived-channel"><span>DESTINATION</span><strong id="channel-status">SELECT A CHANNEL</strong></div>
         </div>
-        <button id="refresh-live-state" type="button">Refresh live state</button>
-      </div>
-      <div id="dashboard-cards" class="metric-grid" aria-live="polite"></div>
-      <section class="panel">
-        <h3>Source integrity</h3>
-        <dl id="source-integrity" class="definition-grid"></dl>
+      </section>
+
+      <section class="window membership-workspace" aria-labelledby="membership-heading">
+        <header class="window-header">
+          <div><p class="micro-label">ORDERED ASSET MEMBERSHIP</p><h2 id="membership-heading">MEMBERS</h2></div>
+          <button id="add-member" class="outline-action" type="button">+ ADD ASSET</button>
+        </header>
+        <p class="window-help">Choose registered Assets by stable ID. Missing Assets can be completed inline and inherit the selected Pack channel.</p>
+        <ol id="member-list" class="member-list" aria-live="polite"></ol>
+        <p id="empty-members" class="empty-state">ADD THE FIRST ASSET TO BEGIN</p>
+      </section>
+
+      <section class="window preview-window" aria-labelledby="preview-heading">
+        <header class="window-header">
+          <div><p class="micro-label">BUSINESS CHANGE</p><h2 id="preview-heading">PREVIEW</h2></div>
+          <span id="preview-state" class="context-fact">WAITING FOR VALID INPUT</span>
+        </header>
+        <div id="preview-content" class="preview-content">
+          <p>Complete the Pack and member details to see the exact change.</p>
+        </div>
+        <details id="technical-details" class="technical-details">
+          <summary>TECHNICAL DETAILS</summary>
+          <pre id="technical-content">No validated preview exists.</pre>
+        </details>
+        <div class="create-row">
+          <p>Nothing will be rendered, published, released, or sent to Discord.</p>
+          <button id="create-pack" class="primary-action" type="button" disabled>CREATE PACK</button>
+        </div>
+      </section>
+
+      <section id="result-window" class="window result-window" hidden aria-live="polite">
+        <header class="window-header"><div><p class="micro-label">RESULT</p><h2 id="result-heading">PACK CREATED</h2></div></header>
+        <div id="result-content"></div>
       </section>
     </section>
 
     <section class="view" data-view-panel="registry" hidden>
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">131 canonical Assets</p>
-          <h2>Registry</h2>
+      <section class="window registry-window" aria-labelledby="registry-heading">
+        <header class="window-header">
+          <div><p class="micro-label">CANONICAL DEFINITIONS</p><h1 id="registry-heading">REGISTRY</h1></div>
+          <span class="context-fact">READ ONLY</span>
+        </header>
+        <p class="window-help">Registry source is canonical and read-only in this interface.</p>
+        <label class="registry-search"><span>SEARCH ASSETS</span><input id="registry-search" type="search" placeholder="ID, display, or TradingView token"></label>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>DISPLAY</th><th>TRADINGVIEW</th><th>CURRENCY</th><th>CHANNEL</th></tr></thead>
+            <tbody id="registry-body"></tbody>
+          </table>
         </div>
-      </div>
-      <div class="split-layout">
-        <section class="panel">
-          <form id="asset-search-form" class="search-row" role="search">
-            <label for="asset-search">Search Assets</label>
-            <input id="asset-search" name="q" type="search" placeholder="ID, display name, symbol, or channel" autocomplete="off">
-            <button type="submit">Search</button>
-          </form>
-          <p class="help-text">Registry source is canonical and read-only in this interface.</p>
-          <p class="help-text">Results are deterministic and limited to 100 entries.</p>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr><th scope="col">Asset ID</th><th scope="col">Display name</th><th scope="col">TradingView</th><th scope="col">Channel</th><th scope="col">Packs</th></tr>
-              </thead>
-              <tbody id="asset-table-body"></tbody>
-            </table>
-          </div>
-        </section>
-        <aside id="asset-detail" class="panel detail-panel" aria-live="polite">
-          <h3>Asset details</h3>
-          <p>Select an Asset to inspect its current Pack memberships.</p>
-        </aside>
-      </div>
-    </section>
-
-    <section class="view" data-view-panel="asset-registrations" hidden>
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Controlled noncanonical workspace</p>
-          <h2>Asset registrations</h2>
-        </div>
-        <button id="asset-registration-refresh-status" type="button">Reload registration status</button>
-      </div>
-      <div class="draft-banner" role="note">
-        <strong>Registration input and generated artifacts are noncanonical workspace state.</strong>
-        <span>Only a separately reviewed, separately authorized, explicitly confirmed Apply action may modify <code>definitions/registry.json</code>. Packs and channels remain unchanged.</span>
-      </div>
-
-      <div class="registration-layout">
-        <section class="panel registration-workflow" aria-labelledby="asset-registration-input-heading">
-          <section class="trust-gate" aria-labelledby="asset-registration-input-heading">
-            <h3 id="asset-registration-input-heading">Prepare Asset registration proposal</h3>
-            <p class="help-text">All schema-v2 Asset identity fields and curator decision metadata are explicit. Target Pack IDs are fixed to an empty array for this Registry-only milestone.</p>
-            <div class="field-grid">
-              <label>Operation
-                <select id="asset-registration-operation">
-                  <option value="add">add</option>
-                  <option value="update_identity">update_identity</option>
-                </select>
-              </label>
-              <label>Asset ID (<code>asset.id</code>)<input id="asset-registration-id" required pattern="[a-z0-9][a-z0-9_-]{0,63}" maxlength="64" autocomplete="off"></label>
-              <label>Display name (<code>asset.displayName</code>)<input id="asset-registration-display-name" required autocomplete="off"></label>
-              <label>Symbol (<code>asset.symbol</code>)<input id="asset-registration-symbol" required autocomplete="off"></label>
-              <label>Market (<code>asset.market</code>)<input id="asset-registration-market" required autocomplete="off"></label>
-              <label>TradingView symbol (<code>asset.tradingViewSymbol</code>)<input id="asset-registration-trading-view-symbol" required autocomplete="off"></label>
-              <label>Currency (<code>asset.currency</code>)<input id="asset-registration-currency" required autocomplete="off"></label>
-              <label>Logical Asset channel (<code>asset.channel</code>)
-                <select id="asset-registration-channel" required><option value="">Select explicitly</option></select>
-              </label>
-              <div class="immutable-field"><span>Target Pack IDs</span><strong>[] — Packs are not modified</strong></div>
-              <label>Curator ID (<code>decision.reviewerId</code>)<input id="asset-registration-curator-id" maxlength="64" value="visionx-curator"></label>
-              <label>Decision timestamp (<code>decision.decidedAt</code>)<input id="asset-registration-decided-at" maxlength="40" placeholder="2026-07-19T12:00:00Z"></label>
-              <label>Reference ID (<code>decision.referenceId</code>)<input id="asset-registration-reference-id" maxlength="96"></label>
-            </div>
-            <label>Optional notes (<code>decision.notes</code>)<textarea id="asset-registration-notes" maxlength="500" rows="3"></textarea></label>
-            <fieldset id="asset-registration-expected-current" hidden>
-              <legend>Expected current identity for <code>update_identity</code></legend>
-              <div class="field-grid">
-                <label>Current display (<code>expectedCurrent.display</code>)<input id="asset-registration-current-display"></label>
-                <label>Current TradingView (<code>expectedCurrent.tradingView</code>)<input id="asset-registration-current-trading-view"></label>
-                <label>Current channel (<code>expectedCurrent.channel</code>)
-                  <select id="asset-registration-current-channel"><option value="">Select explicitly</option></select>
-                </label>
-              </div>
-            </fieldset>
-            <div class="action-row"><button id="asset-registration-create-proposal" type="button">Create proposal explicitly</button></div>
-            <p><strong>Proposal creation does not authorize planning or application.</strong></p>
-          </section>
-
-          <section class="trust-gate" aria-labelledby="asset-planning-authorization-heading">
-            <h3 id="asset-planning-authorization-heading">Authorize Asset application planning</h3>
-            <p class="help-text">Supply a strict planning-authorization artifact as JSON text or select a local JSON file. The browser filename and local path are not persisted.</p>
-            <label for="asset-planning-authorization-file">Planning authorization local JSON file</label>
-            <input id="asset-planning-authorization-file" type="file" accept="application/json,.json">
-            <label for="asset-planning-authorization-json">Planning authorization JSON</label>
-            <textarea id="asset-planning-authorization-json" rows="12" spellcheck="false"></textarea>
-            <div class="action-row">
-              <button id="asset-registration-store-planning-authorization" type="button">Validate and store planning authorization</button>
-              <button id="asset-registration-generate-plan" type="button">Generate deterministic application plan</button>
-            </div>
-            <p><strong>Planning authorization permits deterministic planning only.</strong></p>
-          </section>
-
-          <section class="trust-gate" aria-labelledby="asset-source-change-heading">
-            <h3 id="asset-source-change-heading">Generate Registry source patch and receipt</h3>
-            <p class="help-text">The future Registry is reconstructed by the existing domain transformation. Browser-supplied patch text or future Registry bytes are never accepted.</p>
-            <div class="action-row"><button id="asset-registration-generate-source-change" type="button">Generate Registry source patch and receipt</button></div>
-          </section>
-
-          <section class="trust-gate" aria-labelledby="asset-review-heading">
-            <h3 id="asset-review-heading">Review prepared Asset source change</h3>
-            <div class="field-grid">
-              <label>Decision<select id="asset-review-decision"><option value="approved">approved</option><option value="rejected">rejected</option></select></label>
-              <label>Reviewer ID<input id="asset-reviewer-id" maxlength="64" value="visionx-asset-reviewer"></label>
-              <label>Decision timestamp<input id="asset-review-decided-at" maxlength="40" placeholder="2026-07-19T13:00:00Z"></label>
-              <label>Reference ID<input id="asset-review-reference-id" maxlength="96"></label>
-            </div>
-            <label>Optional notes<textarea id="asset-review-notes" maxlength="500" rows="3"></textarea></label>
-            <div class="action-row"><button id="asset-registration-review" type="button">Generate independent review</button></div>
-            <p><strong>Review approval does not authorize application.</strong></p>
-            <p id="asset-review-status" role="status">No Asset source-change review exists.</p>
-          </section>
-
-          <section class="trust-gate" aria-labelledby="asset-application-authorization-heading">
-            <h3 id="asset-application-authorization-heading">Authorize Asset source application</h3>
-            <p class="help-text">Supply a strict application-authorization artifact as JSON text or select a local JSON file.</p>
-            <label for="asset-application-authorization-file">Application authorization local JSON file</label>
-            <input id="asset-application-authorization-file" type="file" accept="application/json,.json">
-            <label for="asset-application-authorization-json">Application authorization JSON</label>
-            <textarea id="asset-application-authorization-json" rows="12" spellcheck="false"></textarea>
-            <div class="action-row"><button id="asset-registration-store-application-authorization" type="button">Validate and store application authorization</button></div>
-            <p><strong>Authorization is bound to one exact reviewed source change. Authorization does not apply it automatically.</strong></p>
-            <p id="asset-authorization-status" role="status">No Asset application authorization exists.</p>
-          </section>
-
-          <section class="trust-gate danger-zone" aria-labelledby="asset-apply-heading">
-            <h3 id="asset-apply-heading">Apply authorized Asset source change</h3>
-            <p><strong>This operation modifies definitions/registry.json.</strong><br>It does not modify Packs or channels.<br>It does not release or publish anything.</p>
-            <label>Exact confirmation phrase<input id="asset-application-confirmation" autocomplete="off" placeholder="APPLY ASSET SOURCE CHANGE"></label>
-            <div class="action-row"><button id="asset-registration-apply" class="danger" type="button" disabled>Apply authorized Asset source change</button></div>
-            <p id="asset-application-status" role="status">Not applied. Complete every independent gate first.</p>
-          </section>
-        </section>
-
-        <aside class="panel registration-status" aria-labelledby="asset-registration-status-heading">
-          <h3 id="asset-registration-status-heading">Validated registration status</h3>
-          <p id="asset-registration-workspace-state" class="help-text">Enter an Asset ID and create a proposal to begin.</p>
-          <dl id="asset-registration-bindings" class="definition-grid"></dl>
-          <h4>Downloadable exact artifacts</h4>
-          <ul id="asset-registration-artifacts" class="selection-list"></ul>
-        </aside>
-      </div>
-    </section>
-
-    <section class="view" data-view-panel="packs" hidden>
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Live definitions</p>
-          <h2>Packs</h2>
-        </div>
-        <span class="status-chip">Read-only</span>
-      </div>
-      <div class="split-layout">
-        <section class="panel">
-          <h3>Canonical Packs</h3>
-          <ul id="pack-list" class="selection-list"></ul>
-        </section>
-        <section id="pack-detail" class="panel detail-panel" aria-live="polite">
-          <h3>Pack details</h3>
-          <p>Select a Pack to inspect its exact canonical ordering.</p>
-        </section>
-      </div>
-    </section>
-
-    <section class="view" data-view-panel="drafts" hidden>
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Noncanonical workspace</p>
-          <h2>Pack drafts</h2>
-        </div>
-        <button id="new-draft" type="button">Create draft</button>
-      </div>
-      <div class="draft-banner" role="note">
-        <strong>Draft only — not live, not applied, not released, not published</strong>
-        <span>Saving here never modifies <code>definitions/packs.json</code>.</span>
-      </div>
-      <div class="draft-layout">
-        <aside class="panel">
-          <div class="subheading-row"><h3>Saved drafts</h3><button id="reload-draft-list" type="button">Reload list</button></div>
-          <ul id="draft-list" class="selection-list"></ul>
-        </aside>
-        <section class="panel draft-editor" aria-labelledby="draft-editor-heading">
-          <div class="subheading-row">
-            <div>
-              <h3 id="draft-editor-heading">Draft editor</h3>
-              <p id="draft-revision-state" class="help-text">No draft loaded.</p>
-            </div>
-            <span id="unsaved-indicator" class="status-chip" hidden>Unsaved changes</span>
-          </div>
-
-          <form id="draft-form">
-            <div class="field-grid">
-              <label>Draft ID<input id="draft-id" name="id" required pattern="[a-z0-9][a-z0-9_-]{0,63}" maxlength="64"></label>
-              <label>Display name<input id="draft-display-name" name="displayName" required maxlength="120"></label>
-            </div>
-            <label>Description<textarea id="draft-description" name="description" maxlength="1000" rows="3"></textarea></label>
-          </form>
-
-          <section class="draft-assets" aria-labelledby="draft-assets-heading">
-            <div class="subheading-row"><h4 id="draft-assets-heading">Ordered Assets</h4><span id="draft-asset-count">0 Assets</span></div>
-            <div class="asset-picker">
-              <label for="draft-asset-search">Search registered Assets</label>
-              <div class="search-row">
-                <input id="draft-asset-search" type="search" placeholder="Search Registry" autocomplete="off">
-                <button id="draft-asset-search-button" type="button">Search</button>
-              </div>
-              <ul id="draft-asset-search-results" class="search-results"></ul>
-            </div>
-            <ol id="draft-assets-list" class="ordered-assets"></ol>
-          </section>
-
-          <section id="draft-validation" class="validation-summary" aria-live="polite" aria-labelledby="validation-heading">
-            <h4 id="validation-heading">Validation result</h4>
-            <p>No validation has run.</p>
-          </section>
-
-          <div class="action-row">
-            <button id="save-draft" type="button">Save draft explicitly</button>
-            <button id="reload-draft" type="button">Reload saved revision</button>
-            <button id="validate-draft" type="button">Validate draft</button>
-            <button id="export-draft" type="button">Export canonical JSON</button>
-            <button id="delete-draft" class="danger" type="button">Delete draft</button>
-          </div>
-
-          <section class="promotion-panel" aria-labelledby="promotion-heading">
-            <div class="draft-banner" role="note">
-              <strong>Prepared only — canonical Pack source has not changed</strong>
-              <span>This creates review artifacts only. There is no Apply, review, release, publication, or Discord control here.</span>
-            </div>
-            <h4 id="promotion-heading">Prepare live Pack proposal</h4>
-            <p class="help-text">The Pack channel is an explicit curator-owned publication destination. It is not inferred from the Assets in the draft.</p>
-            <div class="field-grid">
-              <label>Operation
-                <select id="promotion-operation">
-                  <option value="">Select explicitly</option>
-                  <option value="create_pack">Create Pack</option>
-                  <option value="replace_pack_assets">Replace Pack Assets</option>
-                </select>
-              </label>
-              <label id="promotion-channel-field">Logical Pack channel
-                <select id="promotion-channel" required>
-                  <option value="">Select explicitly</option>
-                </select>
-              </label>
-              <div id="promotion-existing-channel-field" class="immutable-field" hidden>
-                <span>Existing immutable Pack channel</span>
-                <strong id="promotion-existing-channel">Unavailable</strong>
-              </div>
-              <label>Curator ID<input id="promotion-curator-id" maxlength="64" value="visionx-curator"></label>
-              <label>Decision timestamp<input id="promotion-decided-at" placeholder="2026-07-19T01:00:00Z" maxlength="40"></label>
-              <label>Reference ID<input id="promotion-reference-id" maxlength="96"></label>
-            </div>
-            <label>Promotion notes<textarea id="promotion-notes" maxlength="500" rows="3"></textarea></label>
-            <div class="action-row">
-              <button id="create-promotion-proposal" type="button">Create deterministic proposal</button>
-            </div>
-            <label for="planning-authorization-json">Planning authorization JSON</label>
-            <input id="planning-authorization-file" type="file" accept="application/json,.json">
-            <textarea id="planning-authorization-json" rows="10" spellcheck="false" placeholder="Paste the explicit planning authorization JSON here."></textarea>
-            <div class="action-row">
-              <button id="create-promotion-plan" type="button">Generate deterministic plan</button>
-              <button id="create-promotion-source-change" type="button">Generate source patch and receipt</button>
-            </div>
-            <section aria-labelledby="promotion-artifacts-heading">
-              <h5 id="promotion-artifacts-heading">Promotion artifacts</h5>
-              <p id="promotion-state" class="help-text">No promotion artifacts prepared.</p>
-              <ul id="promotion-artifacts" class="selection-list"></ul>
-            </section>
-            <section class="trust-gate" aria-labelledby="pack-review-heading">
-              <h5 id="pack-review-heading">Review prepared Pack source change</h5>
-              <p class="help-text"><strong>Review approval does not authorize application.</strong> The exact proposal, plan, patch, receipt, Pack channel, and ordered membership are independently reconstructed.</p>
-              <dl id="pack-review-bindings" class="definition-grid"></dl>
-              <div class="field-grid">
-                <label>Review decision
-                  <select id="pack-review-decision">
-                    <option value="approved">Approved</option>
-                    <option value="rejected">Rejected</option>
-                  </select>
-                </label>
-                <label>Reviewer ID<input id="pack-reviewer-id" maxlength="64" value="visionx-pack-reviewer"></label>
-                <label>Decision timestamp<input id="pack-review-decided-at" maxlength="40" placeholder="2026-07-19T02:00:00Z"></label>
-                <label>Reference ID<input id="pack-review-reference-id" maxlength="96"></label>
-              </div>
-              <label>Review notes<textarea id="pack-review-notes" maxlength="500" rows="3"></textarea></label>
-              <div class="action-row"><button id="generate-pack-review" type="button">Generate independent review</button></div>
-              <p id="pack-review-status" role="status">No Pack source-change review exists.</p>
-            </section>
-
-            <section class="trust-gate" aria-labelledby="pack-authorization-heading">
-              <h5 id="pack-authorization-heading">Authorize Pack source application</h5>
-              <p class="help-text"><strong>Authorization is bound to one exact reviewed source change.</strong> Authorization does not apply it automatically.</p>
-              <label for="pack-application-authorization-json">Application authorization JSON</label>
-              <input id="pack-application-authorization-file" type="file" accept="application/json,.json">
-              <textarea id="pack-application-authorization-json" rows="12" spellcheck="false" placeholder="Paste the separate Pack application authorization JSON here."></textarea>
-              <div class="action-row"><button id="store-pack-application-authorization" type="button">Validate and store authorization artifact</button></div>
-              <p id="pack-authorization-status" role="status">No Pack application authorization exists.</p>
-            </section>
-
-            <section class="trust-gate danger-zone" aria-labelledby="pack-apply-heading">
-              <h5 id="pack-apply-heading">Apply authorized Pack source change</h5>
-              <p><strong>This operation modifies definitions/packs.json.</strong> It does not release or publish anything.</p>
-              <label>Exact confirmation phrase
-                <input id="pack-application-confirmation" autocomplete="off" placeholder="APPLY PACK SOURCE CHANGE">
-              </label>
-              <div class="action-row"><button id="apply-pack-source-change" class="danger" type="button" disabled>Apply authorized Pack source change</button></div>
-              <p id="pack-application-status" role="status">Not applied.</p>
-            </section>
-          </section>
-        </section>
-      </div>
+      </section>
     </section>
   </main>
 
-  <footer>
-    <p>Local loopback administration service. No telemetry, external resources, or automatic publication.</p>
-  </footer>
+  <footer>VISIONX · LOCAL ADMINISTRATION · NO PUBLICATION</footer>
 </body>
 </html>

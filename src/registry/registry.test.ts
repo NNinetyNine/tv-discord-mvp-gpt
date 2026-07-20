@@ -691,3 +691,33 @@ describe("removeAssetAlias — registry-owned persistence (§5 subtractive resol
     expect(loadRegistry(registryPath, channelsPath).lookupByTradingView("BTCUSD")?.id).toBe("eth");
   });
 });
+describe("registry — canonical currency metadata", () => {
+  it("loads historical entries without currency and valid currency-bearing entries", () => {
+    const historical = buildRegistry({ aapl: { tradingView: "NASDAQ:AAPL", display: "Apple", channel: "stocks" } }, channels);
+    expect(historical.all()[0]?.currency).toBeUndefined();
+    const current = buildRegistry({ dxy: { tradingView: "TVC:DXY", display: "DXY", currency: "USD", channel: "indices" } }, channels);
+    expect(current.all()[0]).toMatchObject({ id: "dxy", currency: "USD" });
+  });
+
+  it.each([" usd", "usd", "US-D", "ABCDEFGHI"])("rejects invalid stored currency %s", (currency) => {
+    expect(() => buildRegistry({ dxy: { tradingView: "TVC:DXY", display: "DXY", currency, channel: "indices" } }, channels)).toThrow(/currency/iu);
+  });
+
+  it("writes currency in deterministic field order while preserving existing bytes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "visionx-createasset-currency-"));
+    try {
+      const registryPath = join(dir, "registry.json");
+      const channelsPath = join(dir, "channels.json");
+      const before = '{\n  "aapl": { "tradingView": "NASDAQ:AAPL", "display": "Apple", "legacy": true, "channel": "stocks" }\n}\n';
+      writeFileSync(registryPath, before);
+      writeFileSync(channelsPath, JSON.stringify({ stocks: "", indices: "" }));
+      createAsset(registryPath, channelsPath, {
+        id: "dxy", tradingView: "TVC:DXY", tradingViewAliases: ["TVC:USDOLLAR"], display: "DXY", currency: "USD", channel: "indices",
+      });
+      const after = readFileSync(registryPath, "utf8");
+      expect(after).toContain('"dxy": { "tradingView": "TVC:DXY", "tradingViewAliases": ["TVC:USDOLLAR"], "display": "DXY", "currency": "USD", "channel": "indices" }');
+      expect(after).toContain('"legacy": true');
+      expect(loadRegistry(registryPath, channelsPath).lookupByTradingView("TVC:DXY")?.currency).toBe("USD");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

@@ -18,11 +18,7 @@ export type MarketIdentityAuditIssue =
   | "unknown_pack_asset"
   | "duplicate_pack_asset";
 
-export interface AuditableAsset extends Asset {
-  readonly market?: unknown;
-  readonly tradingViewSymbol?: unknown;
-  readonly currency?: unknown;
-}
+export interface AuditableAsset extends Asset {}
 
 export interface AuditablePack {
   readonly id: string;
@@ -108,25 +104,21 @@ export function auditAssetMarketIdentity(
     .sort((a, b) => a.id.localeCompare(b.id, "en"))
     .map((asset): AssetMarketIdentityAuditEntry => {
       const issues: MarketIdentityAuditIssue[] = [];
-      const market = typeof asset.market === "string" ? asset.market : undefined;
-      const qualified = typeof asset.tradingViewSymbol === "string"
-        ? asset.tradingViewSymbol
-        : isQualifiedTradingViewSymbol(asset.tradingView) ? asset.tradingView : undefined;
-      if (market === undefined || qualified === undefined) {
+      const qualified = isQualifiedTradingViewSymbol(asset.tradingView) ? asset.tradingView : undefined;
+      let market: string | undefined;
+      if (qualified === undefined) {
         issues.push("unqualified_market_symbol");
       } else {
         const [prefix, instrument] = qualified.split(":");
-        const marketIsValid = market.length >= ASSET_MARKET_MIN_LENGTH &&
-          market.length <= ASSET_MARKET_IDENTITY_MAX_LENGTHS.market &&
-          AUDIT_MARKET_PATTERN.test(market);
-        const qualifiedIsValid = isQualifiedTradingViewSymbol(qualified) &&
+        const qualifiedIsValid = prefix !== undefined && instrument !== undefined &&
+          prefix.length >= ASSET_MARKET_MIN_LENGTH &&
+          prefix.length <= ASSET_MARKET_IDENTITY_MAX_LENGTHS.market &&
           qualified.length <= ASSET_MARKET_IDENTITY_MAX_LENGTHS.tradingViewSymbol &&
-          prefix !== undefined && instrument !== undefined &&
           AUDIT_MARKET_PATTERN.test(prefix) && AUDIT_SYMBOL_PATTERN.test(instrument);
-        if (!marketIsValid || !qualifiedIsValid) {
+        if (!qualifiedIsValid) {
           issues.push("unqualified_market_symbol");
-        } else if (prefix !== market) {
-          issues.push("market_symbol_mismatch");
+        } else {
+          market = prefix;
         }
       }
 

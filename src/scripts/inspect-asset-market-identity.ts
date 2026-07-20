@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildRegistry } from "../registry/registry.ts";
+import { loadRegistry } from "../registry/registry.ts";
 import {
   auditAssetMarketIdentity,
   type AuditableAsset,
@@ -16,20 +16,9 @@ async function loadCanonicalAuditInputs(): Promise<{
   readonly assets: readonly AuditableAsset[];
   readonly packs: readonly AuditablePack[];
 }> {
-  const registryRaw = JSON.parse(await readFile(resolve("definitions/registry.json"), "utf8")) as Record<string, Record<string, unknown>>;
-  const channelsRaw = JSON.parse(await readFile(resolve("config/channels.json"), "utf8")) as Record<string, unknown>;
+  const registry = loadRegistry(resolve("definitions/registry.json"), resolve("config/channels.json"));
   const packsRaw = JSON.parse(await readFile(resolve("definitions/packs.json"), "utf8")) as unknown;
-  const registry = buildRegistry(registryRaw, channelsRaw);
   if (!Array.isArray(packsRaw)) throw new Error("packs.json must be an array");
-  const assets = registry.all().map((asset) => {
-    const raw = registryRaw[asset.id] ?? {};
-    return Object.freeze({
-      ...asset,
-      ...(raw.market === undefined ? {} : { market: raw.market }),
-      ...(raw.tradingViewSymbol === undefined ? {} : { tradingViewSymbol: raw.tradingViewSymbol }),
-      ...(raw.currency === undefined ? {} : { currency: raw.currency }),
-    });
-  });
   const packs = packsRaw.map((entry, index) => {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) throw new Error(`pack[${index}] is not an object`);
     const record = entry as Record<string, unknown>;
@@ -38,7 +27,7 @@ async function loadCanonicalAuditInputs(): Promise<{
       assets: Array.isArray(record.assets) ? Object.freeze([...record.assets]) : Object.freeze([]),
     });
   });
-  return Object.freeze({ assets: Object.freeze(assets), packs: Object.freeze(packs) });
+  return Object.freeze({ assets: Object.freeze([...registry.all()]), packs: Object.freeze(packs) });
 }
 
 export async function main(
