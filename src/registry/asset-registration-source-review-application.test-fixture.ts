@@ -13,17 +13,35 @@ import { serializeAssetRegistrationSourceApplicationAuthorization, type AssetReg
 
 export function sha256(bytes: Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
 
-export function makeSourceReviewApplicationFixture(decision: "approved" | "rejected" = "approved") {
-  const registryBytes = readFileSync(resolve("definitions/registry.json"));
-  const packsBytes = readFileSync(resolve("definitions/packs.json"));
-  const channelsBytes = readFileSync(resolve("config/channels.json"));
+export interface SourceReviewApplicationFixtureOptions {
+  readonly registryBytes?: Buffer;
+  readonly packsBytes?: Buffer;
+  readonly channelsBytes?: Buffer;
+  readonly asset?: {
+    readonly id: string;
+    readonly displayName: string;
+    readonly symbol: string;
+    readonly market: string;
+    readonly tradingViewSymbol: string;
+    readonly currency: string;
+    readonly channel: string;
+  };
+}
+
+export function makeSourceReviewApplicationFixture(
+  decision: "approved" | "rejected" = "approved",
+  options: SourceReviewApplicationFixtureOptions = {},
+) {
+  const registryBytes = options.registryBytes ?? readFileSync(resolve("definitions/registry.json"));
+  const packsBytes = options.packsBytes ?? readFileSync(resolve("definitions/packs.json"));
+  const channelsBytes = options.channelsBytes ?? readFileSync(resolve("config/channels.json"));
   const channels = JSON.parse(channelsBytes.toString("utf8")) as Record<string, unknown>;
   const registry = buildRegistry(JSON.parse(registryBytes.toString("utf8")) as Parameters<typeof buildRegistry>[0], channels);
   const packs = buildPacks(JSON.parse(packsBytes.toString("utf8")) as unknown, new Set(registry.all().map((asset) => asset.id)), new Set(Object.keys(channels)));
   const proposed = proposeAssetRegistration({
     schemaVersion: 2,
     operation: "add",
-    asset: {
+    asset: options.asset ?? {
       id: "source_review_application_test_asset",
       displayName: "Source Review Application Test Asset",
       symbol: "SRATEST",

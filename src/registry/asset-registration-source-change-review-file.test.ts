@@ -11,12 +11,11 @@ const directories: string[] = [];
 afterEach(() => { while (directories.length > 0) rmSync(directories.pop() ?? "", { recursive: true, force: true }); });
 function temp(): string { const dir = mkdtempSync(join(tmpdir(), "visionx-source-review-file-")); directories.push(dir); return dir; }
 
-function setup() {
+function setup(fixture = makeSourceReviewApplicationFixture()) {
   const directory = temp();
   const repositoryRoot = join(directory, "repo");
   mkdirSync(join(repositoryRoot, "definitions"), { recursive: true });
   mkdirSync(join(repositoryRoot, "config"), { recursive: true });
-  const fixture = makeSourceReviewApplicationFixture();
   writeFileSync(join(repositoryRoot, "definitions/registry.json"), fixture.registryBytes);
   writeFileSync(join(repositoryRoot, "definitions/packs.json"), fixture.packsBytes);
   writeFileSync(join(repositoryRoot, "config/channels.json"), fixture.channelsBytes);
@@ -47,6 +46,65 @@ describe("source-change review file custody", () => {
     expect(result.ok).toBe(true);
     expect(readFileSync(files.proposalPath).equals(before)).toBe(true);
     expect(readFileSync(files.outputPath).equals(fixture.reviewBytes)).toBe(true);
+  });
+
+  test("accepts a fresh chain bound to the immediately current rolling Registry", async () => {
+    const first = makeSourceReviewApplicationFixture();
+    const second = makeSourceReviewApplicationFixture("approved", {
+      registryBytes: first.sourceChange.registryAfterBytes,
+      asset: {
+        id: "rolling_source_review_asset",
+        displayName: "Rolling Source Review Asset",
+        symbol: "ROLLREVIEW",
+        market: "NASDAQ",
+        tradingViewSymbol: "NASDAQ:ROLLREVIEW",
+        currency: "USD",
+        channel: "stocks",
+      },
+    });
+    const { files } = setup(second);
+    const result = await reviewAssetRegistrationSourceChangeFile(files, { verifyPatch: async () => true });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.receipt.sourceState.registry.beforeSha256).toBe(second.sourceChange.receipt.sourceState.registry.beforeSha256);
+  });
+
+  test("rejects an old chain after another valid source change advances the Registry", async () => {
+    const { fixture, files } = setup();
+    writeFileSync(join(files.repositoryRoot, "definitions/registry.json"), fixture.sourceChange.registryAfterBytes);
+    const result = await reviewAssetRegistrationSourceChangeFile(files, { verifyPatch: async () => true });
+    expect(result).toMatchObject({ ok: false, reason: "stale_registry_state" });
+  });
+
+  test("preserves patch and receipt reconstruction mismatch failures when canonical state is current", async () => {
+    const patchCase = setup();
+    writeFileSync(patchCase.files.patchPath, Buffer.concat([patchCase.fixture.sourceChange.patchBytes, Buffer.from(" ")]));
+    expect(await reviewAssetRegistrationSourceChangeFile(patchCase.files, { verifyPatch: async () => true }))
+      .toMatchObject({ ok: false, reason: "source_change_reconstruction_mismatch" });
+
+    const receiptCase = setup();
+    const changedReceipt = JSON.parse(receiptCase.fixture.sourceChange.receiptBytes.toString("utf8")) as any;
+    changedReceipt.patch.bytes += 1;
+    writeFileSync(receiptCase.files.sourceChangeReceiptPath, `${JSON.stringify(changedReceipt, null, 2)}\n`);
+    expect(await reviewAssetRegistrationSourceChangeFile(receiptCase.files, { verifyPatch: async () => true }))
+      .toMatchObject({ ok: false, reason: "source_change_reconstruction_mismatch" });
+  });
+
+  test("classifies Registry, Packs, and channel drift from exact receipt-bound before-state hashes", async () => {
+    const registryCase = setup();
+    writeFileSync(join(registryCase.files.repositoryRoot, "definitions/registry.json"), Buffer.concat([registryCase.fixture.registryBytes, Buffer.from(" ")]));
+    expect(await reviewAssetRegistrationSourceChangeFile(registryCase.files, { verifyPatch: async () => true }))
+      .toMatchObject({ ok: false, reason: "stale_registry_state" });
+
+    const packsCase = setup();
+    writeFileSync(join(packsCase.files.repositoryRoot, "definitions/packs.json"), Buffer.concat([packsCase.fixture.packsBytes, Buffer.from(" ")]));
+    expect(await reviewAssetRegistrationSourceChangeFile(packsCase.files, { verifyPatch: async () => true }))
+      .toMatchObject({ ok: false, reason: "stale_pack_state" });
+
+    const channelsCase = setup();
+    writeFileSync(join(channelsCase.files.repositoryRoot, "config/channels.json"), Buffer.concat([channelsCase.fixture.channelsBytes, Buffer.from(" ")]));
+    expect(await reviewAssetRegistrationSourceChangeFile(channelsCase.files, { verifyPatch: async () => true }))
+      .toMatchObject({ ok: false, reason: "stale_channel_configuration" });
   });
 
   test("rejects collisions and preexisting output", async () => {

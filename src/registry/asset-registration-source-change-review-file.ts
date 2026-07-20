@@ -10,7 +10,6 @@ import {
   type AssetRegistrationSourceChangeReviewFailureReason,
   type AssetRegistrationSourceChangeReviewReceipt,
 } from "./asset-registration-source-change-review.ts";
-import { ASSET_REGISTRATION_SOURCE_CHANGE_BASE } from "./asset-registration-source-change-file.ts";
 
 export type AssetRegistrationSourceChangeReviewFileFailureReason =
   | "invalid_arguments"
@@ -57,6 +56,14 @@ export interface ReviewAssetRegistrationSourceChangeFileDependencies {
 
 interface Artifact { readonly path: string; readonly bytes: Buffer; readonly sha256: string }
 
+interface BoundSourceState {
+  readonly registryBeforeSha256: string;
+  readonly packsBeforeSha256: string;
+  readonly channelsSha256: string;
+}
+
+const LOWER_SHA256 = /^[a-f0-9]{64}$/u;
+
 function failure(reason: AssetRegistrationSourceChangeReviewFileFailureReason, detail: string): AssetRegistrationSourceChangeReviewFileFailure {
   return Object.freeze({ ok: false, reason, detail });
 }
@@ -85,8 +92,41 @@ async function readArtifact(path: string, label: string): Promise<Artifact | Ass
   }
 }
 
-function isFailure(value: Artifact | AssetRegistrationSourceChangeReviewFileFailure): value is AssetRegistrationSourceChangeReviewFileFailure {
-  return "ok" in value && value.ok === false;
+function isFailure(value: unknown): value is AssetRegistrationSourceChangeReviewFileFailure {
+  return typeof value === "object" && value !== null && "ok" in value && value.ok === false;
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function boundSourceState(value: unknown): BoundSourceState | AssetRegistrationSourceChangeReviewFileFailure {
+  if (!isRecord(value) || value.schemaVersion !== 1 || value.changeType !== "visionx.asset-registration.source-change") {
+    return failure("invalid_source_change_receipt", "source-change receipt identity is invalid");
+  }
+  if (!isRecord(value.sourceState)) {
+    return failure("invalid_source_change_receipt", "source-change receipt sourceState is invalid");
+  }
+  const registry = value.sourceState.registry;
+  const packs = value.sourceState.packs;
+  const channels = value.sourceState.channels;
+  if (!isRecord(registry) || registry.path !== "definitions/registry.json" ||
+      typeof registry.beforeSha256 !== "string" || !LOWER_SHA256.test(registry.beforeSha256)) {
+    return failure("invalid_source_change_receipt", "source-change receipt Registry before-state identity is invalid");
+  }
+  if (!isRecord(packs) || packs.path !== "definitions/packs.json" ||
+      typeof packs.beforeSha256 !== "string" || !LOWER_SHA256.test(packs.beforeSha256)) {
+    return failure("invalid_source_change_receipt", "source-change receipt Packs before-state identity is invalid");
+  }
+  if (!isRecord(channels) || channels.path !== "config/channels.json" ||
+      typeof channels.sha256 !== "string" || !LOWER_SHA256.test(channels.sha256)) {
+    return failure("invalid_source_change_receipt", "source-change receipt channel before-state identity is invalid");
+  }
+  return Object.freeze({
+    registryBeforeSha256: registry.beforeSha256,
+    packsBeforeSha256: packs.beforeSha256,
+    channelsSha256: channels.sha256,
+  });
 }
 
 async function parseJson(artifact: Artifact, label: string): Promise<unknown | AssetRegistrationSourceChangeReviewFileFailure> {
@@ -161,8 +201,19 @@ export async function reviewAssetRegistrationSourceChangeFile(
   if (isFailure(packs)) return packs;
   const channels = await readArtifact(join(root, "config/channels.json"), "channel configuration");
   if (isFailure(channels)) return channels;
-  if (registry.sha256 !== ASSET_REGISTRATION_SOURCE_CHANGE_BASE.registrySha256) return failure("stale_registry_state", "Registry source differs from the approved source-change base");
-  if (packs.sha256 !== ASSET_REGISTRATION_SOURCE_CHANGE_BASE.packsSha256) return failure("stale_pack_state", "Pack source differs from the approved source-change base");
+  const sourceReceiptJson = await parseJson(sourceReceipt, "source-change receipt");
+  if (isFailure(sourceReceiptJson)) return sourceReceiptJson;
+  const requiredSourceState = boundSourceState(sourceReceiptJson);
+  if (isFailure(requiredSourceState)) return requiredSourceState;
+  if (registry.sha256 !== requiredSourceState.registryBeforeSha256) {
+    return failure("stale_registry_state", "Registry source differs from the exact before-state bound by the source-change receipt");
+  }
+  if (packs.sha256 !== requiredSourceState.packsBeforeSha256) {
+    return failure("stale_pack_state", "Pack source differs from the exact before-state bound by the source-change receipt");
+  }
+  if (channels.sha256 !== requiredSourceState.channelsSha256) {
+    return failure("stale_channel_configuration", "channel configuration differs from the exact state bound by the source-change receipt");
+  }
 
   const output = resolve(options.outputPath);
   const outputDirectory = await realpath(dirname(output));
@@ -170,11 +221,11 @@ export async function reviewAssetRegistrationSourceChangeFile(
   if ([...artifacts, registry, packs, channels].some((item) => key(item.path) === key(outputCanonical))) return failure("path_collision", "review output must not collide with an input or canonical source");
   if (await exists(outputCanonical)) return failure("output_already_exists", "review output already exists");
 
-  const proposalJson = await parseJson(proposal, "proposal"); if (isFailure(proposalJson as never)) return proposalJson as AssetRegistrationSourceChangeReviewFileFailure;
-  const authorizationJson = await parseJson(planningAuthorization, "planning authorization"); if (isFailure(authorizationJson as never)) return authorizationJson as AssetRegistrationSourceChangeReviewFileFailure;
-  const planJson = await parseJson(plan, "application plan"); if (isFailure(planJson as never)) return planJson as AssetRegistrationSourceChangeReviewFileFailure;
-  const receiptJson = await parseJson(sourceReceipt, "source-change receipt"); if (isFailure(receiptJson as never)) return receiptJson as AssetRegistrationSourceChangeReviewFileFailure;
-  const decisionJson = await parseJson(decision, "review decision"); if (isFailure(decisionJson as never)) return decisionJson as AssetRegistrationSourceChangeReviewFileFailure;
+  const proposalJson = await parseJson(proposal, "proposal"); if (isFailure(proposalJson)) return proposalJson;
+  const authorizationJson = await parseJson(planningAuthorization, "planning authorization"); if (isFailure(authorizationJson)) return authorizationJson;
+  const planJson = await parseJson(plan, "application plan"); if (isFailure(planJson)) return planJson;
+  const receiptJson = sourceReceiptJson;
+  const decisionJson = await parseJson(decision, "review decision"); if (isFailure(decisionJson)) return decisionJson;
 
   const verified = await (dependencies.verifyPatch ?? defaultVerifyPatch)(root, patch.bytes, registry.bytes, packs.bytes, channels.bytes);
   const result = reviewAssetRegistrationSourceChange({

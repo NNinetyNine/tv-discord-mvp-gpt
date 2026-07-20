@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -22,6 +22,7 @@ import {
 import {
   generateAssetRegistrationSourceChangeFile,
 } from "./asset-registration-source-change-file.ts";
+import { makeSourceReviewApplicationFixture } from "./asset-registration-source-review-application.test-fixture.ts";
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -152,6 +153,75 @@ describe("Asset registration source-change file custody", () => {
     expect(readFileSync(resolve("definitions/packs.json")).equals(sourceBefore[1]!)).toBe(true);
     expect(readFileSync(resolve("config/channels.json")).equals(sourceBefore[2]!)).toBe(true);
     expect(readdirSync(directory).some((name) => name.endsWith(".tmp"))).toBe(false);
+  });
+
+  test("generates against a rolling canonical Registry without a static bootstrap hash", async () => {
+    const first = makeSourceReviewApplicationFixture();
+    const rolling = makeSourceReviewApplicationFixture("approved", {
+      registryBytes: first.sourceChange.registryAfterBytes,
+      asset: {
+        id: "rolling_source_change_file_asset",
+        displayName: "Rolling Source Change File Asset",
+        symbol: "ROLLSOURCE",
+        market: "NASDAQ",
+        tradingViewSymbol: "NASDAQ:ROLLSOURCE",
+        currency: "USD",
+        channel: "stocks",
+      },
+    });
+    const directory = tempDirectory();
+    const repositoryRoot = join(directory, "repository");
+    mkdirSync(join(repositoryRoot, "definitions"), { recursive: true });
+    mkdirSync(join(repositoryRoot, "config"), { recursive: true });
+    const proposalPath = join(directory, "proposal.json");
+    const authorizationPath = join(directory, "authorization.json");
+    const planPath = join(directory, "plan.json");
+    const registryPath = join(repositoryRoot, "definitions/registry.json");
+    const packsPath = join(repositoryRoot, "definitions/packs.json");
+    const channelsPath = join(repositoryRoot, "config/channels.json");
+    writeFileSync(proposalPath, rolling.proposalBytes);
+    writeFileSync(authorizationPath, rolling.planningAuthorizationBytes);
+    writeFileSync(planPath, rolling.planBytes);
+    writeFileSync(registryPath, rolling.registryBytes);
+    writeFileSync(packsPath, rolling.packsBytes);
+    writeFileSync(channelsPath, rolling.channelsBytes);
+
+    const result = await generateAssetRegistrationSourceChangeFile({
+      proposalPath,
+      authorizationPath,
+      planPath,
+      patchOutputPath: join(directory, "rolling.patch"),
+      receiptOutputPath: join(directory, "rolling.json"),
+      registryPath,
+      packsPath,
+      channelsPath,
+      repositoryRoot,
+    }, { verifyPatch: async () => true });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.receipt.sourceState.registry.beforeSha256).toBe(sha256(rolling.registryBytes));
+    expect(result.receipt.sourceState.registry.afterSha256).toBe(sha256(rolling.sourceChange.registryAfterBytes));
+  });
+
+  test("preserves distinct explicit Registry, Packs, and channel snapshot drift failures", async () => {
+    const registryCase = options(tempDirectory());
+    expect(await generateAssetRegistrationSourceChangeFile({
+      ...registryCase,
+      expectedRegistrySha256: "0".repeat(64),
+    }, { verifyPatch: async () => true })).toMatchObject({ ok: false, reason: "stale_registry_state" });
+
+    const packsCase = options(tempDirectory());
+    expect(await generateAssetRegistrationSourceChangeFile({
+      ...packsCase,
+      expectedPacksSha256: "0".repeat(64),
+    }, { verifyPatch: async () => true })).toMatchObject({ ok: false, reason: "stale_pack_state" });
+
+    const channelsCase = options(tempDirectory());
+    expect(await generateAssetRegistrationSourceChangeFile({
+      ...channelsCase,
+      expectedChannelsSha256: "0".repeat(64),
+    }, { verifyPatch: async () => true })).toMatchObject({ ok: false, reason: "stale_channel_configuration" });
   });
 
   test("caller output locations do not affect artifact bytes", async () => {

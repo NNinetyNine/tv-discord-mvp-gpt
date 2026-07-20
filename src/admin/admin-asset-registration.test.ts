@@ -34,17 +34,21 @@ async function fixture() {
   return { repositoryRoot, workspaceRoot, before, service: await AdminService.create({ repositoryRoot, workspaceRoot }) };
 }
 
-function input(id = "ui-smoke-asset") {
+function input(id = "ui-smoke-asset", displayName = "UI Smoke Asset", symbol = "UISMOKE") {
   return {
     schemaVersion: 2, operation: "add",
-    asset: { id, displayName: "UI Smoke Asset", symbol: "UISMOKE", market: "NASDAQ", tradingViewSymbol: "NASDAQ:UISMOKE", currency: "USD", channel: "stocks" },
+    asset: { id, displayName, symbol, market: "NASDAQ", tradingViewSymbol: `NASDAQ:${symbol}`, currency: "USD", channel: "stocks" },
     targetPackIds: [],
     decision: { reviewerId: "visionx-curator", decidedAt: "2026-07-19T12:00:00Z", referenceId: "visionx.ui-smoke-asset" },
   };
 }
 
-async function throughSourceChange(service: AdminService, id = "ui-smoke-asset") {
-  await service.createAssetRegistrationProposal(id, input(id));
+async function throughSourceChange(
+  service: AdminService,
+  id = "ui-smoke-asset",
+  registrationInput = input(id),
+) {
+  await service.createAssetRegistrationProposal(id, registrationInput);
   const proposal = await service.readAssetRegistrationArtifact(id, "asset-proposal.json");
   await service.storeAssetRegistrationPlanningAuthorization(id, {
     schemaVersion: 1, decision: "approved", proposalSha256: sha256(proposal), reviewerId: "visionx-planner",
@@ -91,6 +95,48 @@ describe("Administration Asset registration custody chain", () => {
     const registry = buildRegistry(JSON.parse((await readFile(join(repositoryRoot, "definitions/registry.json"))).toString("utf8")), channels);
     expect(registry.all().find((asset) => asset.id === "ui-smoke-asset")).toMatchObject({ id: "ui-smoke-asset", display: "UI Smoke Asset", tradingView: "NASDAQ:UISMOKE", channel: "stocks" });
     await expect(service.applyAssetRegistration("ui-smoke-asset", "APPLY ASSET SOURCE CHANGE")).rejects.toMatchObject({ code: expect.stringMatching(/application_already_completed|stale_registry_state/) });
+  });
+
+  it("supports sequential controlled applications against the immediately current Registry", async () => {
+    const { service, repositoryRoot, before } = await fixture();
+
+    await throughSourceChange(service, "rolling-asset-a", input("rolling-asset-a", "Rolling Asset A", "ROLLA"));
+    await approveReview(service, "rolling-asset-a");
+    await service.applyAssetRegistration("rolling-asset-a", "APPLY ASSET SOURCE CHANGE");
+    const firstApplication = JSON.parse((await service.readAssetRegistrationArtifact("rolling-asset-a", "asset-source-application.json")).toString("utf8")) as any;
+
+    await throughSourceChange(service, "rolling-asset-b", input("rolling-asset-b", "Rolling Asset B", "ROLLB"));
+    const secondSourceChange = JSON.parse((await service.readAssetRegistrationArtifact("rolling-asset-b", "asset-source-change.json")).toString("utf8")) as any;
+    expect(secondSourceChange.sourceState.registry.beforeSha256).toBe(firstApplication.sourceState.registry.afterSha256);
+    await approveReview(service, "rolling-asset-b");
+    const secondApplicationResult = await service.applyAssetRegistration("rolling-asset-b", "APPLY ASSET SOURCE CHANGE");
+    expect((secondApplicationResult.status as any).currentCanonicalState.registryAssetCount).toBe(133);
+
+    const channels = JSON.parse(before.channels.toString("utf8")) as Record<string, unknown>;
+    const registry = buildRegistry(JSON.parse((await readFile(join(repositoryRoot, "definitions/registry.json"))).toString("utf8")), channels);
+    expect(registry.all().find((asset) => asset.id === "rolling-asset-a")).toMatchObject({ tradingView: "NASDAQ:ROLLA", channel: "stocks" });
+    expect(registry.all().find((asset) => asset.id === "rolling-asset-b")).toMatchObject({ tradingView: "NASDAQ:ROLLB", channel: "stocks" });
+    expect(await readFile(join(repositoryRoot, "definitions/packs.json"))).toEqual(before.packs);
+    expect(await readFile(join(repositoryRoot, "config/channels.json"))).toEqual(before.channels);
+  });
+
+  it("rejects an old source chain after a different application advances canonical Registry state", async () => {
+    const { service, repositoryRoot } = await fixture();
+    await throughSourceChange(service, "old-chain-asset", input("old-chain-asset", "Old Chain Asset", "OLDCHAIN"));
+
+    await throughSourceChange(service, "advancing-asset", input("advancing-asset", "Advancing Asset", "ADVANCE"));
+    await approveReview(service, "advancing-asset");
+    await service.applyAssetRegistration("advancing-asset", "APPLY ASSET SOURCE CHANGE");
+    const advancedRegistry = await readFile(join(repositoryRoot, "definitions/registry.json"));
+
+    await expect(service.reviewAssetRegistration("old-chain-asset", {
+      schemaVersion: 1,
+      decision: "approved",
+      reviewerId: "visionx-reviewer",
+      decidedAt: "2026-07-19T12:40:00Z",
+      referenceId: "visionx.old-chain.review",
+    })).rejects.toMatchObject({ code: "stale_registry_state" });
+    expect(await readFile(join(repositoryRoot, "definitions/registry.json"))).toEqual(advancedRegistry);
   });
 
   it("stores rejected gates durably while blocking all downstream application", async () => {

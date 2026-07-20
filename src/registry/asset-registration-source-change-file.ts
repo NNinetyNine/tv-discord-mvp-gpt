@@ -10,13 +10,6 @@ import {
   type AssetRegistrationSourceChangeReceipt,
 } from "./asset-registration-source-change.ts";
 
-export const ASSET_REGISTRATION_SOURCE_CHANGE_BASE = Object.freeze({
-  commit: "956c657a1bd7ef2ba5d1574bc804afe8d6fa132d",
-  registrySha256: "1da65e9cade5d5dd516e726787ac9a9ac8f916543de35ccb9d823bd2bb4b1286",
-  packsSha256: "29a8284033f1c67466f7a50b54a64d208e72e8dcce25e1cd897a650bdbc3c0b4",
-  channelsSha256: "3adb7aa6a40e2a5ef7aa9c19440bfc771b5cbdc4f443ad10e0d3235fca550988",
-});
-
 export type AssetRegistrationSourceChangeFileFailureReason =
   | "invalid_arguments"
   | "unreadable_input"
@@ -297,12 +290,13 @@ export async function generateAssetRegistrationSourceChangeFile(
   const channels = await readArtifact(options.channelsPath ?? resolve("config/channels.json"), "channel configuration");
   if (isFailure(channels)) return channels;
 
-  const expectedRegistry = options.expectedRegistrySha256 ?? ASSET_REGISTRATION_SOURCE_CHANGE_BASE.registrySha256;
-  const expectedPacks = options.expectedPacksSha256 ?? ASSET_REGISTRATION_SOURCE_CHANGE_BASE.packsSha256;
-  const expectedChannels = options.expectedChannelsSha256;
-  if (registry.sha256 !== expectedRegistry) return failure("stale_registry_state", "Registry source SHA-256 differs from the generator base state");
-  if (packs.sha256 !== expectedPacks) return failure("stale_pack_state", "Pack source SHA-256 differs from the generator base state");
-  if (expectedChannels !== undefined && channels.sha256 !== expectedChannels) {
+  if (options.expectedRegistrySha256 !== undefined && registry.sha256 !== options.expectedRegistrySha256) {
+    return failure("stale_registry_state", "Registry source SHA-256 differs from the explicitly required source state");
+  }
+  if (options.expectedPacksSha256 !== undefined && packs.sha256 !== options.expectedPacksSha256) {
+    return failure("stale_pack_state", "Pack source SHA-256 differs from the explicitly required source state");
+  }
+  if (options.expectedChannelsSha256 !== undefined && channels.sha256 !== options.expectedChannelsSha256) {
     return failure("stale_channel_configuration", "channel configuration SHA-256 differs from the explicitly required source state");
   }
 
