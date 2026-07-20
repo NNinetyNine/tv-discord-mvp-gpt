@@ -54,6 +54,8 @@ describe("Constitutional Pack-builder UI", () => {
     expect(js).toContain("field-error");
     expect(js).toContain("document.activeElement");
     expect(js).toContain("restored.setSelectionRange");
+    expect(js).toContain("function updateMemberDraft");
+    expect(js).toContain('addEventListener("blur", commitMemberDraft)');
     expect(js).toContain('qs("#create-pack").disabled = true');
     expect(js).toContain('qs("#create-pack").disabled = false');
     expect(js).toContain('/api/v1/packs/create/preview');

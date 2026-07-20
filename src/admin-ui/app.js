@@ -131,6 +131,24 @@ function updateMember(index, field, value) {
   schedulePreview();
 }
 
+function updateMemberDraft(index, field, value) {
+  const member = state.members[index];
+  if (!member) return;
+  member[field] = value;
+  member.error = "";
+  persistInput();
+  clearTimeout(state.previewTimer);
+  setPreviewUnavailable();
+  qs(`[data-member-index="${index}"] .field-error`)?.remove();
+}
+
+function commitMemberDraft() {
+  setTimeout(() => {
+    renderMembers();
+    schedulePreview();
+  }, 0);
+}
+
 async function resolveMember(index) {
   const member = state.members[index];
   if (!member) return;
@@ -254,10 +272,15 @@ function renderMembers() {
         ${member.error ? `<p class="field-error" role="alert">${escapeHtml(member.error)}</p>` : ""}
       </div>`;
     li.querySelector(".member-id").addEventListener("input", (event) => updateMember(index, "id", event.target.value));
-    li.querySelector(".member-display")?.addEventListener("input", (event) => updateMember(index, "display", event.target.value));
-    li.querySelector(".member-tradingview")?.addEventListener("input", (event) => updateMember(index, "tradingView", event.target.value));
-    li.querySelector(".member-currency")?.addEventListener("input", (event) => updateMember(index, "currency", event.target.value));
-    li.querySelector(".member-aliases")?.addEventListener("input", (event) => updateMember(index, "aliases", event.target.value));
+    const bindDraftField = (selector, field) => {
+      const input = li.querySelector(selector);
+      input?.addEventListener("input", (event) => updateMemberDraft(index, field, event.target.value));
+      input?.addEventListener("blur", commitMemberDraft);
+    };
+    bindDraftField(".member-display", "display");
+    bindDraftField(".member-tradingview", "tradingView");
+    bindDraftField(".member-currency", "currency");
+    bindDraftField(".member-aliases", "aliases");
     li.querySelector('[data-action="up"]').addEventListener("click", () => moveMember(index, -1));
     li.querySelector('[data-action="down"]').addEventListener("click", () => moveMember(index, 1));
     li.querySelector('[data-action="remove"]').addEventListener("click", () => removeMember(index));
