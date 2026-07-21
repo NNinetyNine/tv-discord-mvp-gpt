@@ -27,11 +27,22 @@ describe("Asset market identity validation", () => {
     ["usd", "invalid_currency"],
     [" USD", "invalid_currency"],
     ["U$D", "invalid_currency"],
+    ["USD/", "invalid_currency"],
+    ["/BLL", "invalid_currency"],
+    ["USD//BLL", "invalid_currency"],
+    ["USD/bll", "invalid_currency"],
     ["U", "invalid_currency"],
     ["123456789", "invalid_currency"],
     [42, "invalid_currency"],
   ])("rejects invalid currency %#", (currency, reason) => {
     expect(validatePublicationCurrency(currency)).toMatchObject({ ok: false, reason });
+  });
+
+  it("accepts normalized slash-delimited quote units", () => {
+    expect(validatePublicationCurrency("USD/BLL")).toEqual({
+      ok: true,
+      currency: "USD/BLL",
+    });
   });
 
   it("does not provide an implicit USD default", () => {

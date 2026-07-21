@@ -99,6 +99,26 @@ describe("Create Pack with missing Assets", () => {
     });
   });
 
+  it("accepts normalized slash-delimited quote units", () => {
+    const result = prepare(input([
+      {
+        id: "cl1",
+        display: "Crude Oil",
+        tradingView: "NYMEX:CL1!",
+        currency: "USD/BLL",
+      },
+    ]));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.preview.members[0]).toMatchObject({
+        id: "cl1",
+        currency: "USD/BLL",
+        market: "NYMEX",
+        symbol: "CL1!",
+      });
+    }
+  });
+
   it("rejects unknown fields and derives market, symbol, and Asset channel from canonical inputs", () => {
     expect(prepare({ ...input(), extra: true })).toMatchObject({ ok: false, reason: "unknown_field" });
     const result = prepare(input([{ id: "dxy", display: "DXY", tradingView: "TVC:DXY", currency: "USD" }]));

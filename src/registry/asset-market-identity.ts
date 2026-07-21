@@ -20,7 +20,7 @@ export const ASSET_MARKET_MIN_LENGTH = 2 as const;
 const ASSET_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/u;
 const SYMBOL_PATTERN = /^[A-Z0-9._!-]+$/u;
 const MARKET_PATTERN = /^[A-Z0-9]+$/u;
-const CURRENCY_PATTERN = /^[A-Z0-9]{2,8}$/u;
+const CURRENCY_PATTERN = /^(?=.{2,8}$)[A-Z0-9]{2,8}(?:\/[A-Z0-9]{2,8})?$/u;
 const CONTROL_CHARACTER = /[\u0000-\u001F\u007F\u2028\u2029]/u;
 
 export interface ProposedAssetMarketIdentity {
@@ -93,7 +93,7 @@ export function validatePublicationCurrency(value: unknown):
   if (!CURRENCY_PATTERN.test(value)) {
     return failure(
       "invalid_currency",
-      `currency must match ^[A-Z0-9]{${ASSET_CURRENCY_MIN_LENGTH},${ASSET_MARKET_IDENTITY_MAX_LENGTHS.currency}}$`,
+      `currency must be ${ASSET_CURRENCY_MIN_LENGTH}-${ASSET_MARKET_IDENTITY_MAX_LENGTHS.currency} characters using uppercase ASCII letters or digits, optionally with one slash between two tokens`,
     );
   }
   return Object.freeze({ ok: true, currency: value });

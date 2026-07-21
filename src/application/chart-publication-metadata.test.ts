@@ -62,6 +62,23 @@ describe("Registry-backed chart publication metadata", () => {
     expect(rendered.receipt.metadata).toMatchObject({ title: "U.S. DOLLAR CURRENCY INDEX", market: "TVC", symbol: "DXY", currency: "USD" });
   });
 
+  it("preserves normalized slash-delimited quote units", () => {
+    expect(chartPublicationMetadataForAsset({
+      id: "cl1",
+      tradingView: "NYMEX:CL1!",
+      display: "Crude Oil",
+      currency: "USD/BLL",
+      channel: "commodities",
+    }, facts)).toMatchObject({
+      ok: true,
+      metadata: {
+        market: "NYMEX",
+        symbol: "CL1!",
+        currency: "USD/BLL",
+      },
+    });
+  });
+
   it("fails before rendering when canonical identity or currency is incomplete", () => {
     expect(chartPublicationMetadataForAsset({ id: "dxy", tradingView: "DXY", display: "DXY", currency: "USD", channel: "forex" }, facts)).toMatchObject({ ok: false, reason: "unqualified_tradingview_symbol" });
     expect(chartPublicationMetadataForAsset({ id: "dxy", tradingView: "TVC:DXY", display: "DXY", channel: "forex" }, facts)).toMatchObject({ ok: false, reason: "missing_asset_currency" });

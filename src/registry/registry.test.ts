@@ -697,9 +697,11 @@ describe("registry — canonical currency metadata", () => {
     expect(historical.all()[0]?.currency).toBeUndefined();
     const current = buildRegistry({ dxy: { tradingView: "TVC:DXY", display: "DXY", currency: "USD", channel: "indices" } }, channels);
     expect(current.all()[0]).toMatchObject({ id: "dxy", currency: "USD" });
+    const quoteUnit = buildRegistry({ cl1: { tradingView: "NYMEX:CL1!", display: "Crude Oil", currency: "USD/BLL", channel: "indices" } }, channels);
+    expect(quoteUnit.all()[0]).toMatchObject({ id: "cl1", currency: "USD/BLL" });
   });
 
-  it.each([" usd", "usd", "US-D", "ABCDEFGHI"])("rejects invalid stored currency %s", (currency) => {
+  it.each([" usd", "usd", "US-D", "USD/", "/BLL", "USD//BLL", "USD/bll", "ABCDEFGHI"])("rejects invalid stored currency %s", (currency) => {
     expect(() => buildRegistry({ dxy: { tradingView: "TVC:DXY", display: "DXY", currency, channel: "indices" } }, channels)).toThrow(/currency/iu);
   });
 
