@@ -5,6 +5,10 @@ import { createPersistentWorkspace } from "../packs/persistence.ts";
 import type { Workspace } from "../packs/workspace.ts";
 import { createStagingStore, type StagingStore } from "../wiring/staging.ts";
 import { loadChannelResolver, loadChannels } from "../wiring/channels.ts";
+import {
+  loadAssetThreadResolver,
+  type AssetThreadResolver,
+} from "../wiring/asset-threads.ts";
 import { createReleaseStore, type ReleaseStore } from "../release/release-store.ts";
 import { openPublisherSession } from "../publish/discord-session.ts";
 import {
@@ -75,6 +79,12 @@ export interface BuildAppOptions {
   /** Location of the channels configuration file (required — no default). */
   readonly channelsPath: string;
   /**
+   * Optional installation binding from Pack/Asset pairs to persistent Discord
+   * forum threads. When omitted, publication fails closed with unresolved
+   * thread destinations; non-publishing use cases remain available.
+   */
+  readonly assetThreadsPath?: string;
+  /**
    * Complete validation policy for the file-ingest path. Defaults to
    * DEFAULT_VALIDATION_POLICY (expectedDimensions: null — dimensions are not
    * enforced until reconciled). Supply a complete policy to override.
@@ -117,8 +127,12 @@ export function buildApp(opts: BuildAppOptions): App {
   const policy: ValidationPolicy = opts.validationPolicy ?? DEFAULT_VALIDATION_POLICY;
   const validate = (imagePath: string) => validateImage(imagePath, policy);
 
-  // --- channel resolution (real config; empty IDs -> null, fail closed) ---
+  // --- Discord destination resolution (installation-owned; fail closed) ---
   const resolveChannel = loadChannelResolver(opts.channelsPath);
+  const resolveAssetThread: AssetThreadResolver =
+    opts.assetThreadsPath === undefined
+      ? () => null
+      : loadAssetThreadResolver(opts.assetThreadsPath);
 
   // --- display names (registry-owned; injected into orchestration honestly) ---
   const assetDisplay = (assetId: string): string => {
@@ -145,6 +159,7 @@ export function buildApp(opts: BuildAppOptions): App {
           staging,
           releases,
           resolveChannel,
+          resolveAssetThread,
           openPublisher: openPublisherSession,
           assetDisplay,
           now,

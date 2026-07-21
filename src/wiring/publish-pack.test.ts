@@ -75,7 +75,8 @@ function deps(overrides?: Partial<PublishPackDeps>): PublishPackDeps {
     workspace,
     staging,
     releases,
-    resolveChannel: () => "chan-1",
+    resolveChannel: () => "forum-1",
+    resolveAssetThread: (_packId, assetId) => `thread-${assetId}`,
     openPublisher: fakePublisher().open,
     assetDisplay: (id) => id.toUpperCase(),
     now: makeNow(),
@@ -145,6 +146,30 @@ describe("gates", () => {
     expect(releases.listReleases("crypto")).toHaveLength(0);
   });
 
+  it("asset_threads_unresolved names every missing destination before Discord opens", async () => {
+    captureAll("crypto");
+    const publisher = fakePublisher();
+
+    const result = await publishPack(
+      deps({
+        resolveAssetThread: (_packId, assetId) =>
+          assetId === "btc" ? "thread-btc" : null,
+        openPublisher: publisher.open,
+      }),
+      "crypto",
+      GO,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      outcome: "asset_threads_unresolved",
+      packId: "crypto",
+      missingAssetIds: ["eth"],
+    });
+    expect(publisher.posts).toHaveLength(0);
+    expect(releases.listReleases("crypto")).toHaveLength(0);
+  });
+
   it("resolves the channel from the Pack's OWN assignment, never the pack id", async () => {
     captureAll("crypto");
     const asked: string[] = [];
@@ -190,17 +215,27 @@ describe("published (happy path)", () => {
     const rec = releases.getRelease("crypto", r.releaseId);
     expect(rec.publishedAt).not.toBeNull();
     expect(rec.packDisplay).toBe("Crypto");
-    expect(rec.version).toBe(1);
-    if (rec.version !== 1) {
-      throw new Error("expected a version-1 Release");
+    expect(rec.version).toBe(2);
+    if (rec.version !== 2) {
+      throw new Error("expected a version-2 Release");
     }
-    expect(rec.channelId).toBe("chan-1");
-    expect(rec.analyses.map((a) => [a.assetId, a.display, a.discordMessageId])).toEqual([
-      ["btc", "BTC", "msg-1"],
-      ["eth", "ETH", "msg-2"],
+    expect(rec.forumChannelId).toBe("forum-1");
+    expect(
+      rec.analyses.map((analysis) => [
+        analysis.assetId,
+        analysis.display,
+        analysis.threadId,
+        analysis.discordMessageId,
+      ]),
+    ).toEqual([
+      ["btc", "BTC", "thread-btc", "msg-1"],
+      ["eth", "ETH", "thread-eth", "msg-2"],
     ]);
-    // Posted from staged paths, in canonical order.
-    expect(fp.posts.map((p) => p.channelId)).toEqual(["chan-1", "chan-1"]);
+    // Posted from staged paths to persistent threads, in canonical order.
+    expect(fp.posts.map((post) => post.channelId)).toEqual([
+      "thread-btc",
+      "thread-eth",
+    ]);
     expect(fp.closedCount()).toBe(1);
 
     // This pack's instance ended (per-pack reset); the release's assets cleared.
@@ -431,11 +466,14 @@ describe("resume — completing an interrupted release", () => {
     expect(fp.closedCount()).toBe(1);
   });
 
-  it("posts to the RECORD's snapshotted channel (no channel resolver dependency exists)", async () => {
+  it("posts to the RECORD's snapshotted Asset thread", async () => {
     await interruptCrypto();
     const fp = fakePublisher();
-    await resumeInterruptedRelease(resumeDeps({ openPublisher: fp.open }), "crypto");
-    expect(fp.posts[0]!.channelId).toBe("chan-1"); // from the record
+    await resumeInterruptedRelease(
+      resumeDeps({ openPublisher: fp.open }),
+      "crypto",
+    );
+    expect(fp.posts[0]!.channelId).toBe("thread-eth");
   });
 
   it("a release interrupted AFTER its last post resumes by posting nothing", async () => {

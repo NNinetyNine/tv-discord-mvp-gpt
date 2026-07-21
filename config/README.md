@@ -18,3 +18,13 @@ provisioning, filled in as channels are wired.
 
 Legacy-runtime data (`npm run start`); retires with the legacy runtime at the
 runtime flip.
+
+## asset-threads.json
+
+Maps each Pack/Asset pair to the persistent Discord forum thread that owns that
+Asset's chronological chart history. The file is versioned installation
+configuration. Missing bindings make publication fail closed before Discord is
+contacted or a Release is created.
+
+The initial empty map is intentional. Existing Discord forum posts must be
+explicitly adopted or newly provisioned before publication is enabled.

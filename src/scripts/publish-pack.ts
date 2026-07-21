@@ -37,6 +37,11 @@ const ARCHIVE_DIR = resolve(process.cwd(), "archive");
 const REGISTRY_PATH = resolve(process.cwd(), "definitions", "registry.json");
 const PACKS_PATH = resolve(process.cwd(), "definitions", "packs.json");
 const CHANNELS_PATH = resolve(process.cwd(), "config", "channels.json");
+const ASSET_THREADS_PATH = resolve(
+  process.cwd(),
+  "config",
+  "asset-threads.json",
+);
 
 const USAGE = [
   "Publish a pack's charts to Discord as an archived Release.",
@@ -145,6 +150,19 @@ function report(app: App, result: PublishPackResult): number {
       console.error("  Set a real channel ID in config/channels.json, then publish again. (Nothing was posted.)");
       return 1;
 
+    case "asset_threads_unresolved":
+      console.error(
+        `✗ Cannot publish "${result.packId}": persistent Discord threads are not configured for:`,
+      );
+      for (const assetId of result.missingAssetIds) {
+        console.error(`    – ${label(app, assetId)}`);
+      }
+      console.error(
+        "  Add or adopt these Asset-thread bindings in config/asset-threads.json.",
+      );
+      console.error("  Nothing was posted and no release was created.");
+      return 1;
+
     case "publisher_connect_failed":
       console.error(`✗ Could not connect to Discord: ${result.detail}`);
       console.error("  Nothing was posted and no release was created. Fix the connection/token and re-run.");
@@ -233,6 +251,7 @@ async function main(): Promise<void> {
     registryPath: REGISTRY_PATH,
     packsPath: PACKS_PATH,
     channelsPath: CHANNELS_PATH,
+    assetThreadsPath: ASSET_THREADS_PATH,
   });
 
   // The pack is the operator's explicit choice. Missing or unknown: state the

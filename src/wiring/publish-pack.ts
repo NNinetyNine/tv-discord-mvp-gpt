@@ -1,6 +1,7 @@
 import type { Workspace, AssetCapture } from "../packs/workspace.ts";
 import type { StagingStore } from "./staging.ts";
 import type { ChannelResolver } from "./channels.ts";
+import type { AssetThreadResolver } from "./asset-threads.ts";
 import type { ReleaseStore, ReleaseRecord } from "../release/release-store.ts";
 
 /**
@@ -28,7 +29,7 @@ import type { ReleaseStore, ReleaseRecord } from "../release/release-store.ts";
  *  - RESUME: completes an existing interrupted release from its own record —
  *    never creates a second release, posts ONLY analyses whose message
  *    identity is still null, posts from ARCHIVE CUSTODY (never staging), and
- *    posts to the record's snapshotted channelId (a Release snapshots its
+ *    posts to the record's snapshotted destination (a Release snapshots its
  *    delivery target like everything else). Per-pack releases are
  *    independently resumable.
  *  - SUPERSESSION (private policy; both consumers live in this module —
@@ -63,6 +64,8 @@ export interface PublishPackDeps {
   readonly staging: StagingStore;
   readonly releases: ReleaseStore;
   readonly resolveChannel: ChannelResolver;
+  /** Resolve one Pack/Asset pair to its persistent Discord forum thread. */
+  readonly resolveAssetThread: AssetThreadResolver;
   /** Opens a logged-in publisher session. Must fail fast with no side effects. */
   readonly openPublisher: () => Promise<PublisherSessionShape>;
   /** Display name for an asset id (registry-owned; injected honestly). */
@@ -117,6 +120,12 @@ export type PublishPackResult =
     }
   | { readonly ok: false; readonly outcome: "missing_staged_images"; readonly packId: string; readonly missing: readonly string[] }
   | { readonly ok: false; readonly outcome: "channel_unresolved"; readonly packId: string }
+  | {
+      readonly ok: false;
+      readonly outcome: "asset_threads_unresolved";
+      readonly packId: string;
+      readonly missingAssetIds: readonly string[];
+    }
   | { readonly ok: false; readonly outcome: "publisher_connect_failed"; readonly packId: string; readonly detail: string }
   | {
       readonly ok: false;
@@ -183,7 +192,16 @@ export async function publishPack(
   packId: string,
   options: PublishOptions,
 ): Promise<PublishPackResult> {
-  const { workspace, staging, releases, resolveChannel, openPublisher, assetDisplay, now } = deps;
+  const {
+    workspace,
+    staging,
+    releases,
+    resolveChannel,
+    resolveAssetThread,
+    openPublisher,
+    assetDisplay,
+    now,
+  } = deps;
 
   // 1. The pack definition. Unknown packId = programming fault, fail loud.
   const pack = workspace.pack(packId);
@@ -243,12 +261,45 @@ export async function publishPack(
     return path;
   };
 
-  // 5. Channel: the Pack owns its assignment (a channel NAME); the resolver
-  //    maps the name to the installation-provisioned ID, null when unwired.
-  const channelId = resolveChannel(pack.channel);
-  if (channelId === null) {
+  // 5. Forum channel: the Pack owns its assignment (a channel NAME); the
+  //    resolver maps that name to the installation-provisioned forum ID.
+  const forumChannelId = resolveChannel(pack.channel);
+  if (forumChannelId === null) {
     return { ok: false, outcome: "channel_unresolved", packId };
   }
+
+  // Every Analysis must have a persistent Asset thread before any durable or
+  // external effect. Partial destination resolution is not publishable.
+  const threadIds = new Map<string, string>();
+  const missingThreadAssetIds: string[] = [];
+
+  for (const analysis of toPublish) {
+    const resolved = resolveAssetThread(packId, analysis.assetId);
+    if (resolved === null) {
+      missingThreadAssetIds.push(analysis.assetId);
+    } else {
+      threadIds.set(analysis.assetId, resolved);
+    }
+  }
+
+  if (missingThreadAssetIds.length > 0) {
+    return {
+      ok: false,
+      outcome: "asset_threads_unresolved",
+      packId,
+      missingAssetIds: missingThreadAssetIds,
+    };
+  }
+
+  const threadId = (assetId: string): string => {
+    const resolved = threadIds.get(assetId);
+    if (resolved === undefined) {
+      throw new Error(
+        `internal: no Discord thread resolved for "${packId}/${assetId}"`,
+      );
+    }
+    return resolved;
+  };
 
   // 6. Open the publisher BEFORE creating durable state: a connect failure
   //    must leave zero side effects (no in-flight release to refuse on).
@@ -263,16 +314,17 @@ export async function publishPack(
   const publishedAssetIds: string[] = [];
   try {
     // 7. Archive first: take custody + write the record (publishedAt: null).
-    const record = releases.createRelease({
+    const record = releases.createThreadedRelease({
       packId,
       packDisplay: pack.display,
-      channelId,
+      forumChannelId,
       startedAt: now(),
       analyses: toPublish.map((rec) => ({
         assetId: rec.assetId,
         display: assetDisplay(rec.assetId),
         capturedAt: rec.capturedAt,
         sourceImagePath: stagedPath(rec.assetId),
+        threadId: threadId(rec.assetId),
       })),
     });
     releaseId = record.releaseId;
@@ -281,7 +333,10 @@ export async function publishPack(
     for (const rec of toPublish) {
       let messageId: string;
       try {
-        const posted = await publisher.post(channelId, stagedPath(rec.assetId));
+        const posted = await publisher.post(
+          threadId(rec.assetId),
+          stagedPath(rec.assetId),
+        );
         messageId = posted.messageId;
       } catch (e) {
         return {
