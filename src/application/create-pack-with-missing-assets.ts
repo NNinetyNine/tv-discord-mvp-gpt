@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import type { ValidatedAssetLogo } from "../assets/asset-logo.ts";
 import type { Asset } from "../types.ts";
 import type { Pack } from "../packs/packs.ts";
 import { buildRegistry } from "../registry/registry.ts";
@@ -15,6 +16,8 @@ import { computeAssetRegistrationRegistryFingerprint } from "../registry/asset-r
 import { createAssetRegistrationUnifiedPatch } from "../registry/asset-registration-source-change.ts";
 
 export const CREATE_PACK_WITH_MISSING_ASSETS_SCHEMA_VERSION = 1 as const;
+export const CREATE_PACK_PREVIEW_SCHEMA_VERSION = 2 as const;
+export const CREATE_PACK_RECEIPT_SCHEMA_VERSION = 2 as const;
 export const CREATE_PACK_PREVIEW_TYPE = "visionx.create-pack-with-missing-assets.preview" as const;
 export const CREATE_PACK_RECEIPT_TYPE = "visionx.create-pack-with-missing-assets.receipt" as const;
 
@@ -57,6 +60,7 @@ export type CreatePackWithMissingAssetsFailureReason =
   | "unknown_channel"
   | "unresolved_channel"
   | "invalid_member"
+  | "invalid_asset_logo_evidence"
   | "duplicate_member"
   | "existing_asset_metadata_override"
   | "existing_asset_currency_missing"
@@ -95,8 +99,17 @@ export interface CreatePackResolvedMember {
   readonly symbol: string;
 }
 
+export type CreatePackAssetLogoEvidence = Readonly<
+  { readonly assetId: string } & ValidatedAssetLogo
+>;
+
+export type CreatePackChangedPath =
+  | "definitions/registry.json"
+  | "definitions/packs.json"
+  | `assets/asset-logos/${string}.png`;
+
 export interface CreatePackPreview {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly previewType: typeof CREATE_PACK_PREVIEW_TYPE;
   readonly previewId: string;
   readonly inputSha256: string;
@@ -107,6 +120,7 @@ export interface CreatePackPreview {
     readonly assetIds: readonly string[];
   };
   readonly members: readonly CreatePackResolvedMember[];
+  readonly assetLogos: readonly CreatePackAssetLogoEvidence[];
   readonly existingAssetCount: number;
   readonly missingAssetCount: number;
   readonly counts: {
@@ -126,7 +140,7 @@ export interface CreatePackPreview {
     readonly registryFingerprintBefore: string;
     readonly registryFingerprintAfter: string;
   };
-  readonly changedPaths: readonly ("definitions/registry.json" | "definitions/packs.json")[];
+  readonly changedPaths: readonly CreatePackChangedPath[];
   readonly publicationEffects: {
     readonly rendered: false;
     readonly published: false;
@@ -410,6 +424,7 @@ export function prepareCreatePackWithMissingAssets(input: {
   readonly registryBytes: Buffer;
   readonly packsBytes: Buffer;
   readonly channelsBytes: Buffer;
+  readonly assetLogos?: ReadonlyMap<string, ValidatedAssetLogo>;
 }): CreatePackWithMissingAssetsResult {
   const parsedInput = parseInput(input.value);
   if (isFailure(parsedInput)) return parsedInput;
@@ -493,7 +508,42 @@ export function prepareCreatePackWithMissingAssets(input: {
     }
   }
 
-  const missing = Object.freeze(resolved.filter((asset) => !asset.existing));
+  const missing = Object.freeze(
+    resolved.filter((asset) => !asset.existing),
+  );
+  const missingIds = new Set(missing.map((asset) => asset.id));
+
+  for (const assetId of input.assetLogos?.keys() ?? []) {
+    if (!missingIds.has(assetId)) {
+      return fail(
+        "invalid_asset_logo_evidence",
+        `Asset logo evidence for ${assetId} does not belong to a missing Asset in this Pack preview`,
+      );
+    }
+  }
+
+  const assetLogos: readonly CreatePackAssetLogoEvidence[] =
+    Object.freeze(
+      missing.flatMap((asset) => {
+        const logo = input.assetLogos?.get(asset.id);
+        if (logo === undefined) return [];
+        return [
+          Object.freeze({
+            assetId: asset.id,
+            ok: true as const,
+            sha256: logo.sha256,
+            byteSize: logo.byteSize,
+            format: logo.format,
+            width: logo.width,
+            height: logo.height,
+            pageOrFrameCount: logo.pageOrFrameCount,
+            channelCount: logo.channelCount,
+            hasAlpha: logo.hasAlpha,
+          }),
+        ];
+      }),
+    );
+
   const registryFuture = missing.length === 0
     ? Object.freeze({
         bytes: Buffer.from(input.registryBytes),
@@ -547,9 +597,16 @@ export function prepareCreatePackWithMissingAssets(input: {
     registryFingerprintBefore: beforeFingerprint,
     registryFingerprintAfter: afterFingerprint,
   });
-  const previewIdentityBytes = Buffer.from(JSON.stringify({ inputSha256: sha256(inputBytes), sourceState }), "utf8");
+  const previewIdentityBytes = Buffer.from(
+    JSON.stringify({
+      inputSha256: sha256(inputBytes),
+      assetLogos,
+      sourceState,
+    }),
+    "utf8",
+  );
   const preview: CreatePackPreview = Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: CREATE_PACK_PREVIEW_SCHEMA_VERSION,
     previewType: CREATE_PACK_PREVIEW_TYPE,
     previewId: sha256(previewIdentityBytes),
     inputSha256: sha256(inputBytes),
@@ -560,6 +617,7 @@ export function prepareCreatePackWithMissingAssets(input: {
       assetIds: Object.freeze(resolved.map((asset) => asset.id)),
     }),
     members: Object.freeze(resolved.map((asset) => Object.freeze({ ...asset, ...(asset.tradingViewAliases === undefined ? {} : { tradingViewAliases: Object.freeze([...asset.tradingViewAliases]) }) }))),
+    assetLogos,
     existingAssetCount: resolved.length - missing.length,
     missingAssetCount: missing.length,
     counts: Object.freeze({
@@ -572,8 +630,16 @@ export function prepareCreatePackWithMissingAssets(input: {
     }),
     sourceState,
     changedPaths: Object.freeze([
-      ...(input.registryBytes.equals(registryFuture.bytes) ? [] : ["definitions/registry.json" as const]),
-      ...(input.packsBytes.equals(packsFuture.value.bytes) ? [] : ["definitions/packs.json" as const]),
+      ...(input.registryBytes.equals(registryFuture.bytes)
+        ? []
+        : ["definitions/registry.json" as const]),
+      ...(input.packsBytes.equals(packsFuture.value.bytes)
+        ? []
+        : ["definitions/packs.json" as const]),
+      ...assetLogos.map(
+        ({ assetId }) =>
+          `assets/asset-logos/${assetId}.png` as const,
+      ),
     ]),
     publicationEffects: Object.freeze({ rendered: false, published: false, released: false, discordContacted: false }),
     technicalEvidence: Object.freeze({ patchSha256: sha256(patch), patchBytes: patch.length, patch: patch.toString("utf8") }),

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { ValidatedAssetLogo } from "../assets/asset-logo.ts";
 import { prepareCreatePackWithMissingAssets } from "./create-pack-with-missing-assets.ts";
 
 const CHANNELS = Buffer.from(`${JSON.stringify({ stocks: "1527846988270534827", forex: "1528609079822516305" }, null, 2)}\n`);
@@ -25,8 +26,34 @@ function input(members: readonly unknown[] = forexMembers.map(([id, display, tra
   return { schemaVersion: 1, pack: { id: "forex", display: "Forex", channel: "forex" }, members };
 }
 
-function prepare(value: unknown, registryBytes = REGISTRY) {
-  return prepareCreatePackWithMissingAssets({ value, registryBytes, packsBytes: PACKS, channelsBytes: CHANNELS });
+function logo(
+  hashCharacter: string,
+): ValidatedAssetLogo {
+  return Object.freeze({
+    ok: true,
+    sha256: hashCharacter.repeat(64),
+    byteSize: 1024,
+    format: "png",
+    width: 128,
+    height: 128,
+    pageOrFrameCount: 1,
+    channelCount: 4,
+    hasAlpha: true,
+  });
+}
+
+function prepare(
+  value: unknown,
+  registryBytes = REGISTRY,
+  assetLogos?: ReadonlyMap<string, ValidatedAssetLogo>,
+) {
+  return prepareCreatePackWithMissingAssets({
+    value,
+    registryBytes,
+    packsBytes: PACKS,
+    channelsBytes: CHANNELS,
+    assetLogos,
+  });
 }
 
 describe("Create Pack with missing Assets", () => {
@@ -152,4 +179,97 @@ describe("Create Pack with missing Assets", () => {
     expect(changed.ok).toBe(true);
     if (changed.ok) expect(changed.value.preview.sourceState.registryAfterSha256).not.toBe(first.value.preview.sourceState.registryAfterSha256);
   });
+  it("binds ordered Asset-logo evidence into preview identity", () => {
+    const value = input([
+      {
+        id: "dxy",
+        display: "DXY",
+        tradingView: "TVC:DXY",
+        currency: "USD",
+      },
+      {
+        id: "exy",
+        display: "EXY",
+        tradingView: "TVC:EXY",
+        currency: "USD",
+      },
+    ]);
+
+    const first = prepare(
+      value,
+      REGISTRY,
+      new Map([
+        ["exy", logo("b")],
+        ["dxy", logo("a")],
+      ]),
+    );
+    const same = prepare(
+      value,
+      REGISTRY,
+      new Map([
+        ["dxy", logo("a")],
+        ["exy", logo("b")],
+      ]),
+    );
+    const changed = prepare(
+      value,
+      REGISTRY,
+      new Map([
+        ["dxy", logo("c")],
+        ["exy", logo("b")],
+      ]),
+    );
+    const absent = prepare(value);
+
+    expect(first.ok).toBe(true);
+    expect(same.ok).toBe(true);
+    expect(changed.ok).toBe(true);
+    expect(absent.ok).toBe(true);
+    if (
+      !first.ok ||
+      !same.ok ||
+      !changed.ok ||
+      !absent.ok
+    ) return;
+
+    expect(first.value.preview.schemaVersion).toBe(2);
+    expect(
+      first.value.preview.assetLogos.map(
+        ({ assetId, sha256 }) => ({ assetId, sha256 }),
+      ),
+    ).toEqual([
+      { assetId: "dxy", sha256: "a".repeat(64) },
+      { assetId: "exy", sha256: "b".repeat(64) },
+    ]);
+    expect(first.value.preview.previewId).toBe(
+      same.value.preview.previewId,
+    );
+    expect(first.value.preview.previewId).not.toBe(
+      changed.value.preview.previewId,
+    );
+    expect(first.value.preview.sourceState).toEqual(
+      changed.value.preview.sourceState,
+    );
+    expect(first.value.preview.changedPaths).toEqual([
+      "definitions/registry.json",
+      "definitions/packs.json",
+      "assets/asset-logos/dxy.png",
+      "assets/asset-logos/exy.png",
+    ]);
+    expect(absent.value.preview.assetLogos).toEqual([]);
+  });
+
+  it("rejects logo evidence for an existing or unrelated Asset", () => {
+    expect(
+      prepare(
+        input([{ id: "aapl" }]),
+        REGISTRY,
+        new Map([["aapl", logo("a")]]),
+      ),
+    ).toMatchObject({
+      ok: false,
+      reason: "invalid_asset_logo_evidence",
+    });
+  });
+
 });

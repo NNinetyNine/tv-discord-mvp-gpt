@@ -16,6 +16,7 @@ import { buildRegistry } from "../registry/registry.ts";
 import { buildPacks } from "../packs/packs.ts";
 
 import {
+  CREATE_PACK_RECEIPT_SCHEMA_VERSION,
   CREATE_PACK_RECEIPT_TYPE,
   prepareCreatePackWithMissingAssets,
   serializeCreatePackPreview,
@@ -55,7 +56,7 @@ export interface CreatePackWithMissingAssetsFileFailure {
 }
 
 export interface CreatePackWithMissingAssetsReceipt {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly receiptType: typeof CREATE_PACK_RECEIPT_TYPE;
   readonly applicationStatus: "applied";
   readonly sourceChangesApplied: true;
@@ -63,6 +64,7 @@ export interface CreatePackWithMissingAssetsReceipt {
   readonly inputSha256: string;
   readonly pack: CreatePackPreview["pack"];
   readonly members: CreatePackPreview["members"];
+  readonly assetLogos: CreatePackPreview["assetLogos"];
   readonly counts: CreatePackPreview["counts"];
   readonly sourceState: CreatePackPreview["sourceState"];
   readonly changedPaths: CreatePackPreview["changedPaths"];
@@ -308,7 +310,7 @@ export async function applyCreatePackWithMissingAssetsFile(
   if (await pathExists(output)) return failure("application_already_completed", "This Pack creation has already completed");
 
   const receipt: CreatePackWithMissingAssetsReceipt = Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: CREATE_PACK_RECEIPT_SCHEMA_VERSION,
     receiptType: CREATE_PACK_RECEIPT_TYPE,
     applicationStatus: "applied",
     sourceChangesApplied: true,
@@ -316,6 +318,7 @@ export async function applyCreatePackWithMissingAssetsFile(
     inputSha256: prepared.value.preview.inputSha256,
     pack: prepared.value.preview.pack,
     members: prepared.value.preview.members,
+    assetLogos: prepared.value.preview.assetLogos,
     counts: prepared.value.preview.counts,
     sourceState: prepared.value.preview.sourceState,
     changedPaths: prepared.value.preview.changedPaths,

@@ -66,6 +66,8 @@ describe("atomic Create Pack file application", () => {
     expect(registry.lookupByTradingView("TVC:DXY")).toMatchObject({ id: "dxy", currency: "USD", channel: "forex" });
     expect(packs.find((pack) => pack.id === "forex")).toMatchObject({ assets: ["dxy", "exy"], channel: "forex" });
     expect(await readFile(join(f.root, "config/channels.json"))).toEqual(f.channelsBytes);
+    expect(result.receipt.schemaVersion).toBe(2);
+    expect(result.receipt.assetLogos).toEqual([]);
     expect(result.receipt.sourceState.registryBeforeSha256).toBe(sha256(f.registryBytes));
     expect(result.receipt.sourceState.registryAfterSha256).toBe(sha256(await readFile(join(f.root, "definitions/registry.json"))));
     expect(await transactionFiles(f.root, f.workspace)).toEqual([]);
