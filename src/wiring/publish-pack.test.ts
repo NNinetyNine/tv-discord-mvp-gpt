@@ -190,6 +190,10 @@ describe("published (happy path)", () => {
     const rec = releases.getRelease("crypto", r.releaseId);
     expect(rec.publishedAt).not.toBeNull();
     expect(rec.packDisplay).toBe("Crypto");
+    expect(rec.version).toBe(1);
+    if (rec.version !== 1) {
+      throw new Error("expected a version-1 Release");
+    }
     expect(rec.channelId).toBe("chan-1");
     expect(rec.analyses.map((a) => [a.assetId, a.display, a.discordMessageId])).toEqual([
       ["btc", "BTC", "msg-1"],
@@ -509,5 +513,48 @@ describe("resume — completing an interrupted release", () => {
     if (!r2.ok) return;
     expect(r2.releaseId).toBe(releaseId);
     expect(releases.listReleases("crypto")).toHaveLength(1); // still exactly one release
+  });
+});
+
+describe("resume — version 2 per-Asset thread routing", () => {
+  it("resumes an unposted Analysis into its snapshotted persistent thread", async () => {
+    const source = join(workDir, "threaded-btc.png");
+    writeFileSync(source, "png:threaded-btc");
+
+    const release = releases.createThreadedRelease({
+      packId: "crypto",
+      packDisplay: "Crypto",
+      forumChannelId: "forum-crypto",
+      startedAt: "2026-07-21T18:00:00.000Z",
+      analyses: [
+        {
+          assetId: "btc",
+          display: "Bitcoin",
+          capturedAt: "2026-07-21T17:55:00.000Z",
+          sourceImagePath: source,
+          threadId: "thread-btc",
+        },
+      ],
+    });
+
+    workspace.capture("btc", "captured-btc");
+
+    const publisher = fakePublisher();
+    const result = await resumeInterruptedRelease(
+      resumeDeps({ openPublisher: publisher.open }),
+      "crypto",
+    );
+
+    expect(result.ok).toBe(true);
+    expect(publisher.posts).toHaveLength(1);
+    expect(publisher.posts[0]?.channelId).toBe("thread-btc");
+
+    const completed = releases.getRelease(
+      "crypto",
+      release.releaseId,
+    );
+
+    expect(completed.version).toBe(2);
+    expect(completed.publishedAt).not.toBeNull();
   });
 });

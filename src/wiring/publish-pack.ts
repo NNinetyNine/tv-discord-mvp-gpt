@@ -390,7 +390,7 @@ export async function resumeInterruptedRelease(
   const postedNowAssetIds: string[] = [];
   try {
     // 3. Post ONLY the unposted remainder, in the record's canonical order,
-    //    from archive custody, to the record's snapshotted channel.
+    //    from archive custody, to each snapshotted Discord destination.
     for (const analysis of release.analyses) {
       if (analysis.discordMessageId !== null) continue; // never duplicate a post
 
@@ -398,7 +398,20 @@ export async function resumeInterruptedRelease(
 
       let messageId: string;
       try {
-        const posted = await publisher.post(release.channelId, imagePath);
+        let destinationId: string;
+
+        if ("threadId" in analysis) {
+          destinationId = analysis.threadId;
+        } else {
+          if (release.version !== 1) {
+            throw new Error(
+              `internal: version-2 Release analysis "${analysis.assetId}" has no threadId`,
+            );
+          }
+          destinationId = release.channelId;
+        }
+
+        const posted = await publisher.post(destinationId, imagePath);
         messageId = posted.messageId;
       } catch (e) {
         return {

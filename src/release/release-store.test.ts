@@ -258,3 +258,114 @@ describe("imagePath — archive custody location", () => {
     expect(() => store.imagePath("crypto", rec.releaseId, "../release.json")).toThrow(ReleaseError);
   });
 });
+
+describe("version 2 threaded releases", () => {
+  it("snapshots the Pack forum and one persistent thread per Asset", () => {
+    const record = store.createThreadedRelease({
+      packId: "crypto",
+      packDisplay: "Crypto",
+      forumChannelId: "forum-1",
+      startedAt: "2026-07-21T18:00:00.000Z",
+      analyses: [
+        {
+          assetId: "btc",
+          display: "Bitcoin",
+          capturedAt: "2026-07-21T17:55:00.000Z",
+          sourceImagePath: writeSource("btc-threaded.png"),
+          threadId: "thread-btc",
+        },
+        {
+          assetId: "eth",
+          display: "Ethereum",
+          capturedAt: "2026-07-21T17:56:00.000Z",
+          sourceImagePath: writeSource("eth-threaded.png"),
+          threadId: "thread-eth",
+        },
+      ],
+    });
+
+    expect(record.version).toBe(2);
+    expect(record.forumChannelId).toBe("forum-1");
+    expect(record.analyses.map((analysis) => [
+      analysis.assetId,
+      analysis.threadId,
+      analysis.discordMessageId,
+    ])).toEqual([
+      ["btc", "thread-btc", null],
+      ["eth", "thread-eth", null],
+    ]);
+
+    const loaded = store.getRelease("crypto", record.releaseId);
+    expect(loaded.version).toBe(2);
+
+    if (loaded.version !== 2) {
+      throw new Error("expected a version-2 Release");
+    }
+
+    expect(loaded.forumChannelId).toBe("forum-1");
+    expect(loaded.analyses[0]?.threadId).toBe("thread-btc");
+
+    const raw = JSON.parse(
+      readFileSync(
+        join(
+          archiveDir,
+          "crypto",
+          record.releaseId,
+          "release.json",
+        ),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+
+    expect(raw["version"]).toBe(2);
+    expect(raw["forumChannelId"]).toBe("forum-1");
+    expect("channelId" in raw).toBe(false);
+  });
+
+  it("rejects a version-2 Analysis without a persistent thread", () => {
+    expect(() =>
+      store.createThreadedRelease({
+        packId: "crypto",
+        packDisplay: "Crypto",
+        forumChannelId: "forum-1",
+        startedAt: "2026-07-21T18:00:00.000Z",
+        analyses: [
+          {
+            assetId: "btc",
+            display: "Bitcoin",
+            capturedAt: "2026-07-21T17:55:00.000Z",
+            sourceImagePath: writeSource("btc-no-thread.png"),
+            threadId: "",
+          },
+        ],
+      }),
+    ).toThrow(/threadId/);
+  });
+
+  it("loads version-1 and version-2 Releases together without rewriting either", () => {
+    const legacy = store.createRelease(input());
+    const threaded = store.createThreadedRelease({
+      packId: "crypto",
+      packDisplay: "Crypto",
+      forumChannelId: "forum-1",
+      startedAt: "2026-07-21T18:00:00.000Z",
+      analyses: [
+        {
+          assetId: "btc",
+          display: "Bitcoin",
+          capturedAt: "2026-07-21T17:55:00.000Z",
+          sourceImagePath: writeSource("btc-mixed.png"),
+          threadId: "thread-btc",
+        },
+      ],
+    });
+
+    const records = store.listReleases("crypto");
+    const byId = new Map(
+      records.map((record) => [record.releaseId, record]),
+    );
+
+    expect(byId.get(legacy.releaseId)?.version).toBe(1);
+    expect(byId.get(threaded.releaseId)?.version).toBe(2);
+  });
+});
