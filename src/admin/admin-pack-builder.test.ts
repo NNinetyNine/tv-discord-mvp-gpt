@@ -2,9 +2,15 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { startAdminHttpServer, type RunningAdminHttpServer } from "./admin-http-server.ts";
+import {
+  ADMIN_ASSET_LOGO_BODY_LIMIT,
+  startAdminHttpServer,
+  type RunningAdminHttpServer,
+} from "./admin-http-server.ts";
 import { AdminService } from "./admin-service.ts";
 
 const cleanup: string[] = [];
@@ -37,6 +43,25 @@ function input() {
       { id: "exy", display: "Euro Currency Index", tradingView: "TVC:EXY", currency: "USD" },
     ],
   };
+}
+
+async function assetLogoPng(): Promise<Buffer> {
+  const width = 128;
+  const height = 128;
+  const channels = 4;
+  const pixels = Buffer.alloc(width * height * channels);
+
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    const offset = pixel * channels;
+    pixels[offset] = (pixel * 17) % 256;
+    pixels[offset + 1] = (pixel * 29) % 256;
+    pixels[offset + 2] = (pixel * 43) % 256;
+    pixels[offset + 3] = 255;
+  }
+
+  return sharp(pixels, {
+    raw: { width, height, channels },
+  }).png().toBuffer();
 }
 
 async function request(server: RunningAdminHttpServer, path: string, body: unknown, origin = server.url) {
@@ -104,4 +129,114 @@ describe("Administration Create Pack front door", () => {
     const after = await Promise.all(["definitions/registry.json", "definitions/packs.json", "config/channels.json"].map(async (path) => createHash("sha256").update(await readFile(join(f.root, path))).digest("hex")));
     expect(after).toEqual(before);
   });
+  it("stages validated Asset logos through a strict same-origin PNG route", async () => {
+    const f = await fixture();
+    const server = await startAdminHttpServer({
+      service: f.service,
+      host: "127.0.0.1",
+      port: 0,
+    });
+    servers.push(server);
+
+    const bytes = await assetLogoPng();
+    const uploaded = await fetch(
+      `${server.url}/api/v1/packs/create/forex/asset-logos/dxy`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "image/png",
+          Origin: server.url,
+        },
+        body: new Uint8Array(bytes),
+      },
+    );
+    const uploadedBody = await uploaded.json() as any;
+
+    expect(uploaded.status).toBe(201);
+    expect(uploadedBody.data).toMatchObject({
+      schemaVersion: 1,
+      packId: "forex",
+      assetId: "dxy",
+      evidence: {
+        ok: true,
+        format: "png",
+        width: 128,
+        height: 128,
+      },
+    });
+    expect(
+      await f.service.packBuilder.readAssetLogo("forex", "dxy"),
+    ).toEqual(bytes);
+
+    const wrongType = await fetch(
+      `${server.url}/api/v1/packs/create/forex/asset-logos/exy`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "text/plain",
+          Origin: server.url,
+        },
+        body: "not a png",
+      },
+    );
+    expect(wrongType.status).toBe(415);
+    expect(((await wrongType.json()) as any).error.code).toBe(
+      "invalid_content_type",
+    );
+
+    const foreign = await fetch(
+      `${server.url}/api/v1/packs/create/forex/asset-logos/exy`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "image/png",
+          Origin: "https://evil.invalid",
+        },
+        body: new Uint8Array(bytes),
+      },
+    );
+    expect(foreign.status).toBe(403);
+    expect(((await foreign.json()) as any).error.code).toBe(
+      "origin_rejected",
+    );
+    await expect(
+      f.service.packBuilder.readAssetLogo("forex", "exy"),
+    ).rejects.toMatchObject({
+      code: "asset_logo_not_found",
+    });
+  });
+
+  it("rejects Asset-logo request bodies above the dedicated limit", async () => {
+    const f = await fixture();
+    const server = await startAdminHttpServer({
+      service: f.service,
+      host: "127.0.0.1",
+      port: 0,
+    });
+    servers.push(server);
+
+    const response = await fetch(
+      `${server.url}/api/v1/packs/create/forex/asset-logos/dxy`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "image/png",
+          Origin: server.url,
+        },
+        body: new Uint8Array(
+          Buffer.alloc(ADMIN_ASSET_LOGO_BODY_LIMIT + 1),
+        ),
+      },
+    );
+    const body = await response.json() as any;
+
+    expect(response.status).toBe(413);
+    expect(body.error.code).toBe("request_body_too_large");
+    await expect(
+      f.service.packBuilder.readAssetLogo("forex", "dxy"),
+    ).rejects.toMatchObject({
+      code: "asset_logo_not_found",
+    });
+  });
+
 });

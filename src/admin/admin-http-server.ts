@@ -3,12 +3,15 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { extname } from "node:path";
 
+import { ASSET_LOGO_POLICY } from "../assets/asset-logo.ts";
 import { AdminError, PACK_DRAFT_SCHEMA_VERSION, PACK_DRAFT_TYPE } from "./admin-types.ts";
 import { AdminService } from "./admin-service.ts";
 import { PACK_PROMOTION_ARTIFACT_NAMES, type PackPromotionArtifactName } from "./admin-promotion-workspace.ts";
 import { ASSET_REGISTRATION_ARTIFACT_NAMES, type AssetRegistrationArtifactName } from "./admin-asset-registration-workspace.ts";
 
 export const ADMIN_REQUEST_BODY_LIMIT = 65536 as const;
+export const ADMIN_ASSET_LOGO_BODY_LIMIT =
+  ASSET_LOGO_POLICY.maximumBytes;
 export const ADMIN_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
 export interface StartAdminHttpServerOptions {
@@ -183,6 +186,41 @@ function errorResponse(response: ServerResponse, error: unknown): void {
   json(response, 500, { ok: false, error: { code: "internal_error", message: "The administration service encountered an internal error." } });
 }
 
+async function readAssetLogoBody(
+  request: IncomingMessage,
+): Promise<Buffer> {
+  const contentType = request.headers["content-type"];
+  if (
+    typeof contentType !== "string" ||
+    !/^image\/png(?:\s*;|$)/iu.test(contentType)
+  ) {
+    throw new AdminError(
+      "invalid_content_type",
+      "Asset logo uploads require Content-Type: image/png.",
+      415,
+    );
+  }
+
+  const chunks: Buffer[] = [];
+  let length = 0;
+  for await (const chunk of request) {
+    const bytes = Buffer.isBuffer(chunk)
+      ? chunk
+      : Buffer.from(chunk);
+    length += bytes.length;
+    if (length > ADMIN_ASSET_LOGO_BODY_LIMIT) {
+      throw new AdminError(
+        "request_body_too_large",
+        `Asset logo exceeds ${ADMIN_ASSET_LOGO_BODY_LIMIT} bytes.`,
+        413,
+      );
+    }
+    chunks.push(bytes);
+  }
+
+  return Buffer.concat(chunks);
+}
+
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   const contentType = request.headers["content-type"];
   if (typeof contentType !== "string" || !/^application\/json(?:\s*;|$)/iu.test(contentType)) {
@@ -289,6 +327,30 @@ async function routeApi(
   }
   const assetMatch = /^\/api\/v1\/assets\/([^/]+)$/u.exec(pathname);
   if (assetMatch !== null && method === "GET") return ok(response, service.getAsset(assetMatch[1] ?? ""));
+  const packAssetLogoRoute =
+    /^\/api\/v1\/packs\/create\/([^/]+)\/asset-logos\/([^/]+)$/u.exec(
+      pathname,
+    );
+  if (packAssetLogoRoute !== null) {
+    if (method !== "PUT") {
+      throw new AdminError(
+        "method_not_allowed",
+        "Method is not allowed for this route.",
+        405,
+      );
+    }
+    const bytes = await readAssetLogoBody(request);
+    return ok(
+      response,
+      await service.stagePackBuilderAssetLogo(
+        packAssetLogoRoute[1] ?? "",
+        packAssetLogoRoute[2] ?? "",
+        bytes,
+      ),
+      201,
+    );
+  }
+
   if (pathname === "/api/v1/packs/create/preview") {
     if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     const body = await readJsonBody(request);

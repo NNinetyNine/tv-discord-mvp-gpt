@@ -421,6 +421,24 @@ export class AdminService {
     });
   }
 
+  async stagePackBuilderAssetLogo(
+    packId: string,
+    assetId: string,
+    bytes: Buffer,
+  ): Promise<Readonly<Record<string, unknown>>> {
+    const stored = await this.packBuilder.saveAssetLogo(
+      packId,
+      assetId,
+      bytes,
+    );
+    return Object.freeze({
+      schemaVersion: 1,
+      packId,
+      assetId: stored.assetId,
+      evidence: stored.evidence,
+    });
+  }
+
   async previewPackCreation(value: unknown): Promise<CreatePackPreview> {
     await this.refresh();
     const prepared = prepareCreatePackWithMissingAssets({
