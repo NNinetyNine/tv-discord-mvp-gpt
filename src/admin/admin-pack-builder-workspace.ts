@@ -12,9 +12,15 @@ import {
 } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
+import {
+  validateAssetLogo,
+  type ValidatedAssetLogo,
+} from "../assets/asset-logo.ts";
 import { AdminError } from "./admin-types.ts";
 
 const PACK_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
+const ASSET_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
+export const PACK_BUILDER_ASSET_LOGO_DIRECTORY = "asset-logos" as const;
 export const PACK_BUILDER_INPUT_FILENAME = "input.json" as const;
 export const PACK_BUILDER_PREVIEW_FILENAME = "preview.json" as const;
 export const PACK_BUILDER_RECEIPT_FILENAME = "receipt.json" as const;
@@ -53,13 +59,26 @@ async function writeReplace(path: string, bytes: Buffer): Promise<void> {
   await syncDirectory(dirname(path));
 }
 
+export interface AdminPackBuilderAssetLogoSummary {
+  readonly assetId: string;
+  readonly evidence: ValidatedAssetLogo;
+}
+
 export class AdminPackBuilderWorkspace {
   readonly root: string;
 
   private constructor(root: string) { this.root = root; }
 
   static async open(workspaceRoot: string): Promise<AdminPackBuilderWorkspace> {
-    const canonicalRoot = await realpath(resolve(workspaceRoot));
+    const requestedRoot = resolve(workspaceRoot);
+    const rootStat = await lstat(requestedRoot);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+      throw new AdminError(
+        "workspace_path_unsafe",
+        "Pack-builder workspace root must be a non-symlink directory.",
+      );
+    }
+    const canonicalRoot = await realpath(requestedRoot);
     const requested = join(canonicalRoot, "pack-builder");
     if (await exists(requested)) {
       const stat = await lstat(requested);
@@ -84,6 +103,136 @@ export class AdminPackBuilderWorkspace {
     const canonical = await realpath(requested);
     if (!pathInside(this.root, canonical)) throw new AdminError("workspace_path_unsafe", "Pack-builder task directory escapes its workspace.");
     return canonical;
+  }
+
+  #validateAssetId(assetId: string): void {
+    if (!ASSET_ID.test(assetId)) {
+      throw new AdminError(
+        "invalid_request",
+        "Asset ID must be a lowercase safe slug.",
+      );
+    }
+  }
+
+  async #assetLogoDirectory(
+    packId: string,
+    createDirectory: boolean,
+  ): Promise<string> {
+    const taskDirectory = await this.taskDirectory(packId);
+    const requested = join(
+      taskDirectory,
+      PACK_BUILDER_ASSET_LOGO_DIRECTORY,
+    );
+
+    if (await exists(requested)) {
+      const stat = await lstat(requested);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new AdminError(
+          "workspace_path_unsafe",
+          "Pack-builder Asset-logo directory must be a non-symlink directory.",
+        );
+      }
+    } else if (createDirectory) {
+      await mkdir(requested, { mode: 0o700 });
+    } else {
+      throw new AdminError(
+        "asset_logo_not_found",
+        "The staged Asset logo was not found.",
+        404,
+      );
+    }
+
+    const canonical = await realpath(requested);
+    if (!pathInside(taskDirectory, canonical)) {
+      throw new AdminError(
+        "workspace_path_unsafe",
+        "Pack-builder Asset-logo directory escapes its task workspace.",
+      );
+    }
+    return canonical;
+  }
+
+  async assetLogoPath(
+    packId: string,
+    assetId: string,
+    createDirectory = true,
+  ): Promise<string> {
+    this.#validateAssetId(assetId);
+    const directory = await this.#assetLogoDirectory(
+      packId,
+      createDirectory,
+    );
+    const path = join(directory, `${assetId}.png`);
+
+    if (await exists(path)) {
+      const stat = await lstat(path);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new AdminError(
+          "workspace_path_unsafe",
+          "Staged Asset logo must be a regular non-symlink file.",
+        );
+      }
+      const canonical = await realpath(path);
+      if (!pathInside(directory, canonical)) {
+        throw new AdminError(
+          "workspace_path_unsafe",
+          "Staged Asset logo escapes its task workspace.",
+        );
+      }
+      return canonical;
+    }
+
+    return path;
+  }
+
+  async saveAssetLogo(
+    packId: string,
+    assetId: string,
+    bytes: Buffer,
+  ): Promise<AdminPackBuilderAssetLogoSummary> {
+    this.#validateAssetId(assetId);
+    const validated = await validateAssetLogo(bytes);
+    if (!validated.ok) {
+      throw new AdminError(
+        "invalid_asset_logo",
+        validated.detail,
+        400,
+        { reason: validated.reason },
+      );
+    }
+
+    const destination = await this.assetLogoPath(packId, assetId);
+    await writeReplace(destination, bytes);
+
+    return Object.freeze({
+      assetId,
+      evidence: validated,
+    });
+  }
+
+  async readAssetLogo(
+    packId: string,
+    assetId: string,
+  ): Promise<Buffer> {
+    const path = await this.assetLogoPath(packId, assetId, false);
+    try {
+      return await readFile(path);
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        throw new AdminError(
+          "asset_logo_not_found",
+          `No staged Asset logo exists for ${assetId}.`,
+          404,
+          { assetId },
+        );
+      }
+      throw error;
+    }
   }
 
   async paths(packId: string): Promise<{

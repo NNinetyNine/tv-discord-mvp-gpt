@@ -22,6 +22,8 @@ export type AdminErrorCode =
   | "invalid_channel_configuration"
   | "invalid_pack_draft"
   | "invalid_pack_builder_input"
+  | "invalid_asset_logo"
+  | "asset_logo_not_found"
   | "pack_builder_preview_not_found"
   | "pack_builder_preview_mismatch"
   | "existing_asset_currency_missing"
