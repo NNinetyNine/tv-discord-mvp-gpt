@@ -126,6 +126,105 @@ export function parseAssetThreadBindings(
   });
 }
 
+/**
+ * Return a new validated binding document containing one Pack/Asset binding.
+ *
+ * Repeating the exact same binding is idempotent. A different thread already
+ * bound to the same composite identity is rejected: adoption or provisioning
+ * must never silently redirect future publications.
+ */
+export function bindAssetThread(
+  bindings: AssetThreadBindings,
+  packId: string,
+  assetId: string,
+  threadId: string,
+): AssetThreadBindings {
+  validateDomainId("pack", packId);
+  validateDomainId("asset", assetId);
+
+  if (!DISCORD_SNOWFLAKE.test(threadId)) {
+    throw new AssetThreadsError(
+      `packs.${packId}.${assetId} must be a Discord snowflake`,
+    );
+  }
+
+  const current = bindings.packs[packId]?.[assetId];
+  if (current !== undefined && current !== threadId) {
+    throw new AssetThreadsError(
+      `packs.${packId}.${assetId} is already bound to ${current}`,
+    );
+  }
+
+  if (current === threadId) return bindings;
+
+  const nextPacks: Record<
+    string,
+    Readonly<Record<string, string>>
+  > = {};
+
+  for (const [currentPackId, assets] of Object.entries(
+    bindings.packs,
+  )) {
+    nextPacks[currentPackId] = assets;
+  }
+
+  nextPacks[packId] = Object.freeze({
+    ...(bindings.packs[packId] ?? {}),
+    [assetId]: threadId,
+  });
+
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    packs: Object.freeze(nextPacks),
+  });
+}
+
+/**
+ * Serialize installation bindings canonically.
+ *
+ * Pack and Asset keys are lexical so equivalent documents produce identical
+ * bytes regardless of insertion order. The trailing newline matches the
+ * repository's configuration-file convention.
+ */
+export function serializeAssetThreadBindings(
+  bindings: AssetThreadBindings,
+): Buffer {
+  const packs: Record<string, Record<string, string>> = {};
+
+  for (const packId of Object.keys(bindings.packs).sort(
+    (left, right) => left.localeCompare(right, "en"),
+  )) {
+    const sourceAssets = bindings.packs[packId] ?? {};
+    const assets: Record<string, string> = {};
+
+    for (const assetId of Object.keys(sourceAssets).sort(
+      (left, right) => left.localeCompare(right, "en"),
+    )) {
+      const threadId = sourceAssets[assetId];
+      if (threadId === undefined) {
+        throw new AssetThreadsError(
+          `packs.${packId}.${assetId} has no thread binding`,
+        );
+      }
+      assets[assetId] = threadId;
+    }
+
+    packs[packId] = assets;
+  }
+
+  return Buffer.from(
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        packs,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
 /** Build a pure resolver from already-validated bindings. */
 export function buildAssetThreadResolver(
   bindings: AssetThreadBindings,

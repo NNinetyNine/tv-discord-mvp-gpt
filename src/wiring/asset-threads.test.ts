@@ -14,10 +14,12 @@ import { join } from "node:path";
 
 import {
   AssetThreadsError,
+  bindAssetThread,
   buildAssetThreadResolver,
   loadAssetThreadBindings,
   loadAssetThreadResolver,
   parseAssetThreadBindings,
+  serializeAssetThreadBindings,
 } from "./asset-threads.ts";
 
 const BTC_THREAD = "123456789012345678";
@@ -94,6 +96,150 @@ describe("Asset-thread binding resolution", () => {
 
     expect(resolve("crypto", "eth")).toBeNull();
     expect(resolve("stocks", "btc")).toBeNull();
+  });
+});
+
+describe("Asset-thread binding updates", () => {
+  it("adds one Pack/Asset binding without mutating the input", () => {
+    const before = parseAssetThreadBindings({
+      schemaVersion: 1,
+      packs: {
+        crypto: {
+          btc: BTC_THREAD,
+        },
+      },
+    });
+
+    const after = bindAssetThread(
+      before,
+      "crypto",
+      "eth",
+      ETH_THREAD,
+    );
+
+    expect(after).not.toBe(before);
+    expect(after.packs.crypto).toEqual({
+      btc: BTC_THREAD,
+      eth: ETH_THREAD,
+    });
+    expect(before.packs.crypto).toEqual({
+      btc: BTC_THREAD,
+    });
+  });
+
+  it("creates a new Pack binding map when needed", () => {
+    const before = parseAssetThreadBindings({
+      schemaVersion: 1,
+      packs: {},
+    });
+
+    const after = bindAssetThread(
+      before,
+      "macro",
+      "btc",
+      OTHER_BTC_THREAD,
+    );
+
+    expect(after.packs).toEqual({
+      macro: {
+        btc: OTHER_BTC_THREAD,
+      },
+    });
+  });
+
+  it("is idempotent for the same composite binding", () => {
+    const before = parseAssetThreadBindings({
+      schemaVersion: 1,
+      packs: {
+        crypto: {
+          btc: BTC_THREAD,
+        },
+      },
+    });
+
+    expect(
+      bindAssetThread(
+        before,
+        "crypto",
+        "btc",
+        BTC_THREAD,
+      ),
+    ).toBe(before);
+  });
+
+  it("refuses to silently redirect an existing binding", () => {
+    const before = parseAssetThreadBindings({
+      schemaVersion: 1,
+      packs: {
+        crypto: {
+          btc: BTC_THREAD,
+        },
+      },
+    });
+
+    expect(() =>
+      bindAssetThread(
+        before,
+        "crypto",
+        "btc",
+        OTHER_BTC_THREAD,
+      ),
+    ).toThrow(/already bound/);
+  });
+
+  it("serializes equivalent bindings to identical canonical bytes", () => {
+    const first = parseAssetThreadBindings({
+      schemaVersion: 1,
+      packs: {
+        stocks: {
+          msft: "423456789012345678",
+          aapl: "523456789012345678",
+        },
+        crypto: {
+          eth: ETH_THREAD,
+          btc: BTC_THREAD,
+        },
+      },
+    });
+
+    const second = parseAssetThreadBindings({
+      schemaVersion: 1,
+      packs: {
+        crypto: {
+          btc: BTC_THREAD,
+          eth: ETH_THREAD,
+        },
+        stocks: {
+          aapl: "523456789012345678",
+          msft: "423456789012345678",
+        },
+      },
+    });
+
+    const firstBytes =
+      serializeAssetThreadBindings(first);
+    const secondBytes =
+      serializeAssetThreadBindings(second);
+
+    expect(firstBytes).toEqual(secondBytes);
+    expect(firstBytes.toString("utf8")).toBe(
+      [
+        "{",
+        '  "schemaVersion": 1,',
+        '  "packs": {',
+        '    "crypto": {',
+        `      "btc": "${BTC_THREAD}",`,
+        `      "eth": "${ETH_THREAD}"`,
+        "    },",
+        '    "stocks": {',
+        '      "aapl": "523456789012345678",',
+        '      "msft": "423456789012345678"',
+        "    }",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
   });
 });
 
