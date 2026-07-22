@@ -6,6 +6,10 @@ import { join, relative, resolve, sep } from "node:path";
 
 import type { Asset } from "../types.ts";
 import {
+  validateAssetLogo,
+  type ValidatedAssetLogo,
+} from "../assets/asset-logo.ts";
+import {
   prepareCreatePackWithMissingAssets,
   serializeCreatePackPreview,
   serializeCreatePackWithMissingAssetsInput,
@@ -439,80 +443,300 @@ export class AdminService {
     });
   }
 
-  async previewPackCreation(value: unknown): Promise<CreatePackPreview> {
+  async previewPackCreation(
+    value: unknown,
+  ): Promise<CreatePackPreview> {
     await this.refresh();
-    const prepared = prepareCreatePackWithMissingAssets({
-      value,
-      registryBytes: Buffer.from(this.#state.registryFile.bytes),
-      packsBytes: Buffer.from(this.#state.packsFile.bytes),
-      channelsBytes: Buffer.from(this.#state.channelsFile.bytes),
-    });
-    if (!prepared.ok) {
-      const code = prepared.reason === "existing_asset_currency_missing"
-        ? "existing_asset_currency_missing"
-        : prepared.reason === "tradingview_conflict"
-          ? "tradingview_conflict"
-          : prepared.reason === "display_conflict"
-            ? "display_conflict"
-            : prepared.reason === "pack_already_exists"
-              ? "pack_already_exists"
-              : prepared.reason === "unknown_channel"
-                ? "pack_channel_not_configured"
-                : prepared.reason === "unresolved_channel"
+
+    const prepareCurrent = (
+      assetLogos?: ReadonlyMap<
+        string,
+        ValidatedAssetLogo
+      >,
+    ) =>
+      prepareCreatePackWithMissingAssets({
+        value,
+        registryBytes: Buffer.from(
+          this.#state.registryFile.bytes,
+        ),
+        packsBytes: Buffer.from(
+          this.#state.packsFile.bytes,
+        ),
+        channelsBytes: Buffer.from(
+          this.#state.channelsFile.bytes,
+        ),
+        assetLogos,
+      });
+
+    const requirePrepared = (
+      candidate: ReturnType<
+        typeof prepareCreatePackWithMissingAssets
+      >,
+    ) => {
+      if (candidate.ok) return candidate.value;
+
+      const code =
+        candidate.reason ===
+          "existing_asset_currency_missing"
+          ? "existing_asset_currency_missing"
+          : candidate.reason ===
+              "tradingview_conflict"
+            ? "tradingview_conflict"
+            : candidate.reason ===
+                "display_conflict"
+              ? "display_conflict"
+              : candidate.reason ===
+                  "pack_already_exists"
+                ? "pack_already_exists"
+                : candidate.reason ===
+                    "unknown_channel" ||
+                    candidate.reason ===
+                      "unresolved_channel"
                   ? "pack_channel_not_configured"
                   : "invalid_pack_builder_input";
-      throw new AdminError(code, prepared.detail, code === "pack_already_exists" ? 409 : 400, {
-        ...(prepared.memberIndex === undefined ? {} : { memberIndex: prepared.memberIndex }),
-        ...(prepared.field === undefined ? {} : { field: prepared.field }),
-      });
-    }
-    await this.packBuilder.savePreview(
-      prepared.value.input.pack.id,
-      serializeCreatePackWithMissingAssetsInput(prepared.value.input),
-      serializeCreatePackPreview(prepared.value.preview),
+
+      throw new AdminError(
+        code,
+        candidate.detail,
+        code === "pack_already_exists"
+          ? 409
+          : 400,
+        {
+          ...(candidate.memberIndex === undefined
+            ? {}
+            : {
+                memberIndex:
+                  candidate.memberIndex,
+              }),
+          ...(candidate.field === undefined
+            ? {}
+            : {
+                field: candidate.field,
+              }),
+        },
+      );
+    };
+
+    const initial = requirePrepared(
+      prepareCurrent(),
     );
-    return prepared.value.preview;
+    const assetLogos =
+      new Map<string, ValidatedAssetLogo>();
+
+    for (const member of initial.preview.members) {
+      if (member.existing) continue;
+
+      let bytes: Buffer;
+      try {
+        bytes =
+          await this.packBuilder.readAssetLogo(
+            initial.input.pack.id,
+            member.id,
+          );
+      } catch (error) {
+        if (
+          error instanceof AdminError &&
+          error.code ===
+            "asset_logo_not_found"
+        ) {
+          throw new AdminError(
+            "asset_logo_not_found",
+            error.message,
+            404,
+            { assetId: member.id },
+          );
+        }
+        throw error;
+      }
+
+      const validated =
+        await validateAssetLogo(bytes);
+
+      if (!validated.ok) {
+        throw new AdminError(
+          "invalid_asset_logo",
+          validated.detail,
+          400,
+          {
+            assetId: member.id,
+            reason: validated.reason,
+          },
+        );
+      }
+
+      assetLogos.set(member.id, validated);
+    }
+
+    const prepared = requirePrepared(
+      prepareCurrent(assetLogos),
+    );
+
+    await this.packBuilder.savePreview(
+      prepared.input.pack.id,
+      serializeCreatePackWithMissingAssetsInput(
+        prepared.input,
+      ),
+      serializeCreatePackPreview(
+        prepared.preview,
+      ),
+    );
+
+    return prepared.preview;
   }
 
-  async createPackFromPreview(packId: string, previewId: unknown): Promise<Readonly<Record<string, unknown>>> {
-    if (typeof previewId !== "string" || !/^[a-f0-9]{64}$/u.test(previewId)) {
-      throw new AdminError("invalid_request", "previewId must be a lowercase SHA-256 identity.");
+  async createPackFromPreview(
+    packId: string,
+    previewId: unknown,
+  ): Promise<Readonly<Record<string, unknown>>> {
+    if (
+      typeof previewId !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(previewId)
+    ) {
+      throw new AdminError(
+        "invalid_request",
+        "previewId must be a lowercase SHA-256 identity.",
+      );
     }
-    const state = await this.packBuilder.readState(packId);
-    if (state.input === undefined || state.preview === undefined) {
-      throw new AdminError("pack_builder_preview_not_found", "Create a current Pack preview before applying.", 404);
+
+    const state =
+      await this.packBuilder.readState(packId);
+
+    if (
+      state.input === undefined ||
+      state.preview === undefined
+    ) {
+      throw new AdminError(
+        "pack_builder_preview_not_found",
+        "Create a current Pack preview before applying.",
+        404,
+      );
     }
-    if (!isRecord(state.preview) || state.preview.previewId !== previewId) {
-      throw new AdminError("pack_builder_preview_mismatch", "The submitted preview is not the current stored preview.", 409);
+
+    if (
+      !isRecord(state.preview) ||
+      state.preview.previewId !== previewId
+    ) {
+      throw new AdminError(
+        "pack_builder_preview_mismatch",
+        "The submitted preview is not the current stored preview.",
+        409,
+      );
     }
-    const paths = await this.packBuilder.paths(packId);
-    const applied = await applyCreatePackWithMissingAssetsFile({
-      repositoryRoot: this.repositoryRoot,
-      inputPath: paths.input,
-      previewPath: paths.preview,
-      receiptOutputPath: paths.receipt,
-    });
+
+    const logoEvidence = state.preview.assetLogos;
+    if (!Array.isArray(logoEvidence)) {
+      throw new AdminError(
+        "pack_builder_preview_mismatch",
+        "The current stored preview has invalid Asset-logo evidence.",
+        409,
+      );
+    }
+
+    const assetLogoInputs: Array<{
+      readonly assetId: string;
+      readonly path: string;
+    }> = [];
+    const seenAssetIds = new Set<string>();
+
+    for (const entry of logoEvidence) {
+      if (
+        !isRecord(entry) ||
+        typeof entry.assetId !== "string" ||
+        !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(
+          entry.assetId,
+        ) ||
+        seenAssetIds.has(entry.assetId)
+      ) {
+        throw new AdminError(
+          "pack_builder_preview_mismatch",
+          "The current stored preview has invalid Asset-logo evidence.",
+          409,
+        );
+      }
+
+      seenAssetIds.add(entry.assetId);
+      assetLogoInputs.push({
+        assetId: entry.assetId,
+        path:
+          await this.packBuilder.assetLogoPath(
+            packId,
+            entry.assetId,
+            false,
+          ),
+      });
+    }
+
+    const paths =
+      await this.packBuilder.paths(packId);
+
+    const applied =
+      await applyCreatePackWithMissingAssetsFile({
+        repositoryRoot: this.repositoryRoot,
+        inputPath: paths.input,
+        previewPath: paths.preview,
+        receiptOutputPath: paths.receipt,
+        assetLogoInputs,
+      });
+
     if (!applied.ok) {
-      const code = applied.reason === "stale_registry_state"
-        ? "stale_registry_state"
-        : applied.reason === "stale_pack_state"
-          ? "stale_pack_state"
-          : applied.reason === "stale_channel_state"
-            ? "stale_channel_state"
-            : applied.reason === "preview_mismatch"
-              ? "pack_builder_preview_mismatch"
-              : applied.reason === "application_already_completed"
-                ? "application_already_completed"
-                : applied.reason === "rollback_failed"
-                  ? "rollback_failed"
-                  : applied.reason === "rollback_verification_failed"
-                    ? "rollback_verification_failed"
-                    : applied.reason === "application_receipt_finalize_failed"
-                      ? "application_receipt_finalize_failed"
-                      : "pack_builder_transaction_failed";
-      throw new AdminError(code, applied.detail, new Set(["stale_registry_state", "stale_pack_state", "stale_channel_state", "pack_builder_preview_mismatch", "application_already_completed"]).has(code) ? 409 : 500, { safelyRestored: applied.safelyRestored });
+      const code =
+        applied.reason === "stale_registry_state"
+          ? "stale_registry_state"
+          : applied.reason === "stale_pack_state"
+            ? "stale_pack_state"
+            : applied.reason ===
+                "stale_channel_state"
+              ? "stale_channel_state"
+              : applied.reason ===
+                    "preview_mismatch" ||
+                  applied.reason ===
+                    "asset_logo_mismatch" ||
+                  applied.reason ===
+                    "invalid_asset_logo"
+                ? "pack_builder_preview_mismatch"
+                : applied.reason ===
+                    "asset_logo_not_found"
+                  ? "asset_logo_not_found"
+                  : applied.reason ===
+                      "application_already_completed"
+                    ? "application_already_completed"
+                    : applied.reason ===
+                        "output_already_exists"
+                      ? "output_already_exists"
+                      : applied.reason ===
+                          "rollback_failed"
+                        ? "rollback_failed"
+                        : applied.reason ===
+                            "rollback_verification_failed"
+                          ? "rollback_verification_failed"
+                          : applied.reason ===
+                              "application_receipt_finalize_failed"
+                            ? "application_receipt_finalize_failed"
+                            : "pack_builder_transaction_failed";
+
+      const conflictCodes = new Set([
+        "stale_registry_state",
+        "stale_pack_state",
+        "stale_channel_state",
+        "pack_builder_preview_mismatch",
+        "asset_logo_not_found",
+        "output_already_exists",
+        "application_already_completed",
+      ]);
+
+      throw new AdminError(
+        code,
+        applied.detail,
+        conflictCodes.has(code) ? 409 : 500,
+        {
+          safelyRestored:
+            applied.safelyRestored,
+        },
+      );
     }
+
     await this.refresh();
+
     return Object.freeze({
       schemaVersion: 1,
       created: true,

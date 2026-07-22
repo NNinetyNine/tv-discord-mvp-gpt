@@ -23,7 +23,9 @@ afterEach(async () => {
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "visionx-admin-pack-builder-repo-")); cleanup.push(root);
   const workspace = await mkdtemp(join(tmpdir(), "visionx-admin-pack-builder-workspace-")); cleanup.push(workspace);
-  await mkdir(join(root, "definitions")); await mkdir(join(root, "config"));
+  await mkdir(join(root, "definitions"));
+  await mkdir(join(root, "config"));
+  await mkdir(join(root, "assets"));
   const registry = Buffer.from('{\n  "aapl": { "tradingView": "NASDAQ:AAPL", "display": "Apple", "currency": "USD", "channel": "stocks" }\n}\n');
   const packs = Buffer.from('[\n  {\n    "id": "stocks",\n    "display": "Stocks",\n    "channel": "stocks",\n    "assets": ["aapl"]\n  }\n]\n');
   const channels = Buffer.from('{\n  "stocks": "1527846988270534827",\n  "forex": "1528609079822516305"\n}\n');
@@ -45,7 +47,9 @@ function input() {
   };
 }
 
-async function assetLogoPng(): Promise<Buffer> {
+async function assetLogoPng(
+  seed = 17,
+): Promise<Buffer> {
   const width = 128;
   const height = 128;
   const channels = 4;
@@ -53,15 +57,40 @@ async function assetLogoPng(): Promise<Buffer> {
 
   for (let pixel = 0; pixel < width * height; pixel += 1) {
     const offset = pixel * channels;
-    pixels[offset] = (pixel * 17) % 256;
-    pixels[offset + 1] = (pixel * 29) % 256;
-    pixels[offset + 2] = (pixel * 43) % 256;
+    pixels[offset] = (pixel * seed) % 256;
+    pixels[offset + 1] =
+      (pixel * (seed + 12)) % 256;
+    pixels[offset + 2] =
+      (pixel * (seed + 26)) % 256;
     pixels[offset + 3] = 255;
   }
 
   return sharp(pixels, {
     raw: { width, height, channels },
   }).png().toBuffer();
+}
+
+async function stageRequiredLogos(
+  service: AdminService,
+): Promise<{
+  readonly dxy: Buffer;
+  readonly exy: Buffer;
+}> {
+  const dxy = await assetLogoPng(17);
+  const exy = await assetLogoPng(23);
+
+  await service.stagePackBuilderAssetLogo(
+    "forex",
+    "dxy",
+    dxy,
+  );
+  await service.stagePackBuilderAssetLogo(
+    "forex",
+    "exy",
+    exy,
+  );
+
+  return Object.freeze({ dxy, exy });
 }
 
 async function request(server: RunningAdminHttpServer, path: string, body: unknown, origin = server.url) {
@@ -76,6 +105,8 @@ async function request(server: RunningAdminHttpServer, path: string, body: unkno
 describe("Administration Create Pack front door", () => {
   it("previews without mutation and creates one atomic business result", async () => {
     const f = await fixture();
+    const logos =
+      await stageRequiredLogos(f.service);
     const preview = await f.service.previewPackCreation(input());
     expect(preview).toMatchObject({ missingAssetCount: 2, existingAssetCount: 0, publicationEffects: { rendered: false, published: false, released: false, discordContacted: false } });
     expect(await readFile(join(f.root, "definitions/registry.json"))).toEqual(f.registry);
@@ -84,11 +115,36 @@ describe("Administration Create Pack front door", () => {
     expect(created).toMatchObject({ created: true, packId: "forex", status: { registryAssetCount: 3, packCount: 2, packMembershipCount: 3 } });
     expect(f.service.getAsset("dxy")).toMatchObject({ tradingViewSymbol: "TVC:DXY", currency: "USD", logicalChannel: "forex" });
     expect(f.service.getPack("forex").assets.map((asset) => asset.id)).toEqual(["dxy", "exy"]);
-    expect(await readFile(join(f.root, "config/channels.json"))).toEqual(f.channels);
+    expect(
+      await readFile(
+        join(f.root, "config/channels.json"),
+      ),
+    ).toEqual(f.channels);
+    expect(
+      await readFile(
+        join(
+          f.root,
+          "assets",
+          "asset-logos",
+          "dxy.png",
+        ),
+      ),
+    ).toEqual(logos.dxy);
+    expect(
+      await readFile(
+        join(
+          f.root,
+          "assets",
+          "asset-logos",
+          "exy.png",
+        ),
+      ),
+    ).toEqual(logos.exy);
   });
 
   it("preserves current input and preview in the confined workspace", async () => {
     const f = await fixture();
+    await stageRequiredLogos(f.service);
     const preview = await f.service.previewPackCreation(input());
     const state = await f.service.packCreationState("forex");
     expect(state).toMatchObject({ packId: "forex", input: input(), preview: { previewId: preview.previewId } });
@@ -98,6 +154,7 @@ describe("Administration Create Pack front door", () => {
 
   it("serves strict preview/create routes and rejects foreign-origin writes and browser authority fields", async () => {
     const f = await fixture();
+    await stageRequiredLogos(f.service);
     const server = await startAdminHttpServer({ service: f.service, host: "127.0.0.1", port: 0 }); servers.push(server);
     const preview = await request(server, "/api/v1/packs/create/preview", { input: input() });
     expect(preview.response.status).toBe(200);
@@ -115,6 +172,7 @@ describe("Administration Create Pack front door", () => {
 
   it("refreshes preview state and reports stale definitions without losing stored work", async () => {
     const f = await fixture();
+    await stageRequiredLogos(f.service);
     const preview = await f.service.previewPackCreation(input());
     await writeFile(join(f.root, "definitions/registry.json"), Buffer.concat([f.registry.subarray(0, f.registry.length - 2), Buffer.from(',\n  "msft": { "tradingView": "NASDAQ:MSFT", "display": "Microsoft", "currency": "USD", "channel": "stocks" }\n}\n')]));
     await expect(f.service.createPackFromPreview("forex", preview.previewId)).rejects.toMatchObject({ code: "stale_registry_state", status: 409 });
@@ -237,6 +295,148 @@ describe("Administration Create Pack front door", () => {
     ).rejects.toMatchObject({
       code: "asset_logo_not_found",
     });
+  });
+
+  it("requires a staged logo for every missing Asset before preview", async () => {
+    const f = await fixture();
+
+    await expect(
+      f.service.previewPackCreation(input()),
+    ).rejects.toMatchObject({
+      code: "asset_logo_not_found",
+      status: 404,
+      details: {
+        assetId: "dxy",
+      },
+    });
+
+    await f.service.stagePackBuilderAssetLogo(
+      "forex",
+      "dxy",
+      await assetLogoPng(17),
+    );
+
+    await expect(
+      f.service.previewPackCreation(input()),
+    ).rejects.toMatchObject({
+      code: "asset_logo_not_found",
+      status: 404,
+      details: {
+        assetId: "exy",
+      },
+    });
+
+    await f.service.stagePackBuilderAssetLogo(
+      "forex",
+      "exy",
+      await assetLogoPng(23),
+    );
+
+    const preview =
+      await f.service.previewPackCreation(input());
+
+    expect(
+      preview.assetLogos.map(
+        ({ assetId }) => assetId,
+      ),
+    ).toEqual(["dxy", "exy"]);
+  });
+
+  it("rejects create when a staged logo changes after preview", async () => {
+    const f = await fixture();
+    await stageRequiredLogos(f.service);
+
+    const preview =
+      await f.service.previewPackCreation(input());
+
+    await f.service.stagePackBuilderAssetLogo(
+      "forex",
+      "dxy",
+      await assetLogoPng(41),
+    );
+
+    await expect(
+      f.service.createPackFromPreview(
+        "forex",
+        preview.previewId,
+      ),
+    ).rejects.toMatchObject({
+      code: "pack_builder_preview_mismatch",
+      status: 409,
+    });
+
+    expect(
+      await readFile(
+        join(
+          f.root,
+          "definitions",
+          "registry.json",
+        ),
+      ),
+    ).toEqual(f.registry);
+    expect(
+      await readFile(
+        join(
+          f.root,
+          "definitions",
+          "packs.json",
+        ),
+      ),
+    ).toEqual(f.packs);
+  });
+
+  it("reports a conflict without overwriting an existing canonical Asset logo", async () => {
+    const f = await fixture();
+    await stageRequiredLogos(f.service);
+
+    const preview =
+      await f.service.previewPackCreation(input());
+
+    const canonicalDirectory = join(
+      f.root,
+      "assets",
+      "asset-logos",
+    );
+    await mkdir(canonicalDirectory);
+
+    const existing = await assetLogoPng(53);
+    const canonicalDxy = join(
+      canonicalDirectory,
+      "dxy.png",
+    );
+    await writeFile(canonicalDxy, existing);
+
+    await expect(
+      f.service.createPackFromPreview(
+        "forex",
+        preview.previewId,
+      ),
+    ).rejects.toMatchObject({
+      code: "output_already_exists",
+      status: 409,
+    });
+
+    expect(
+      await readFile(canonicalDxy),
+    ).toEqual(existing);
+    expect(
+      await readFile(
+        join(
+          f.root,
+          "definitions",
+          "registry.json",
+        ),
+      ),
+    ).toEqual(f.registry);
+    expect(
+      await readFile(
+        join(
+          f.root,
+          "definitions",
+          "packs.json",
+        ),
+      ),
+    ).toEqual(f.packs);
   });
 
 });
