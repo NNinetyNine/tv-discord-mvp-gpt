@@ -289,6 +289,12 @@ export function reportProvisionDiscordAssetThreadResult(
       );
       return 2;
 
+    case "too_many_tags":
+      stderr(
+        `✗ At most ${result.maximum} Discord forum tags may be applied.`,
+      );
+      return 2;
+
     case "unknown_pack":
       stderr(
         `✗ Unknown Pack: ${result.packId}`,

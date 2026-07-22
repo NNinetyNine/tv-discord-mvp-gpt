@@ -131,6 +131,15 @@ h1, h2 { margin: 0; font-size: .78rem; letter-spacing: .15em; font-weight: 850; 
 .thread-overview-grid { display: grid; grid-template-columns: 1.3fr .7fr .9fr .9fr; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
 .thread-adoption-fields { display: grid; grid-template-columns: 1.25fr 1.25fr auto; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
 .thread-adoption-fields .primary-action { min-width: 11.5rem; }
+.thread-provisioning-fields { display: grid; grid-template-columns: auto 1.3fr 1.25fr auto; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
+.thread-provisioning-fields button { min-width: 11.5rem; }
+.thread-tags { margin: 0 1.1rem .8rem; padding: .7rem .8rem; border: 1px solid var(--border); border-radius: .55rem; }
+.thread-tags legend { padding: 0 .35rem; color: var(--text-faint); font-size: .57rem; font-weight: 800; letter-spacing: .12em; }
+.thread-tags p { margin: 0; color: var(--text-faint); font-size: .62rem; }
+.thread-tag-options { display: flex; flex-wrap: wrap; gap: .5rem; }
+.thread-tag-option { display: inline-flex; width: auto; flex-direction: row; align-items: center; gap: .4rem; padding: .32rem .55rem; border: 1px solid var(--border); border-radius: 999px; }
+.thread-tag-option input { width: auto; min-height: auto; }
+.thread-tag-option span { font-size: .61rem; }
 .workspace-progress-track { height: .3rem; margin: 0 1.1rem .8rem; overflow: hidden; border-radius: 999px; background: rgba(231, 216, 168, .08); }
 .workspace-progress-track span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, #aa8530, var(--gold-strong)); transition: width .2s ease; }
 .workspace-remaining { margin: 0; padding: 0 1.1rem 1rem; color: var(--text-faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .6rem; letter-spacing: .06em; }
@@ -160,6 +169,7 @@ footer { padding: 1rem 2.2rem; color: var(--text-faint); font-size: .55rem; lett
   .workspace-overview-grid { grid-template-columns: 1fr 1fr; }
   .thread-overview-grid { grid-template-columns: 1fr 1fr; }
   .thread-adoption-fields { grid-template-columns: 1fr 1fr; }
+  .thread-provisioning-fields { grid-template-columns: 1fr 1fr; }
   .workspace-import-fields { grid-template-columns: 1fr 1fr; }
   .member-editor { grid-template-columns: 1fr 1fr; }
   .member-editor .wide { grid-column: span 1; }

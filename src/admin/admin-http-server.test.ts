@@ -459,8 +459,9 @@ describe("Admin HTTP server", () => {
     expect(html).toContain("PACK BUILDER");
     expect(html).toContain("PACK WORKSPACE");
     expect(html).toContain("DISCORD THREAD ROUTING");
-    expect(html).toContain("ADOPTION ONLY");
-    expect(html).toContain("PROVISIONING UNAVAILABLE");
+    expect(html).toContain("INSPECT &amp; ADOPT");
+    expect(html).toContain("INSPECT &amp; PROVISION");
+    expect(html).toContain("EXPLICIT CONFIRMATION REQUIRED");
     expect(html).toContain("PUBLISH UNAVAILABLE");
     expect(html).toContain("/visionx-emblem.png");
     expect(html).toContain("/visionx-wordmark.png");

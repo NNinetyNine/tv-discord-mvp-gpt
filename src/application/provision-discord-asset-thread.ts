@@ -88,6 +88,11 @@ export type ProvisionDiscordAssetThreadResult =
     }
   | {
       readonly ok: false;
+      readonly outcome: "too_many_tags";
+      readonly maximum: number;
+    }
+  | {
+      readonly ok: false;
       readonly outcome: "unknown_pack";
       readonly packId: string;
     }
@@ -182,6 +187,10 @@ function validateTitle(
     return "Discord thread title must not contain control characters.";
   }
 
+  if (title.length > 100) {
+    return "Discord thread title must not exceed 100 characters.";
+  }
+
   return null;
 }
 
@@ -197,7 +206,19 @@ function validateTags(
         | "invalid_tag_id"
         | "duplicate_tag_id";
       readonly tagId: string;
+    }
+  | {
+      readonly ok: false;
+      readonly outcome: "too_many_tags";
+      readonly maximum: number;
     } {
+  if (tagIds.length > 5) {
+    return {
+      ok: false,
+      outcome: "too_many_tags",
+      maximum: 5,
+    };
+  }
   const seen = new Set<string>();
 
   for (const tagId of tagIds) {

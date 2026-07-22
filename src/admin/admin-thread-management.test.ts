@@ -3,13 +3,24 @@ import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 
+import type {
+  DiscordAssetThreadCreateInput,
+} from "../application/provision-discord-asset-thread.ts";
 import type { DiscordAssetThreadFacts } from "../application/adopt-discord-asset-thread.ts";
-import type { DiscordForumSession } from "../publish/discord-forum-session.ts";
+import type {
+  DiscordForumAdministrationSession,
+  DiscordForumSession,
+} from "../publish/discord-forum-session.ts";
 import { parseAssetThreadBindings } from "../wiring/asset-threads.ts";
 import { startAdminHttpServer, type RunningAdminHttpServer } from "./admin-http-server.ts";
-import { AdminService, type AdminDiscordForumSessionFactory } from "./admin-service.ts";
+import {
+  AdminService,
+  type AdminDiscordForumProvisioningSessionFactory,
+  type AdminDiscordForumSessionFactory,
+} from "./admin-service.ts";
 
 const CRYPTO_FORUM_ID = "1529334738454839349";
 const ADOPTED_THREAD_ID = "1529999999999999999";
@@ -34,6 +45,7 @@ async function temporaryRepository(): Promise<string> {
 async function createService(
   repositoryRoot: string,
   openDiscordForumSession?: AdminDiscordForumSessionFactory,
+  openDiscordForumProvisioningSession?: AdminDiscordForumProvisioningSessionFactory,
 ): Promise<AdminService> {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "visionx-admin-threads-workspace-"));
   cleanup.push(workspaceRoot);
@@ -41,11 +53,23 @@ async function createService(
     repositoryRoot,
     workspaceRoot,
     ...(openDiscordForumSession === undefined ? {} : { openDiscordForumSession }),
+    ...(openDiscordForumProvisioningSession === undefined ? {} : { openDiscordForumProvisioningSession }),
   });
 }
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function squarePng(): Promise<Buffer> {
+  return sharp({
+    create: {
+      width: 96,
+      height: 96,
+      channels: 4,
+      background: { r: 24, g: 48, b: 72, alpha: 1 },
+    },
+  }).png().toBuffer();
 }
 
 function sessionFactory(options: {
@@ -83,6 +107,62 @@ function sessionFactory(options: {
     });
   };
   return { factory, opened, inspected, closed };
+}
+
+function provisioningSessionFactory(options: {
+  readonly createdThreadId?: string;
+  readonly deleteFails?: boolean;
+  readonly closeFails?: boolean;
+} = {}): {
+  readonly factory: AdminDiscordForumProvisioningSessionFactory;
+  readonly opened: string[];
+  readonly inspectedForums: string[];
+  readonly createCalls: DiscordAssetThreadCreateInput[];
+  readonly deleted: string[];
+  readonly closed: string[];
+} {
+  const opened: string[] = [];
+  const inspectedForums: string[] = [];
+  const createCalls: DiscordAssetThreadCreateInput[] = [];
+  const deleted: string[] = [];
+  const closed: string[] = [];
+  const factory = async (): Promise<DiscordForumAdministrationSession> => {
+    opened.push("session");
+    return Object.freeze({
+      inspectForum: async (forumChannelId: string) => {
+        inspectedForums.push(forumChannelId);
+        return Object.freeze({
+          forumChannelId,
+          name: "Crypto Analyses",
+          availableTags: Object.freeze([
+            Object.freeze({ id: "1527777777777777777", name: "Analysis", moderated: false }),
+            Object.freeze({ id: "1527777777777777778", name: "Members", moderated: true }),
+          ]),
+        });
+      },
+      inspectThread: async () => null,
+      createThread: async (input: DiscordAssetThreadCreateInput) => {
+        createCalls.push(input);
+        return Object.freeze({
+          threadId: options.createdThreadId ?? ADOPTED_THREAD_ID,
+          parentId: input.forumChannelId,
+          name: input.title,
+          archived: false,
+          locked: false,
+          appliedTagIds: Object.freeze([...input.appliedTagIds]),
+        });
+      },
+      deleteThread: async (threadId: string) => {
+        deleted.push(threadId);
+        if (options.deleteFails === true) throw new Error("mock delete failure");
+      },
+      close: async () => {
+        closed.push("session");
+        if (options.closeFails === true) throw new Error("mock close failure");
+      },
+    });
+  };
+  return { factory, opened, inspectedForums, createCalls, deleted, closed };
 }
 
 describe("Administration Discord thread routing", () => {
@@ -252,6 +332,182 @@ describe("Administration Discord thread routing", () => {
     expect((await service.threadManagementState()).boundCount).toBe(2);
   });
 
+  it("inspects current forum tags, stages exact logo evidence, and provisions one persistent post", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const mock = provisioningSessionFactory();
+    const service = await createService(repositoryRoot, undefined, mock.factory);
+    const protectedPaths = [
+      "definitions/registry.json",
+      "definitions/packs.json",
+      "config/channels.json",
+    ].map((path) => join(repositoryRoot, path));
+    const before = await Promise.all(protectedPaths.map(async (path) => sha256(await readFile(path))));
+
+    await expect(service.threadManagementState()).resolves.toMatchObject({
+      mode: "adoption_and_provisioning",
+      adoptionAvailable: false,
+      provisioningAvailable: true,
+      publicationAvailable: false,
+    });
+    const forum = await service.inspectPackForum({
+      packId: "crypto",
+      confirmation: "inspect_forum_tags",
+    });
+    expect(forum).toMatchObject({
+      packId: "crypto",
+      forum: {
+        name: "Crypto Analyses",
+        availableTags: [
+          { id: "1527777777777777777", name: "Analysis", moderated: false },
+          { id: "1527777777777777778", name: "Members", moderated: true },
+        ],
+      },
+      sessionClosed: true,
+      effects: { discordContentChanged: false, bindingChanged: false, published: false, released: false },
+    });
+
+    const logoBytes = await squarePng();
+    const staged = await service.stageThreadProvisioningLogo({ packId: "crypto", assetId: "akt", bytes: logoBytes });
+    expect(staged).toMatchObject({
+      packId: "crypto",
+      assetId: "akt",
+      evidence: { width: 96, height: 96 },
+      effects: { discordContacted: false, repositoryChanged: false },
+    });
+    expect(mock.opened).toEqual(["session"]);
+
+    const result = await service.provisionNewThread({
+      packId: "crypto",
+      assetId: "akt",
+      title: "Akash Network // $AKT",
+      appliedTagIds: ["1527777777777777777"],
+      logoSha256: (staged.evidence as { sha256: string }).sha256,
+      confirmation: "provision_new_thread",
+    });
+    expect(result).toMatchObject({
+      outcome: "provisioned",
+      packId: "crypto",
+      assetId: "akt",
+      thread: { threadId: ADOPTED_THREAD_ID, name: "Akash Network // $AKT", appliedTagCount: 1 },
+      sessionClosed: true,
+      effects: {
+        discordInspected: true,
+        discordContentChanged: true,
+        bindingChanged: true,
+        published: false,
+        released: false,
+      },
+    });
+    expect(mock.opened).toEqual(["session", "session"]);
+    expect(mock.inspectedForums).toEqual([CRYPTO_FORUM_ID]);
+    expect(mock.createCalls).toHaveLength(1);
+    expect(mock.createCalls[0]).toMatchObject({
+      forumChannelId: CRYPTO_FORUM_ID,
+      title: "Akash Network // $AKT",
+      appliedTagIds: ["1527777777777777777"],
+      starterLogoFilename: "akt.png",
+    });
+    expect(mock.createCalls[0]?.starterLogoBytes).toEqual(logoBytes);
+    expect(mock.deleted).toEqual([]);
+    expect(mock.closed).toEqual(["session", "session"]);
+    expect(parseAssetThreadBindings(JSON.parse(
+      await readFile(join(repositoryRoot, "config/asset-threads.json"), "utf8"),
+    )).packs.crypto).toMatchObject({ akt: ADOPTED_THREAD_ID });
+    const after = await Promise.all(protectedPaths.map(async (path) => sha256(await readFile(path))));
+    expect(after).toEqual(before);
+  });
+
+  it("fails closed before Discord contact on stale logo evidence or invalid confirmation", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const mock = provisioningSessionFactory();
+    const service = await createService(repositoryRoot, undefined, mock.factory);
+    const staged = await service.stageThreadProvisioningLogo({ packId: "crypto", assetId: "akt", bytes: await squarePng() });
+    const input = {
+      packId: "crypto",
+      assetId: "akt",
+      title: "Akash Network // $AKT",
+      appliedTagIds: [] as string[],
+      logoSha256: (staged.evidence as { sha256: string }).sha256,
+      confirmation: "provision_new_thread",
+    };
+
+    await expect(service.provisionNewThread({ ...input, confirmation: "yes" })).rejects.toMatchObject({
+      code: "thread_provisioning_confirmation_invalid",
+    });
+    await expect(service.provisionNewThread({ ...input, logoSha256: "a".repeat(64) })).rejects.toMatchObject({
+      code: "thread_provisioning_logo_mismatch",
+      status: 409,
+    });
+    await expect(service.provisionNewThread({ ...input, title: "x".repeat(101) })).rejects.toMatchObject({
+      code: "thread_provisioning_failed",
+      status: 400,
+    });
+    expect(mock.opened).toEqual([]);
+    expect(mock.createCalls).toEqual([]);
+  });
+
+  it("preserves a successful provisioned binding while warning on session-close failure", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const mock = provisioningSessionFactory({ closeFails: true });
+    const service = await createService(repositoryRoot, undefined, mock.factory);
+    const staged = await service.stageThreadProvisioningLogo({ packId: "crypto", assetId: "akt", bytes: await squarePng() });
+
+    await expect(service.provisionNewThread({
+      packId: "crypto",
+      assetId: "akt",
+      title: "Akash Network // $AKT",
+      appliedTagIds: [],
+      logoSha256: (staged.evidence as { sha256: string }).sha256,
+      confirmation: "provision_new_thread",
+    })).resolves.toMatchObject({
+      outcome: "provisioned",
+      sessionClosed: false,
+      warnings: ["discord_session_close_failed"],
+      effects: { discordContentChanged: true, bindingChanged: true },
+    });
+    expect((await service.threadManagementState()).boundCount).toBe(2);
+  });
+
+  it("deletes only the provisional thread when durable binding fails and reports retained cleanup truthfully", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const deleted = provisioningSessionFactory({ createdThreadId: "1529335112293027860" });
+    const service = await createService(repositoryRoot, undefined, deleted.factory);
+    const staged = await service.stageThreadProvisioningLogo({ packId: "crypto", assetId: "akt", bytes: await squarePng() });
+    const input = {
+      packId: "crypto",
+      assetId: "akt",
+      title: "Akash Network // $AKT",
+      appliedTagIds: [] as string[],
+      logoSha256: (staged.evidence as { sha256: string }).sha256,
+      confirmation: "provision_new_thread",
+    };
+    await expect(service.provisionNewThread(input)).rejects.toMatchObject({
+      code: "thread_provisioning_failed",
+      status: 502,
+      details: { outcome: "binding_failed_thread_deleted", sessionClosed: true },
+    });
+    expect(deleted.deleted).toEqual(["1529335112293027860"]);
+    expect((await service.threadManagementState()).boundCount).toBe(1);
+
+    const retained = provisioningSessionFactory({ createdThreadId: "1529335112293027860", deleteFails: true });
+    const retryService = await createService(repositoryRoot, undefined, retained.factory);
+    const retryStaged = await retryService.stageThreadProvisioningLogo({ packId: "crypto", assetId: "akt", bytes: await squarePng() });
+    await expect(retryService.provisionNewThread({
+      ...input,
+      logoSha256: (retryStaged.evidence as { sha256: string }).sha256,
+    })).rejects.toMatchObject({
+      code: "thread_provisioning_failed",
+      status: 502,
+      details: {
+        outcome: "binding_failed_thread_retained",
+        retainedThreadId: "1529335112293027860",
+        sessionClosed: true,
+      },
+    });
+    expect(retained.deleted).toEqual(["1529335112293027860"]);
+    expect((await retryService.threadManagementState()).boundCount).toBe(1);
+  });
+
   it("fails closed on incoherent thread-binding custody", async () => {
     const repositoryRoot = await temporaryRepository();
     await writeFile(join(repositoryRoot, "config/asset-threads.json"), `${JSON.stringify({
@@ -307,7 +563,77 @@ describe("Administration Discord thread routing", () => {
     expect(extraField.status).toBe(400);
     expect((await extraField.json() as any).error.code).toBe("invalid_request");
     expect((await fetch(`${server.url}/api/v1/thread-management`, { method: "POST" })).status).toBe(405);
-    expect((await fetch(`${server.url}/api/v1/thread-management/provision`)).status).toBe(404);
+    expect((await fetch(`${server.url}/api/v1/thread-management/provision`)).status).toBe(405);
     expect((await fetch(`${server.url}/api/v1/thread-management/publish`)).status).toBe(404);
+  });
+
+  it("serves explicit forum inspection, PNG staging, and confirmed provisioning routes", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const mock = provisioningSessionFactory();
+    const service = await createService(repositoryRoot, undefined, mock.factory);
+    const server = await startAdminHttpServer({ service, host: "127.0.0.1", port: 0 });
+    servers.push(server);
+
+    const inspectionResponse = await fetch(`${server.url}/api/v1/thread-management/packs/crypto/forum/inspect`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation: "inspect_forum_tags" }),
+    });
+    expect(inspectionResponse.status).toBe(200);
+    expect((await inspectionResponse.json() as any).data).toMatchObject({
+      forum: {
+        name: "Crypto Analyses",
+        availableTags: [
+          { id: "1527777777777777777" },
+          { id: "1527777777777777778" },
+        ],
+      },
+      effects: { discordContentChanged: false, bindingChanged: false },
+    });
+
+    const logo = await squarePng();
+    const logoResponse = await fetch(`${server.url}/api/v1/thread-management/packs/crypto/assets/akt/provisioning-logo`, {
+      method: "PUT",
+      headers: { "Content-Type": "image/png" },
+      body: logo,
+    });
+    expect(logoResponse.status).toBe(201);
+    const logoPayload = await logoResponse.json() as any;
+    expect(logoPayload.data.effects).toEqual({ discordContacted: false, repositoryChanged: false });
+
+    const provisionResponse = await fetch(`${server.url}/api/v1/thread-management/provision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        packId: "crypto",
+        assetId: "akt",
+        title: "Akash Network // $AKT",
+        appliedTagIds: ["1527777777777777777"],
+        logoSha256: logoPayload.data.evidence.sha256,
+        confirmation: "provision_new_thread",
+      }),
+    });
+    expect(provisionResponse.status).toBe(201);
+    expect((await provisionResponse.json() as any).data).toMatchObject({
+      outcome: "provisioned",
+      effects: { discordContentChanged: true, bindingChanged: true, published: false, released: false },
+    });
+
+    const malformed = await fetch(`${server.url}/api/v1/thread-management/provision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        packId: "crypto",
+        assetId: "zec",
+        title: "Zcash // $ZEC",
+        appliedTagIds: [],
+        logoSha256: "a".repeat(64),
+        confirmation: "provision_new_thread",
+        publish: true,
+      }),
+    });
+    expect(malformed.status).toBe(400);
+    expect((await malformed.json() as any).error.code).toBe("invalid_request");
+    expect(mock.createCalls).toHaveLength(1);
   });
 });

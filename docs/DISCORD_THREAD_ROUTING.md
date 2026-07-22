@@ -1,13 +1,12 @@
 # Discord thread routing administration
 
 The local administration UI includes a **Threads** room for inspecting routing
-coverage and adopting existing Discord forum posts as persistent Pack/Asset
-destinations.
+coverage, adopting existing Discord forum posts, and explicitly provisioning
+new posts as persistent Pack/Asset destinations.
 
-This room is deliberately adoption-only. It does not create forum posts,
-change Discord content, publish a chart, or create a Release. New-thread
-provisioning remains unavailable until governed per-Asset logo custody and
-forum-tag selection are part of the operator workflow.
+Chart publication remains unavailable in this room. Adoption is read-only on
+Discord. Provisioning is a separate confirmed action with governed starter-logo
+custody, live forum-tag inspection, durable binding, and compensation.
 
 ## Coverage dashboard
 
@@ -47,12 +46,37 @@ The existing post's title, tags, starter message, history, archive state, and
 lock state are preserved. An exact repeated binding is idempotent. A different
 thread cannot silently replace an existing binding.
 
+## New-post provisioning
+
+Provisioning is enabled only when the administration process starts with an
+explicit `DISCORD_BOT_TOKEN`. Merely starting the server, viewing coverage, or
+uploading a logo does not open a Discord session.
+
+The operator workflow is:
+
+1. select an unbound Pack Asset;
+2. explicitly inspect the Pack's current forum name and available tags;
+3. enter the exact post title and select at most five inspected tags;
+4. upload a square, single-frame PNG starter logo;
+5. review the logo SHA-256 and confirm the complete request;
+6. create one forum post and atomically write its persistent binding;
+7. close the short-lived Discord session.
+
+The logo is stored only in the administration workspace, not canonical
+repository custody. The confirmed request repeats its SHA-256, so replacement
+between review and execution fails before Discord contact.
+
+All Registry, Pack, channel, and binding checks run again under the thread
+mutation lock. If Discord creates the post but durable binding fails, VisionX
+uses the same provisioning session to delete only that provisional post. If
+deletion fails, the API reports the retained thread ID and blocks silent retry.
+
 ## Deliberate exclusions
 
 The Threads room has no controls or API route for:
 
-- creating or deleting Discord posts;
-- editing titles, tags, messages, archive state, or lock state;
+- deleting an existing or previously bound Discord post;
+- editing an existing post's title, tags, messages, archive state, or lock state;
 - changing or removing an existing binding;
 - staging or publishing charts;
 - creating or changing Releases.

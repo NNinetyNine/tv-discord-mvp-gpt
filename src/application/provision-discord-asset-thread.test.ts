@@ -183,6 +183,14 @@ describe("Discord Asset-thread provisioning", () => {
 
     expect(state.created).toEqual([]);
     expect(state.bound).toEqual([]);
+
+    await expect(
+      provisionDiscordAssetThread(
+        state.deps,
+        { ...INPUT, title: "x".repeat(101) },
+      ),
+    ).resolves.toMatchObject({ ok: false, outcome: "invalid_title" });
+    expect(state.created).toEqual([]);
   });
 
   it("rejects malformed and duplicate tag IDs before any side effect", async () => {
@@ -224,6 +232,18 @@ describe("Discord Asset-thread provisioning", () => {
     });
 
     expect(duplicate.created).toEqual([]);
+
+    const excessive = fixture();
+    await expect(
+      provisionDiscordAssetThread(
+        excessive.deps,
+        {
+          ...INPUT,
+          appliedTagIds: Array.from({ length: 6 }, (_, index) => `${index + 1}`.padStart(18, "0")),
+        },
+      ),
+    ).resolves.toEqual({ ok: false, outcome: "too_many_tags", maximum: 5 });
+    expect(excessive.created).toEqual([]);
   });
 
   it("rejects an unknown Pack before Discord creation", async () => {

@@ -384,6 +384,56 @@ async function routeApi(
     if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     return ok(response, await service.threadManagementState());
   }
+  const forumInspection = /^\/api\/v1\/thread-management\/packs\/([^/]+)\/forum\/inspect$/u.exec(pathname);
+  if (forumInspection !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Forum inspection request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Forum inspection body must be an object.");
+    exactFields(body, ["confirmation"], "Forum inspection body");
+    if (typeof body.confirmation !== "string") throw new AdminError("invalid_request", "Forum inspection confirmation must be a string.");
+    return ok(response, await service.inspectPackForum({
+      packId: forumInspection[1] ?? "",
+      confirmation: body.confirmation,
+    }));
+  }
+  const provisioningLogo = /^\/api\/v1\/thread-management\/packs\/([^/]+)\/assets\/([^/]+)\/provisioning-logo$/u.exec(pathname);
+  if (provisioningLogo !== null) {
+    if (method !== "PUT") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Provisioning logo request");
+    const bytes = await readAssetLogoBody(request);
+    return ok(response, await service.stageThreadProvisioningLogo({
+      packId: provisioningLogo[1] ?? "",
+      assetId: provisioningLogo[2] ?? "",
+      bytes,
+    }), 201);
+  }
+  if (pathname === "/api/v1/thread-management/provision") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Thread provisioning request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Thread provisioning body must be an object.");
+    exactFields(body, ["packId", "assetId", "title", "appliedTagIds", "logoSha256", "confirmation"], "Thread provisioning body");
+    if (
+      typeof body.packId !== "string" ||
+      typeof body.assetId !== "string" ||
+      typeof body.title !== "string" ||
+      !Array.isArray(body.appliedTagIds) ||
+      !body.appliedTagIds.every((tagId) => typeof tagId === "string") ||
+      typeof body.logoSha256 !== "string" ||
+      typeof body.confirmation !== "string"
+    ) {
+      throw new AdminError("invalid_request", "Thread provisioning fields have invalid types.");
+    }
+    return ok(response, await service.provisionNewThread({
+      packId: body.packId,
+      assetId: body.assetId,
+      title: body.title,
+      appliedTagIds: body.appliedTagIds as string[],
+      logoSha256: body.logoSha256,
+      confirmation: body.confirmation,
+    }), 201);
+  }
   if (pathname === "/api/v1/thread-management/adopt") {
     if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     const body = await readJsonBody(request);

@@ -54,7 +54,10 @@ export async function main(
     const service = await AdminService.create({
       repositoryRoot: options.repositoryRoot,
       workspaceRoot: options.workspaceRoot,
-      ...(discordConfigured ? { openDiscordForumSession } : {}),
+      ...(discordConfigured ? {
+        openDiscordForumSession,
+        openDiscordForumProvisioningSession: openDiscordForumSession,
+      } : {}),
     });
     const server = await startAdminHttpServer({ service, host: options.host, port: options.port });
     stdout(JSON.stringify({

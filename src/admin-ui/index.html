@@ -103,9 +103,9 @@
       <section class="window thread-overview" aria-labelledby="thread-routing-heading">
         <header class="window-header">
           <div><p class="micro-label">PERSISTENT FORUM ROUTING</p><h1 id="thread-routing-heading">DISCORD THREAD ROUTING</h1></div>
-          <span class="context-fact">ADOPTION ONLY</span>
+          <span id="thread-mode" class="context-fact">LOADING CAPABILITIES</span>
         </header>
-        <p class="window-help">Inspect an existing Discord forum post and bind it to one Pack Asset. VisionX verifies Pack membership and the configured parent forum before changing the local binding file.</p>
+        <p class="window-help">Adopt a verified existing post or explicitly provision one new post. VisionX verifies Pack membership, forum identity, tags, logo evidence, and persistent binding custody before completion.</p>
         <div class="thread-overview-grid">
           <label><span>PACK</span><select id="thread-pack"><option value="">LOADING PACKS</option></select></label>
           <div class="derived-channel"><span>PACK COVERAGE</span><strong id="thread-coverage">0 / 0</strong></div>
@@ -118,7 +118,7 @@
       <section class="window thread-adoption" aria-labelledby="thread-adoption-heading">
         <header class="window-header">
           <div><p class="micro-label">EXISTING FORUM POST</p><h2 id="thread-adoption-heading">INSPECT &amp; ADOPT</h2></div>
-          <span class="context-fact">PROVISIONING UNAVAILABLE</span>
+          <span class="context-fact">NO DISCORD CONTENT CHANGE</span>
         </header>
         <div class="thread-adoption-fields">
           <label><span>UNBOUND PACK ASSET</span><select id="thread-asset"><option value="">SELECT ASSET</option></select></label>
@@ -128,6 +128,28 @@
         <div class="renderer-guidance">
           <span id="thread-adoption-state">SELECT AN UNBOUND ASSET AND EXISTING THREAD</span>
           <span>READ-ONLY DISCORD INSPECTION · NO CONTENT EDIT · NO PUBLICATION</span>
+        </div>
+      </section>
+
+      <section class="window thread-provisioning" aria-labelledby="thread-provisioning-heading">
+        <header class="window-header">
+          <div><p class="micro-label">NEW FORUM POST</p><h2 id="thread-provisioning-heading">INSPECT &amp; PROVISION</h2></div>
+          <span class="context-fact">EXPLICIT CONFIRMATION REQUIRED</span>
+        </header>
+        <p class="window-help">Inspect the selected Pack forum for current tags, enter the exact post title, and stage a validated square PNG starter logo. Provisioning creates one Discord post and then records its persistent binding.</p>
+        <div class="thread-provisioning-fields">
+          <button id="thread-inspect-forum" class="outline-action" type="button" disabled>INSPECT FORUM TAGS</button>
+          <label><span>EXACT POST TITLE</span><input id="thread-title" autocomplete="off" maxlength="100" placeholder="Akash Network // $AKT"></label>
+          <label class="renderer-file"><span>STARTER LOGO · SQUARE PNG</span><input id="thread-logo" type="file" accept="image/png"></label>
+          <button id="thread-provision-button" class="primary-action" type="button" disabled>PROVISION POST</button>
+        </div>
+        <fieldset id="thread-tags" class="thread-tags" disabled>
+          <legend>AVAILABLE FORUM TAGS · SELECT UP TO 5</legend>
+          <p id="thread-tags-empty">INSPECT THE FORUM TO LOAD CURRENT TAGS</p>
+        </fieldset>
+        <div class="renderer-guidance">
+          <span id="thread-provisioning-state">PROVISIONING UNAVAILABLE UNTIL FORUM INSPECTION</span>
+          <span id="thread-logo-state">NO STARTER LOGO STAGED</span>
         </div>
       </section>
 

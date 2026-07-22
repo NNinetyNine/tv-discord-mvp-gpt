@@ -17,6 +17,8 @@ const state = {
   packBusy: false,
   threadManagement: null,
   threadBusy: false,
+  threadForumInspection: null,
+  threadLogo: null,
 };
 
 const qs = (selector) => document.querySelector(selector);
@@ -644,6 +646,40 @@ function selectedThreadAsset() {
   return selectedThreadPack()?.assets.find((asset) => asset.id === qs("#thread-asset").value) ?? null;
 }
 
+function selectedThreadTagIds() {
+  return qsa('#thread-tags input[type="checkbox"]:checked').map((input) => input.value);
+}
+
+function resetThreadProvisioning({ keepForum = false } = {}) {
+  if (!keepForum) state.threadForumInspection = null;
+  state.threadLogo = null;
+  qs("#thread-logo").value = "";
+  qs("#thread-logo-state").textContent = "NO STARTER LOGO STAGED";
+  qs("#thread-title").value = "";
+  renderThreadTags();
+}
+
+function renderThreadTags() {
+  const fieldset = qs("#thread-tags");
+  const inspection = state.threadForumInspection;
+  if (inspection === null) {
+    fieldset.innerHTML = '<legend>AVAILABLE FORUM TAGS · SELECT UP TO 5</legend><p id="thread-tags-empty">INSPECT THE FORUM TO LOAD CURRENT TAGS</p>';
+    return;
+  }
+  const tags = inspection.forum.availableTags;
+  fieldset.innerHTML = '<legend>AVAILABLE FORUM TAGS · SELECT UP TO 5</legend>' + (tags.length === 0
+    ? '<p id="thread-tags-empty">THIS FORUM HAS NO AVAILABLE TAGS</p>'
+    : `<div class="thread-tag-options">${tags.map((tag) => `<label class="thread-tag-option"><input type="checkbox" value="${escapeAttribute(tag.id)}"><span>${escapeHtml(tag.name)}${tag.moderated ? " · MODERATED" : ""}</span></label>`).join("")}</div>`);
+  qsa('#thread-tags input[type="checkbox"]').forEach((input) => input.addEventListener("change", () => {
+    const selected = selectedThreadTagIds();
+    if (selected.length > 5) {
+      input.checked = false;
+      showMessage("Discord permits at most five applied forum tags.");
+    }
+    updateThreadAdoptButton();
+  }));
+}
+
 function updateThreadAdoptButton() {
   const threadId = qs("#thread-id").value.trim();
   const asset = selectedThreadAsset();
@@ -659,12 +695,34 @@ function updateThreadAdoptButton() {
     asset?.bindingState === "unbound" &&
     /^[0-9]{17,20}$/.test(threadId)
   );
+
+  const provisioningAvailable = state.threadManagement?.provisioningAvailable === true;
+  const inspectionReady = state.threadForumInspection?.packId === pack?.id && state.threadForumInspection?.sessionClosed === true;
+  const logoReady = state.threadLogo?.packId === pack?.id && state.threadLogo?.assetId === asset?.id;
+  const title = qs("#thread-title").value;
+  const tagIds = selectedThreadTagIds();
+  qs("#thread-inspect-forum").disabled = state.threadBusy || !provisioningAvailable || !pack?.forumConfigured;
+  qs("#thread-title").disabled = state.threadBusy || !provisioningAvailable || !inspectionReady || asset?.bindingState !== "unbound";
+  qs("#thread-logo").disabled = state.threadBusy || !provisioningAvailable || !inspectionReady || asset?.bindingState !== "unbound";
+  qs("#thread-tags").disabled = state.threadBusy || !provisioningAvailable || !inspectionReady;
+  qs("#thread-provision-button").disabled = !(
+    !state.threadBusy &&
+    provisioningAvailable &&
+    inspectionReady &&
+    logoReady &&
+    asset?.bindingState === "unbound" &&
+    title.length > 0 &&
+    title === title.trim() &&
+    title.length <= 100 &&
+    tagIds.length <= 5
+  );
 }
 
 function renderThreadManagement() {
   const dashboard = state.threadManagement;
   const pack = selectedThreadPack();
   if (dashboard === null || pack === null) {
+    qs("#thread-mode").textContent = "ROUTING UNAVAILABLE";
     qs("#thread-coverage").textContent = "0 / 0";
     qs("#thread-forum").textContent = "NO PACK";
     qs("#thread-gateway").textContent = "UNAVAILABLE";
@@ -672,13 +730,15 @@ function renderThreadManagement() {
     qs("#thread-asset").innerHTML = '<option value="">SELECT ASSET</option>';
     qs("#thread-members-body").innerHTML = "";
     qs("#thread-member-count").textContent = "0 ASSETS";
+    qs("#thread-provisioning-state").textContent = "SELECT A PACK";
     updateThreadAdoptButton();
     return;
   }
 
+  qs("#thread-mode").textContent = dashboard.provisioningAvailable ? "ADOPT & PROVISION" : "ADOPTION ONLY";
   qs("#thread-coverage").textContent = `${pack.boundCount} / ${pack.totalCount}`;
   qs("#thread-forum").textContent = pack.forumConfigured ? "CONFIGURED" : "NOT CONFIGURED";
-  qs("#thread-gateway").textContent = dashboard.adoptionAvailable ? "AVAILABLE" : "TOKEN REQUIRED";
+  qs("#thread-gateway").textContent = dashboard.adoptionAvailable || dashboard.provisioningAvailable ? "AVAILABLE" : "TOKEN REQUIRED";
   qs("#thread-total-context").textContent = `${dashboard.boundCount} OF ${dashboard.totalCount} ASSETS BOUND · ${dashboard.missingCount} MISSING ACROSS ALL PACKS`;
   qs("#thread-member-count").textContent = `${pack.totalCount} ASSET${pack.totalCount === 1 ? "" : "S"}`;
 
@@ -705,6 +765,17 @@ function renderThreadManagement() {
     qs("#thread-adoption-state").textContent = "PACK ROUTING COMPLETE";
   } else if (!state.threadBusy) {
     qs("#thread-adoption-state").textContent = "SELECT AN EXISTING THREAD ID";
+  }
+  if (!dashboard.provisioningAvailable) {
+    qs("#thread-provisioning-state").textContent = "START ADMIN WITH DISCORD_BOT_TOKEN TO ENABLE PROVISIONING";
+  } else if (!pack.forumConfigured) {
+    qs("#thread-provisioning-state").textContent = "PACK FORUM IS NOT CONFIGURED";
+  } else if (unbound.length === 0) {
+    qs("#thread-provisioning-state").textContent = "PACK ROUTING COMPLETE";
+  } else if (state.threadForumInspection?.packId === pack.id) {
+    qs("#thread-provisioning-state").textContent = `${state.threadForumInspection.forum.name.toUpperCase()} · ${state.threadForumInspection.forum.availableTags.length} TAGS INSPECTED`;
+  } else if (!state.threadBusy) {
+    qs("#thread-provisioning-state").textContent = "INSPECT THE CURRENT FORUM TAGS";
   }
   updateThreadAdoptButton();
 }
@@ -756,6 +827,7 @@ async function adoptExistingThread() {
       }),
     });
     qs("#thread-id").value = "";
+    resetThreadProvisioning();
     await loadThreadManagement();
     qs("#thread-adoption-state").textContent = `${asset.id.toUpperCase()} · ${result.outcome === "adopted" ? "BOUND" : "ALREADY BOUND"}`;
     showMessage(
@@ -767,6 +839,144 @@ async function adoptExistingThread() {
   } catch (error) {
     qs("#thread-adoption-state").textContent = "ADOPTION NOT APPLIED";
     showMessage(error.message);
+    await loadThreadManagement().catch(() => undefined);
+  } finally {
+    state.threadBusy = false;
+    updateThreadAdoptButton();
+  }
+}
+
+async function inspectThreadForum() {
+  const pack = selectedThreadPack();
+  if (pack === null || !pack.forumConfigured || state.threadBusy || state.threadManagement?.provisioningAvailable !== true) return;
+  const confirmed = window.confirm(
+    `Inspect the current Discord forum and available tags for ${pack.displayName}?\n\n` +
+    "This is a read-only Discord operation. It will not create or edit a post, change a binding, publish a chart, or create a Release.",
+  );
+  if (!confirmed) return;
+
+  clearMessage();
+  state.threadBusy = true;
+  state.threadForumInspection = null;
+  state.threadLogo = null;
+  qs("#thread-logo").value = "";
+  qs("#thread-logo-state").textContent = "NO STARTER LOGO STAGED";
+  renderThreadTags();
+  qs("#thread-provisioning-state").textContent = "INSPECTING CURRENT FORUM TAGS";
+  updateThreadAdoptButton();
+  try {
+    const result = await api(`/api/v1/thread-management/packs/${encodeURIComponent(pack.id)}/forum/inspect`, {
+      method: "POST",
+      body: JSON.stringify({ confirmation: "inspect_forum_tags" }),
+    });
+    state.threadForumInspection = result;
+    renderThreadTags();
+    qs("#thread-provisioning-state").textContent = result.sessionClosed
+      ? `${result.forum.name.toUpperCase()} · ${result.forum.availableTags.length} TAGS INSPECTED`
+      : "FORUM INSPECTED · SESSION CLOSE FAILED";
+    showMessage(
+      result.sessionClosed
+        ? `Current tags were loaded from ${result.forum.name}. Discord content and local bindings were unchanged.`
+        : "The forum was inspected, but the Discord session did not close cleanly. Restart the administration service before provisioning.",
+      !result.sessionClosed,
+    );
+  } catch (error) {
+    qs("#thread-provisioning-state").textContent = "FORUM INSPECTION FAILED";
+    showMessage(error.message);
+  } finally {
+    state.threadBusy = false;
+    updateThreadAdoptButton();
+  }
+}
+
+async function stageThreadLogo(file) {
+  const pack = selectedThreadPack();
+  const asset = selectedThreadAsset();
+  if (
+    file === null ||
+    pack === null ||
+    asset === null ||
+    asset.bindingState !== "unbound" ||
+    state.threadForumInspection?.packId !== pack.id ||
+    state.threadForumInspection?.sessionClosed !== true ||
+    state.threadBusy
+  ) return;
+
+  clearMessage();
+  state.threadBusy = true;
+  state.threadLogo = null;
+  qs("#thread-logo-state").textContent = `VALIDATING ${file.name.toUpperCase()}`;
+  updateThreadAdoptButton();
+  try {
+    const result = await api(
+      `/api/v1/thread-management/packs/${encodeURIComponent(pack.id)}/assets/${encodeURIComponent(asset.id)}/provisioning-logo`,
+      { method: "PUT", headers: { "Content-Type": "image/png" }, body: file },
+    );
+    state.threadLogo = result;
+    qs("#thread-logo-state").textContent = `${result.evidence.width}×${result.evidence.height} · SHA-256 ${result.evidence.sha256.slice(0, 12).toUpperCase()}…`;
+    showMessage(`${asset.id.toUpperCase()} starter logo validated and staged locally. Discord was not contacted.`, false);
+  } catch (error) {
+    qs("#thread-logo").value = "";
+    qs("#thread-logo-state").textContent = "STARTER LOGO REJECTED";
+    showMessage(error.message);
+  } finally {
+    state.threadBusy = false;
+    updateThreadAdoptButton();
+  }
+}
+
+async function provisionNewThread() {
+  const pack = selectedThreadPack();
+  const asset = selectedThreadAsset();
+  const inspection = state.threadForumInspection;
+  const logo = state.threadLogo;
+  const title = qs("#thread-title").value;
+  const appliedTagIds = selectedThreadTagIds();
+  if (
+    pack === null || asset === null || asset.bindingState !== "unbound" ||
+    inspection?.packId !== pack.id || inspection.sessionClosed !== true ||
+    logo?.packId !== pack.id || logo.assetId !== asset.id || state.threadBusy
+  ) return;
+  const selectedTagNames = inspection.forum.availableTags
+    .filter((tag) => appliedTagIds.includes(tag.id))
+    .map((tag) => tag.name);
+  const confirmed = window.confirm(
+    `Create one new Discord forum post for ${asset.id.toUpperCase()} in ${pack.displayName}?\n\n` +
+    `Title: ${title}\nTags: ${selectedTagNames.length === 0 ? "none" : selectedTagNames.join(", ")}\nLogo SHA-256: ${logo.evidence.sha256}\n\n` +
+    "VisionX will create the post with this logo as its starter message, then atomically record its persistent binding. This does not publish a chart or create a Release.",
+  );
+  if (!confirmed) return;
+
+  clearMessage();
+  state.threadBusy = true;
+  qs("#thread-provisioning-state").textContent = "CREATING AND BINDING DISCORD POST";
+  updateThreadAdoptButton();
+  try {
+    const result = await api("/api/v1/thread-management/provision", {
+      method: "POST",
+      body: JSON.stringify({
+        packId: pack.id,
+        assetId: asset.id,
+        title,
+        appliedTagIds,
+        logoSha256: logo.evidence.sha256,
+        confirmation: "provision_new_thread",
+      }),
+    });
+    resetThreadProvisioning();
+    qs("#thread-id").value = "";
+    await loadThreadManagement();
+    qs("#thread-provisioning-state").textContent = `${asset.id.toUpperCase()} · POST CREATED & BOUND`;
+    showMessage(
+      result.sessionClosed
+        ? `${asset.id.toUpperCase()} now routes to new Discord thread ${result.thread.threadId}. No chart was published.`
+        : `${asset.id.toUpperCase()} was created and bound, but the Discord session did not close cleanly. Restart the administration service before another Discord operation.`,
+      !result.sessionClosed,
+    );
+  } catch (error) {
+    const retained = error.details?.retainedThreadId;
+    qs("#thread-provisioning-state").textContent = retained ? "RETAINED PROVISIONAL THREAD · ACTION REQUIRED" : "PROVISIONING NOT COMPLETED";
+    showMessage(retained ? `${error.message} Retained thread: ${retained}.` : error.message);
     await loadThreadManagement().catch(() => undefined);
   } finally {
     state.threadBusy = false;
@@ -1164,11 +1374,19 @@ qs("#workspace-discard").addEventListener("click", () => void discardPackPreview
 qs("#workspace-reset-pack").addEventListener("click", () => void resetWorkspacePack());
 qs("#thread-pack").addEventListener("change", () => {
   qs("#thread-id").value = "";
+  resetThreadProvisioning();
   renderThreadManagement();
 });
-qs("#thread-asset").addEventListener("change", updateThreadAdoptButton);
+qs("#thread-asset").addEventListener("change", () => {
+  resetThreadProvisioning({ keepForum: true });
+  updateThreadAdoptButton();
+});
 qs("#thread-id").addEventListener("input", updateThreadAdoptButton);
 qs("#thread-adopt-button").addEventListener("click", () => void adoptExistingThread());
+qs("#thread-inspect-forum").addEventListener("click", () => void inspectThreadForum());
+qs("#thread-title").addEventListener("input", updateThreadAdoptButton);
+qs("#thread-logo").addEventListener("change", (event) => void stageThreadLogo(event.target.files?.[0] ?? null));
+qs("#thread-provision-button").addEventListener("click", () => void provisionNewThread());
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";

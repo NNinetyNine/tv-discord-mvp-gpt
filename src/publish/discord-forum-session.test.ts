@@ -12,6 +12,7 @@ import {
 
 import {
   buildDiscordForumProvisioningOperations,
+  inspectDiscordForum,
   inspectDiscordForumThread,
   type DiscordChannelFetcher,
 } from "./discord-forum-session.ts";
@@ -137,6 +138,29 @@ function provisionFixture(
 }
 
 describe("Discord forum inspection", () => {
+  it("returns current forum name and selectable tag facts without mutation", async () => {
+    const calls: string[] = [];
+    const forum = {
+      id: FORUM_ID,
+      type: ChannelType.GuildForum,
+      name: "Crypto Analyses",
+      availableTags: [
+        { id: TAG_ID, name: "Analysis", moderated: false, emoji: null },
+        { id: "423456789012345678", name: "Members", moderated: true, emoji: null },
+      ],
+    } as unknown as Channel;
+
+    await expect(inspectDiscordForum(fetcher({ [FORUM_ID]: forum }, calls), FORUM_ID)).resolves.toEqual({
+      forumChannelId: FORUM_ID,
+      name: "Crypto Analyses",
+      availableTags: [
+        { id: TAG_ID, name: "Analysis", moderated: false },
+        { id: "423456789012345678", name: "Members", moderated: true },
+      ],
+    });
+    expect(calls).toEqual([FORUM_ID]);
+  });
+
   it("returns read-only adoption facts for a forum thread", async () => {
     const calls: string[] = [];
     const tagIds = [

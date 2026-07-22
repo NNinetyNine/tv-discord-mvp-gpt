@@ -38,6 +38,27 @@ export interface DiscordForumProvisioningSession
   extends DiscordForumSession,
     DiscordForumProvisioningOperations {}
 
+export interface DiscordForumTagFacts {
+  readonly id: string;
+  readonly name: string;
+  readonly moderated: boolean;
+}
+
+export interface DiscordForumFacts {
+  readonly forumChannelId: string;
+  readonly name: string;
+  readonly availableTags: readonly DiscordForumTagFacts[];
+}
+
+export type DiscordForumInspector = (
+  forumChannelId: string,
+) => Promise<DiscordForumFacts>;
+
+export interface DiscordForumAdministrationSession
+  extends DiscordForumProvisioningSession {
+  readonly inspectForum: DiscordForumInspector;
+}
+
 interface ThreadFactSource {
   readonly id: string;
   readonly parentId: string | null;
@@ -120,6 +141,32 @@ export async function inspectDiscordForumThread(
   }
 
   return threadFacts(candidate);
+}
+
+/** Fetch current forum identity and selectable tag facts without mutation. */
+export async function inspectDiscordForum(
+  fetchChannel: DiscordChannelFetcher,
+  forumChannelId: string,
+): Promise<DiscordForumFacts> {
+  const candidate = await fetchChannel(forumChannelId);
+  if (candidate === null) {
+    throw new Error(`forum channel ${forumChannelId} was not found or is not visible to the bot`);
+  }
+  if (candidate.id !== forumChannelId) {
+    throw new Error(`Discord returned channel "${candidate.id}" for requested forum "${forumChannelId}"`);
+  }
+  if (candidate.type !== ChannelType.GuildForum) {
+    throw new Error(`channel ${forumChannelId} is not a Discord forum channel`);
+  }
+  return Object.freeze({
+    forumChannelId,
+    name: candidate.name,
+    availableTags: Object.freeze(candidate.availableTags.map((tag) => Object.freeze({
+      id: tag.id,
+      name: tag.name,
+      moderated: tag.moderated,
+    }))),
+  });
 }
 
 /**
@@ -268,7 +315,7 @@ export function buildDiscordForumProvisioningOperations(
  * only threads created through this same session.
  */
 export async function openDiscordForumSession():
-Promise<DiscordForumProvisioningSession> {
+Promise<DiscordForumAdministrationSession> {
   const token = process.env.DISCORD_BOT_TOKEN;
 
   if (!token || token.trim().length === 0) {
@@ -308,6 +355,13 @@ Promise<DiscordForumProvisioningSession> {
     );
 
   return Object.freeze({
+    inspectForum:
+      async (forumChannelId: string) =>
+        inspectDiscordForum(
+          fetchChannel,
+          forumChannelId,
+        ),
+
     inspectThread:
       async (threadId: string) =>
         inspectDiscordForumThread(
