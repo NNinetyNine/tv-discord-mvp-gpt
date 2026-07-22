@@ -18,7 +18,8 @@
     "test": "vitest run",
     "admin": "tsx src/scripts/start-admin.ts",
     "adopt-thread": "tsx src/scripts/adopt-discord-asset-thread.ts",
-    "provision-thread": "tsx src/scripts/provision-discord-asset-thread.ts"
+    "provision-thread": "tsx src/scripts/provision-discord-asset-thread.ts",
+    "preview-chart": "tsx src/scripts/preview-chart-publication.ts"
   },
   "dependencies": {
     "discord.js": "^14.26.4",
