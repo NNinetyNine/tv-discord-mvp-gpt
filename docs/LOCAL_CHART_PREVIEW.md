@@ -37,6 +37,21 @@ npm run preview-chart -- \
 Standalone output remains local. It does not change Pack workspace state,
 create a Release, look up a Discord thread, or publish anything.
 
+### Administration UI
+
+Start the loopback administration service with `npm run admin`, open its local
+URL, and choose **RENDER**. The standalone renderer lists Registry Assets whose
+qualified TradingView identity and canonical currency are complete, exposes the
+shared validated timeframe list, accepts one native TradingView PNG export, and
+returns an inline preview plus separate PNG and receipt downloads.
+
+Each successful request receives a unique local render ID. The raw upload,
+rendered publication, and receipt remain under the administration workspace;
+the API exposes only the final publication and receipt. Failed renders are
+discarded. This UI route never loads Pack definitions for membership, changes
+Pack Workspace state, stages an artifact, creates a Release, resolves a thread,
+or contacts Discord.
+
 ## Pack rendering
 
 Pack rendering proves that the selected Asset belongs to the selected Pack and

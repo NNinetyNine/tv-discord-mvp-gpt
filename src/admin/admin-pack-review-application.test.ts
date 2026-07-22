@@ -46,4 +46,15 @@ describe("Administration Pack review/application UI boundary", () => {
       validatePackSourceApplicationAuthorization(f.applicationAuthorization),
     ).toMatchObject({ ok: true });
   });
+
+  it("keeps standalone rendering visibly outside Pack publication authority", async () => {
+    const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
+    const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
+
+    expect(html).toContain("STANDALONE RENDERER");
+    expect(html).toContain("This does not change a Pack, stage a publication, create a Release, or contact Discord.");
+    expect(js).toContain('api(`/api/v1/standalone-renders?${query.toString()}`');
+    expect(js).not.toContain("publishPack(");
+    expect(js).not.toContain("capturePackChartFromFile(");
+  });
 });

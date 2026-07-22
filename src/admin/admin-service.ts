@@ -31,6 +31,10 @@ import {
 } from "./admin-types.ts";
 import { AdminWorkspace } from "./admin-workspace.ts";
 import { AdminPackBuilderWorkspace } from "./admin-pack-builder-workspace.ts";
+import {
+  AdminStandaloneRenderWorkspace,
+  type StandaloneRenderArtifactName,
+} from "./admin-standalone-render-workspace.ts";
 import { AdminPromotionWorkspace, type PackPromotionArtifactName } from "./admin-promotion-workspace.ts";
 import {
   AdminAssetRegistrationWorkspace,
@@ -76,6 +80,12 @@ import {
   validatePackSourcePlanningAuthorization,
   type PackPromotionContext,
 } from "../packs/pack-draft-promotion.ts";
+import { previewChartPublicationFile } from "../application/chart-publication-preview-file.ts";
+import {
+  SUPPORTED_CHART_PUBLICATION_TIMEFRAMES,
+  validateChartPublicationTimeframe,
+  type ChartPublicationTimeframe,
+} from "../application/chart-publication-preview.ts";
 
 import {
   reviewPackSourceChange,
@@ -166,6 +176,38 @@ export interface AdminPackDetail extends AdminPackSummary {
 export interface AdminDraftRecord {
   readonly draft: PackDraft;
   readonly validation: PackDraftValidationResult;
+}
+
+export interface AdminStandaloneRenderAsset {
+  readonly id: string;
+  readonly displayName: string;
+  readonly tradingViewSymbol: string;
+  readonly currency: string;
+}
+
+export interface AdminStandaloneRenderOptions {
+  readonly schemaVersion: 1;
+  readonly timeframes: readonly ChartPublicationTimeframe[];
+  readonly assets: readonly AdminStandaloneRenderAsset[];
+  readonly unavailableAssetCount: number;
+}
+
+export interface AdminStandaloneRenderResult {
+  readonly schemaVersion: 1;
+  readonly renderId: string;
+  readonly asset: AdminStandaloneRenderAsset;
+  readonly timeframe: ChartPublicationTimeframe;
+  readonly dataAsOf: string;
+  readonly sourceBasename: string;
+  readonly outputSha256: string;
+  readonly publicationUrl: string;
+  readonly receiptUrl: string;
+  readonly effects: {
+    readonly packWorkspaceChanged: false;
+    readonly staged: false;
+    readonly released: false;
+    readonly discordContacted: false;
+  };
 }
 
 export interface AdminServiceOptions {
@@ -265,6 +307,7 @@ export class AdminService {
   readonly promotions: AdminPromotionWorkspace;
   readonly assetRegistrations: AdminAssetRegistrationWorkspace;
   readonly packBuilder: AdminPackBuilderWorkspace;
+  readonly standaloneRenders: AdminStandaloneRenderWorkspace;
   #state: LiveState;
 
   private constructor(
@@ -273,6 +316,7 @@ export class AdminService {
     promotions: AdminPromotionWorkspace,
     assetRegistrations: AdminAssetRegistrationWorkspace,
     packBuilder: AdminPackBuilderWorkspace,
+    standaloneRenders: AdminStandaloneRenderWorkspace,
     state: LiveState,
   ) {
     this.repositoryRoot = repositoryRoot;
@@ -280,6 +324,7 @@ export class AdminService {
     this.promotions = promotions;
     this.assetRegistrations = assetRegistrations;
     this.packBuilder = packBuilder;
+    this.standaloneRenders = standaloneRenders;
     this.#state = state;
   }
 
@@ -292,8 +337,9 @@ export class AdminService {
     const promotions = await AdminPromotionWorkspace.open(workspace.root);
     const assetRegistrations = await AdminAssetRegistrationWorkspace.open(workspace.root);
     const packBuilder = await AdminPackBuilderWorkspace.open(workspace.root);
+    const standaloneRenders = await AdminStandaloneRenderWorkspace.open(workspace.root);
     const state = await AdminService.#loadState(repositoryRoot);
-    return new AdminService(repositoryRoot, workspace, promotions, assetRegistrations, packBuilder, state);
+    return new AdminService(repositoryRoot, workspace, promotions, assetRegistrations, packBuilder, standaloneRenders, state);
   }
 
   static async #loadState(repositoryRoot: string): Promise<LiveState> {
@@ -412,6 +458,104 @@ export class AdminService {
 
   logicalChannels(): readonly string[] {
     return Object.freeze(Object.keys(this.#state.rawChannels).sort((a, b) => a.localeCompare(b, "en")));
+  }
+
+  standaloneRenderOptions(): AdminStandaloneRenderOptions {
+    const assets = this.#state.assets
+      .filter((asset) => asset.currency !== undefined && asset.tradingView.indexOf(":") > 0)
+      .sort((a, b) => a.id.localeCompare(b.id, "en"))
+      .map((asset) => Object.freeze({
+        id: asset.id,
+        displayName: asset.display,
+        tradingViewSymbol: asset.tradingView,
+        currency: asset.currency as string,
+      }));
+    return Object.freeze({
+      schemaVersion: 1,
+      timeframes: Object.freeze([...SUPPORTED_CHART_PUBLICATION_TIMEFRAMES]),
+      assets: Object.freeze(assets),
+      unavailableAssetCount: this.#state.assets.length - assets.length,
+    });
+  }
+
+  async renderStandaloneChart(input: {
+    readonly assetId: string;
+    readonly timeframe: unknown;
+    readonly sourceFilename: string;
+    readonly sourceBytes: Buffer;
+  }): Promise<AdminStandaloneRenderResult> {
+    const asset = this.#state.byAssetId.get(input.assetId);
+    if (asset === undefined) {
+      throw new AdminError("asset_not_found", `Asset ${input.assetId} was not found.`, 404, { assetId: input.assetId });
+    }
+    if (asset.currency === undefined || asset.tradingView.indexOf(":") <= 0) {
+      throw new AdminError(
+        "invalid_standalone_render",
+        `Asset ${asset.id} needs qualified TradingView identity and canonical currency before rendering.`,
+      );
+    }
+    const timeframe = validateChartPublicationTimeframe(input.timeframe);
+    if (!timeframe.ok) {
+      throw new AdminError("invalid_standalone_render", timeframe.detail);
+    }
+
+    const task = await this.standaloneRenders.createTask(input.sourceFilename, input.sourceBytes);
+    const rendered = await previewChartPublicationFile({
+      inputPath: task.sourcePath,
+      request: {
+        context: "standalone",
+        assetId: asset.id,
+        timeframe: timeframe.timeframe,
+      },
+      outputPath: task.outputPath,
+      receiptPath: task.receiptPath,
+      registryPath: this.#state.registryFile.canonicalPath,
+      channelsPath: this.#state.channelsFile.canonicalPath,
+      packsPath: this.#state.packsFile.canonicalPath,
+    });
+    if (!rendered.ok) {
+      await this.standaloneRenders.discardTask(task.renderId);
+      throw new AdminError(
+        "standalone_render_failed",
+        rendered.detail,
+        400,
+        { reason: rendered.reason },
+      );
+    }
+    if (rendered.context !== "standalone") {
+      await this.standaloneRenders.discardTask(task.renderId);
+      throw new AdminError("internal_error", "Standalone renderer returned an incompatible context.", 500);
+    }
+
+    return Object.freeze({
+      schemaVersion: 1,
+      renderId: task.renderId,
+      asset: Object.freeze({
+        id: asset.id,
+        displayName: asset.display,
+        tradingViewSymbol: asset.tradingView,
+        currency: asset.currency,
+      }),
+      timeframe: rendered.timeframe,
+      dataAsOf: rendered.dataAsOf,
+      sourceBasename: rendered.sourceBasename,
+      outputSha256: rendered.outputSha256,
+      publicationUrl: `/api/v1/standalone-renders/${task.renderId}/publication.png`,
+      receiptUrl: `/api/v1/standalone-renders/${task.renderId}/receipt.json`,
+      effects: Object.freeze({
+        packWorkspaceChanged: false,
+        staged: false,
+        released: false,
+        discordContacted: false,
+      }),
+    });
+  }
+
+  readStandaloneRenderArtifact(
+    renderId: string,
+    artifact: StandaloneRenderArtifactName,
+  ): Promise<Buffer> {
+    return this.standaloneRenders.readArtifact(renderId, artifact);
   }
 
   promotionContext(): PackPromotionContext {

@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import sharp from "sharp";
 
 import { AdminService } from "./admin-service.ts";
 import { ADMIN_CSP, ADMIN_REQUEST_BODY_LIMIT, startAdminHttpServer, type RunningAdminHttpServer } from "./admin-http-server.ts";
@@ -32,6 +33,27 @@ async function jsonRequest(url: string, path: string, init?: RequestInit) {
 
 function draft(assetIds = ["aapl", "btc", "gold"]) {
   return { schemaVersion: 1, draftType: PACK_DRAFT_TYPE, id: "qa-pack", displayName: "QA Pack", description: "HTTP verification.", assetIds, revision: 1 };
+}
+
+async function framedPng(): Promise<Buffer> {
+  const width = 160;
+  const height = 110;
+  const channels = 4;
+  const data = Buffer.alloc(width * height * channels, 31);
+  for (let offset = 3; offset < data.length; offset += channels) data[offset] = 255;
+  const set = (x: number, y: number, value: number): void => {
+    const offset = (y * width + x) * channels;
+    data[offset] = value;
+    data[offset + 1] = value;
+    data[offset + 2] = value;
+    data[offset + 3] = 255;
+  };
+  for (let y = 10; y <= 90; y += 1) {
+    for (let x = 7; x <= 152; x += 1) set(x, y, 20);
+  }
+  for (let x = 7; x <= 152; x += 1) { set(x, 10, 45); set(x, 90, 45); }
+  for (let y = 10; y <= 90; y += 1) { set(7, y, 45); set(152, y, 45); }
+  return sharp(data, { raw: { width, height, channels } }).png().toBuffer();
 }
 
 describe("Admin HTTP server", () => {
@@ -66,6 +88,78 @@ describe("Admin HTTP server", () => {
     expect(body.data.assets.length).toBeLessThanOrEqual(5);
     const ids = body.data.assets.map((asset: { id: string }) => asset.id);
     expect(ids).toEqual([...ids].sort((a, b) => a.localeCompare(b, "en")));
+  });
+
+  it("renders and downloads a standalone publication without canonical source mutation", async () => {
+    const { service, server } = await start();
+    const canonicalPaths = ["definitions/registry.json", "definitions/packs.json", "config/channels.json"].map((path) => resolve(path));
+    const before = await Promise.all(canonicalPaths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
+
+    const options = await jsonRequest(server.url, "/api/v1/standalone-render/options");
+    expect(options.body.data.timeframes).toContain("4D");
+    expect(options.body.data.assets).toContainEqual(expect.objectContaining({ id: "btc", tradingViewSymbol: "CRYPTO:BTCUSD", currency: "USD" }));
+
+    const query = new URLSearchParams({
+      assetId: "btc",
+      timeframe: "6H",
+      filename: "BTCUSD_2026-07-22_18-58-01.png",
+    });
+    const response = await fetch(`${server.url}/api/v1/standalone-renders?${query.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "image/png" },
+      body: await framedPng(),
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json() as any;
+    expect(body.data).toMatchObject({
+      asset: { id: "btc" },
+      timeframe: "6H",
+      dataAsOf: "2026-07-22",
+      effects: { packWorkspaceChanged: false, staged: false, released: false, discordContacted: false },
+    });
+
+    const publication = await fetch(`${server.url}${body.data.publicationUrl}`);
+    expect(publication.status).toBe(200);
+    expect(publication.headers.get("content-type")).toBe("image/png");
+    const publicationBytes = Buffer.from(await publication.arrayBuffer());
+    expect(createHash("sha256").update(publicationBytes).digest("hex")).toBe(body.data.outputSha256);
+    const receipt = await fetch(`${server.url}${body.data.receiptUrl}`);
+    expect(receipt.headers.get("content-type")).toContain("application/json");
+    expect((await receipt.json() as any).metadata.timeframe).toBe("6H");
+
+    const after = await Promise.all(canonicalPaths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
+    expect(after).toEqual(before);
+    expect(await readdir(service.standaloneRenders.root)).toEqual([body.data.renderId]);
+  });
+
+  it("rejects invalid standalone requests and removes failed render tasks", async () => {
+    const { service, server } = await start();
+    const invalidTimeframe = new URLSearchParams({
+      assetId: "btc",
+      timeframe: "hourly",
+      filename: "BTCUSD_2026-07-22_18-58-01.png",
+    });
+    const invalid = await fetch(`${server.url}/api/v1/standalone-renders?${invalidTimeframe.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "image/png" },
+      body: await framedPng(),
+    });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json() as any).error.code).toBe("invalid_standalone_render");
+
+    const mismatch = new URLSearchParams({
+      assetId: "btc",
+      timeframe: "1D",
+      filename: "ETHUSD_2026-07-22_18-58-01.png",
+    });
+    const failed = await fetch(`${server.url}/api/v1/standalone-renders?${mismatch.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "image/png" },
+      body: await framedPng(),
+    });
+    expect(failed.status).toBe(400);
+    expect((await failed.json() as any).error.code).toBe("standalone_render_failed");
+    expect(await readdir(service.standaloneRenders.root)).toEqual([]);
   });
 
   it("returns exact Pack ordering", async () => {
@@ -162,13 +256,14 @@ describe("Admin HTTP server", () => {
     expect(response.headers.get("content-security-policy")).toBe(ADMIN_CSP);
   });
 
-  it("serves the task-oriented Pack builder and read-only Registry without external resources", async () => {
+  it("serves the Pack builder, standalone renderer, and read-only Registry without external resources", async () => {
     const { server } = await start();
     const html = await (await fetch(`${server.url}/`)).text();
     expect(html).toContain("PACK BUILDER");
     expect(html).toContain("/visionx-emblem.png");
     expect(html).toContain("/visionx-wordmark.png");
     expect(html).toContain("CREATE PACK");
+    expect(html).toContain("STANDALONE RENDERER");
     expect(html).toContain("REGISTRY");
     expect(html).not.toContain("Asset registrations");
     expect(html).not.toContain("Pack drafts");

@@ -24,6 +24,7 @@
 
   <nav class="primary-nav" aria-label="Primary">
     <button type="button" data-view="packs" aria-current="page">PACKS</button>
+    <button type="button" data-view="renderer">RENDER</button>
     <button type="button" data-view="registry">REGISTRY</button>
   </nav>
 
@@ -75,6 +76,41 @@
       <section id="result-window" class="window result-window" hidden aria-live="polite">
         <header class="window-header"><div><p class="micro-label">RESULT</p><h2 id="result-heading">PACK CREATED</h2></div></header>
         <div id="result-content"></div>
+      </section>
+    </section>
+
+    <section class="view" data-view-panel="renderer" hidden>
+      <section class="window renderer-window" aria-labelledby="renderer-heading">
+        <header class="window-header">
+          <div><p class="micro-label">INDEPENDENT TOOL</p><h1 id="renderer-heading">STANDALONE RENDERER</h1></div>
+          <span id="renderer-state" class="context-fact">LOCAL ONLY</span>
+        </header>
+        <p class="window-help">Render a registered ticker at any supported timeframe. This does not change a Pack, stage a publication, create a Release, or contact Discord.</p>
+        <div class="renderer-fields">
+          <label><span>REGISTERED TICKER</span><select id="renderer-asset"><option value="">SELECT TICKER</option></select></label>
+          <label><span>TIMEFRAME</span><select id="renderer-timeframe"><option value="">SELECT TIMEFRAME</option></select></label>
+          <label class="renderer-file"><span>TRADINGVIEW PNG</span><input id="renderer-source" type="file" accept="image/png"></label>
+          <button id="render-chart" class="primary-action" type="button" disabled>RENDER CHART</button>
+        </div>
+        <div class="renderer-guidance">
+          <span id="renderer-file-state">SELECT A TRADINGVIEW PNG EXPORT</span>
+          <span id="renderer-availability">LOADING RENDERABLE ASSETS</span>
+        </div>
+      </section>
+
+      <section id="renderer-result" class="window renderer-result" hidden aria-live="polite">
+        <header class="window-header">
+          <div><p class="micro-label">LOCAL RESULT</p><h2 id="renderer-result-heading">RENDER COMPLETE</h2></div>
+          <span id="renderer-result-context" class="context-fact"></span>
+        </header>
+        <figure class="renderer-preview">
+          <img id="renderer-image" alt="Rendered VisionX chart publication">
+          <figcaption id="renderer-caption"></figcaption>
+        </figure>
+        <div class="renderer-downloads">
+          <a id="download-publication" class="outline-action download-link" download>DOWNLOAD PNG</a>
+          <a id="download-receipt" class="outline-action download-link" download>DOWNLOAD RECEIPT</a>
+        </div>
       </section>
     </section>
 

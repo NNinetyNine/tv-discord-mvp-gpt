@@ -8,6 +8,9 @@ const state = {
   preview: null,
   previewTimer: null,
   lookupGeneration: 0,
+  renderOptions: null,
+  renderSourceFile: null,
+  renderBusy: false,
 };
 
 const qs = (selector) => document.querySelector(selector);
@@ -633,16 +636,95 @@ async function loadRegistry(query = "") {
   body.innerHTML = result.assets.map((asset) => `<tr><td>${escapeHtml(asset.id)}</td><td>${escapeHtml(asset.displayName)}</td><td>${escapeHtml(asset.tradingViewSymbol)}</td><td>${escapeHtml(asset.currency ?? "—")}</td><td>${escapeHtml(asset.logicalChannel)}</td></tr>`).join("");
 }
 
+function updateRenderButton() {
+  const ready = Boolean(
+    qs("#renderer-asset").value &&
+    qs("#renderer-timeframe").value &&
+    state.renderSourceFile &&
+    !state.renderBusy
+  );
+  qs("#render-chart").disabled = !ready;
+}
+
+async function loadStandaloneRenderOptions() {
+  if (state.renderOptions !== null) return;
+  const result = await api("/api/v1/standalone-render/options");
+  state.renderOptions = result;
+  qs("#renderer-asset").innerHTML = '<option value="">SELECT TICKER</option>' + result.assets
+    .map((asset) => `<option value="${escapeAttribute(asset.id)}">${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)} · ${escapeHtml(asset.tradingViewSymbol)}</option>`)
+    .join("");
+  qs("#renderer-timeframe").innerHTML = '<option value="">SELECT TIMEFRAME</option>' + result.timeframes
+    .map((timeframe) => `<option value="${escapeAttribute(timeframe)}">${escapeHtml(timeframe)}</option>`)
+    .join("");
+  qs("#renderer-availability").textContent = `${result.assets.length} RENDERABLE · ${result.unavailableAssetCount} REQUIRE METADATA RECONCILIATION`;
+  updateRenderButton();
+}
+
+function resetStandaloneResult() {
+  qs("#renderer-result").hidden = true;
+  qs("#renderer-image").removeAttribute("src");
+  updateRenderButton();
+}
+
+async function runStandaloneRender() {
+  const assetId = qs("#renderer-asset").value;
+  const timeframe = qs("#renderer-timeframe").value;
+  const file = state.renderSourceFile;
+  if (!assetId || !timeframe || !file || state.renderBusy) return;
+
+  clearMessage();
+  state.renderBusy = true;
+  qs("#renderer-state").textContent = "RENDERING LOCAL ARTIFACT";
+  updateRenderButton();
+  try {
+    const query = new URLSearchParams({ assetId, timeframe, filename: file.name });
+    const result = await api(`/api/v1/standalone-renders?${query.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "image/png" },
+      body: file,
+    });
+    const downloadStem = `${result.asset.id}-${result.dataAsOf}-${result.timeframe}`.toLowerCase();
+    qs("#renderer-result").hidden = false;
+    qs("#renderer-result-heading").textContent = `${result.asset.id.toUpperCase()} RENDER COMPLETE`;
+    qs("#renderer-result-context").textContent = `${result.timeframe} · DATA AS OF ${result.dataAsOf}`;
+    qs("#renderer-image").src = result.publicationUrl;
+    qs("#renderer-caption").textContent = `${result.asset.displayName} · ${result.asset.tradingViewSymbol} · SHA-256 ${result.outputSha256}`;
+    qs("#download-publication").href = result.publicationUrl;
+    qs("#download-publication").download = `${downloadStem}.png`;
+    qs("#download-receipt").href = result.receiptUrl;
+    qs("#download-receipt").download = `${downloadStem}.receipt.json`;
+    qs("#renderer-state").textContent = "LOCAL RENDER COMPLETE";
+  } catch (error) {
+    qs("#renderer-state").textContent = "ACTION REQUIRED";
+    showMessage(error.message);
+  } finally {
+    state.renderBusy = false;
+    updateRenderButton();
+  }
+}
+
 qsa("[data-view]").forEach((button) => button.addEventListener("click", () => {
   qsa("[data-view]").forEach((item) => item.removeAttribute("aria-current"));
   button.setAttribute("aria-current", "page");
   qsa("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== button.dataset.view; });
   if (button.dataset.view === "registry") void loadRegistry();
+  if (button.dataset.view === "renderer") void loadStandaloneRenderOptions().catch((error) => showMessage(error.message));
 }));
 
 qs("#add-member").addEventListener("click", () => addMember());
 qs("#create-pack").addEventListener("click", () => void createPack());
 qs("#registry-search").addEventListener("input", (event) => void loadRegistry(event.target.value));
+qs("#renderer-asset").addEventListener("change", resetStandaloneResult);
+qs("#renderer-timeframe").addEventListener("change", resetStandaloneResult);
+qs("#renderer-source").addEventListener("change", (event) => {
+  const file = event.target.files?.[0] ?? null;
+  state.renderSourceFile = file;
+  qs("#renderer-file-state").textContent = file === null
+    ? "SELECT A TRADINGVIEW PNG EXPORT"
+    : `${file.name} · ${file.size.toLocaleString()} BYTES`;
+  resetStandaloneResult();
+});
+qs("#render-chart").addEventListener("click", () => void runStandaloneRender());
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";

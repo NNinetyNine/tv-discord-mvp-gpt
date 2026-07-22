@@ -56,6 +56,19 @@ describe("AdminService", () => {
     expect(ids).toEqual([...ids].sort((a, b) => a.localeCompare(b, "en")));
   });
 
+  it("exposes only metadata-complete standalone render choices with all supported timeframes", async () => {
+    const options = (await createService()).standaloneRenderOptions();
+    expect(options.timeframes).toEqual(expect.arrayContaining(["1H", "1D", "4D", "1W"]));
+    expect(options.assets).toContainEqual({
+      id: "btc",
+      displayName: "Bitcoin / U.S. Dollar",
+      tradingViewSymbol: "CRYPTO:BTCUSD",
+      currency: "USD",
+    });
+    expect(options.assets.every((asset) => asset.tradingViewSymbol.includes(":") && asset.currency.length > 0)).toBe(true);
+    expect(options.assets.length + options.unavailableAssetCount).toBe(131);
+  });
+
   it("enforces bounded Asset search results", async () => {
     const service = await createService();
     expect(service.searchAssets({ limit: 2 }).assets).toHaveLength(2);

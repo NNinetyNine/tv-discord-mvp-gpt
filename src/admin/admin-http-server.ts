@@ -12,6 +12,7 @@ import { ASSET_REGISTRATION_ARTIFACT_NAMES, type AssetRegistrationArtifactName }
 export const ADMIN_REQUEST_BODY_LIMIT = 65536 as const;
 export const ADMIN_ASSET_LOGO_BODY_LIMIT =
   ASSET_LOGO_POLICY.maximumBytes;
+export const ADMIN_STANDALONE_RENDER_BODY_LIMIT = 25 * 1024 * 1024;
 export const ADMIN_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
 export interface StartAdminHttpServerOptions {
@@ -221,6 +222,32 @@ async function readAssetLogoBody(
   return Buffer.concat(chunks);
 }
 
+async function readStandaloneRenderBody(request: IncomingMessage): Promise<Buffer> {
+  const contentType = request.headers["content-type"];
+  if (typeof contentType !== "string" || !/^image\/png(?:\s*;|$)/iu.test(contentType)) {
+    throw new AdminError(
+      "invalid_content_type",
+      "Standalone chart uploads require Content-Type: image/png.",
+      415,
+    );
+  }
+  const chunks: Buffer[] = [];
+  let length = 0;
+  for await (const chunk of request) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    length += bytes.length;
+    if (length > ADMIN_STANDALONE_RENDER_BODY_LIMIT) {
+      throw new AdminError(
+        "request_body_too_large",
+        `Standalone chart exceeds ${ADMIN_STANDALONE_RENDER_BODY_LIMIT} bytes.`,
+        413,
+      );
+    }
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks);
+}
+
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   const contentType = request.headers["content-type"];
   if (typeof contentType !== "string" || !/^application\/json(?:\s*;|$)/iu.test(contentType)) {
@@ -276,6 +303,39 @@ function parseInteger(value: string | null, fallback: number): number {
   return Number(value);
 }
 
+function exactSearchParameters(url: URL, allowed: readonly string[], label: string): void {
+  const permitted = new Set(allowed);
+  const seen = new Set<string>();
+  for (const key of url.searchParams.keys()) {
+    if (!permitted.has(key)) throw new AdminError("invalid_request", `${label} contains an unknown parameter: ${key}.`);
+    if (seen.has(key)) throw new AdminError("invalid_request", `${label} contains duplicate parameter: ${key}.`);
+    seen.add(key);
+  }
+  for (const key of allowed) {
+    if (!seen.has(key)) throw new AdminError("invalid_request", `${label} requires parameter: ${key}.`);
+  }
+}
+
+function binaryArtifact(
+  request: IncomingMessage,
+  response: ServerResponse,
+  bytes: Buffer,
+  artifact: "publication.png" | "receipt.json",
+): void {
+  securityHeaders(response, true);
+  response.statusCode = 200;
+  response.setHeader(
+    "Content-Type",
+    artifact === "publication.png" ? "image/png" : "application/json; charset=utf-8",
+  );
+  response.setHeader(
+    "Content-Disposition",
+    `${artifact === "publication.png" ? "inline" : "attachment"}; filename="visionx-${artifact}"`,
+  );
+  response.setHeader("Content-Length", String(bytes.length));
+  response.end(request.method === "HEAD" ? undefined : bytes);
+}
+
 async function serveStatic(response: ServerResponse, path: string): Promise<void> {
   const route = path === "/" ? "/index.html" : path;
   const staticAssets = new Map<string, URL>([
@@ -317,6 +377,27 @@ async function routeApi(
   const method = request.method ?? "GET";
   if (pathname === "/api/v1/status" && method === "GET") return ok(response, service.status());
   if (pathname === "/api/v1/channels" && method === "GET") return ok(response, { schemaVersion: 1, logicalChannels: service.logicalChannels() });
+  if (pathname === "/api/v1/standalone-render/options" && method === "GET") {
+    return ok(response, service.standaloneRenderOptions());
+  }
+  if (pathname === "/api/v1/standalone-renders") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, ["assetId", "timeframe", "filename"], "Standalone render request");
+    const bytes = await readStandaloneRenderBody(request);
+    return ok(response, await service.renderStandaloneChart({
+      assetId: url.searchParams.get("assetId") ?? "",
+      timeframe: url.searchParams.get("timeframe"),
+      sourceFilename: url.searchParams.get("filename") ?? "",
+      sourceBytes: bytes,
+    }), 201);
+  }
+  const standaloneArtifact = /^\/api\/v1\/standalone-renders\/([a-f0-9]{32})\/(publication\.png|receipt\.json)$/u.exec(pathname);
+  if (standaloneArtifact !== null) {
+    if (method !== "GET" && method !== "HEAD") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const artifact = standaloneArtifact[2] as "publication.png" | "receipt.json";
+    const bytes = await service.readStandaloneRenderArtifact(standaloneArtifact[1] ?? "", artifact);
+    return binaryArtifact(request, response, bytes, artifact);
+  }
   if (pathname === "/api/v1/refresh" && method === "POST") return ok(response, await service.refresh());
   if (pathname === "/api/v1/assets" && method === "GET") {
     return ok(response, service.searchAssets({
