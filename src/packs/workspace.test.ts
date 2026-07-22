@@ -166,6 +166,30 @@ describe("resetPack — the instance ends, only for that pack (§4.7, §4.5)", (
   });
 });
 
+describe("resetAsset — discard one current Analysis (§4.7)", () => {
+  it("clears exactly one capture and its revision history", () => {
+    const ws = createWorkspace(PACKS);
+    ws.capture("btc", "t1");
+    ws.capture("btc", "t2");
+    ws.capture("eth", "t3");
+
+    expect(ws.resetAsset("btc")).toBe(true);
+
+    expect(ws.captureOf("btc")).toBeNull();
+    expect(ws.captureOf("eth")).toEqual({ assetId: "eth", capturedAt: "t3", revisions: 1 });
+    expect(ws.capture("btc", "t4")).toEqual({ assetId: "btc", capturedAt: "t4", revisions: 1 });
+  });
+
+  it("reports an absent capture without changing other work", () => {
+    const ws = createWorkspace(PACKS);
+    ws.capture("eth", "t1");
+
+    expect(ws.resetAsset("btc")).toBe(false);
+    expect(ws.captures()).toEqual([{ assetId: "eth", capturedAt: "t1", revisions: 1 }]);
+    expect(() => ws.resetAsset("")).toThrow(/assetId must be a non-empty string/u);
+  });
+});
+
 describe("captures() — the complete set of stored facts, no ordering asserted", () => {
   it("returns every fact exactly once, compared as a set", () => {
     const ws = createWorkspace(PACKS);

@@ -88,6 +88,11 @@ import {
   type ChartPublicationTimeframe,
 } from "../application/chart-publication-preview.ts";
 import { acceptPackChartPublicationFile } from "../application/accept-pack-chart-publication-file.ts";
+import {
+  resetPackWorkspaceAsset,
+  resetPackWorkspacePack,
+  type ResetPackWorkspaceResult,
+} from "../application/reset-pack-workspace.ts";
 import { createPersistentWorkspace } from "../packs/persistence.ts";
 import { createStagingStore } from "../wiring/staging.ts";
 import { DEFAULT_VALIDATION_POLICY, validateImage } from "../validation/validate-image.ts";
@@ -344,7 +349,7 @@ export class AdminService {
   readonly standaloneRenders: AdminStandaloneRenderWorkspace;
   readonly packRenders: AdminPackRenderWorkspace;
   #state: LiveState;
-  #packAcceptanceLock: Promise<void> = Promise.resolve();
+  #packMutationLock: Promise<void> = Promise.resolve();
 
   private constructor(
     repositoryRoot: string,
@@ -719,17 +724,17 @@ export class AdminService {
     return this.packRenders.discardPreview(previewId);
   }
 
-  async #withPackAcceptanceLock<T>(operation: () => Promise<T>): Promise<T> {
-    const prior = this.#packAcceptanceLock;
+  async #withPackMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const prior = this.#packMutationLock;
     let release!: () => void;
-    this.#packAcceptanceLock = new Promise<void>((resolvePromise) => { release = resolvePromise; });
+    this.#packMutationLock = new Promise<void>((resolvePromise) => { release = resolvePromise; });
     await prior;
     try { return await operation(); }
     finally { release(); }
   }
 
   acceptPackWorkspacePreview(previewId: string): Promise<Readonly<Record<string, unknown>>> {
-    return this.#withPackAcceptanceLock(async () => {
+    return this.#withPackMutationLock(async () => {
       await this.refresh();
       const claimed = await this.packRenders.claimPreview(previewId);
       const record = claimed.record;
@@ -787,6 +792,93 @@ export class AdminService {
         totalCount: accepted.totalCount,
         remainingRequiredAssetIds: accepted.remainingRequiredAssetIds,
         effects: Object.freeze({ staged: true, workspaceChanged: true, released: false, discordContacted: false }),
+      });
+    });
+  }
+
+  #packResetFailure(result: Exclude<ResetPackWorkspaceResult, { readonly ok: true }>): never {
+    if (result.outcome === "analysis_not_found") {
+      throw new AdminError("pack_workspace_analysis_not_found", result.detail, 409);
+    }
+    if (result.outcome === "state_conflict") {
+      throw new AdminError("pack_workspace_reset_state_conflict", result.detail, 409);
+    }
+    throw new AdminError("invalid_request", result.detail);
+  }
+
+  resetPackWorkspaceAsset(input: {
+    readonly packId: string;
+    readonly assetId: string;
+    readonly confirmation: unknown;
+    readonly expectedRevisions: unknown;
+  }): Promise<Readonly<Record<string, unknown>>> {
+    if (input.confirmation !== "reset_asset") {
+      throw new AdminError("pack_workspace_reset_confirmation_invalid", "Reset Asset requires an explicit current confirmation.");
+    }
+    if (!Number.isSafeInteger(input.expectedRevisions) || Number(input.expectedRevisions) < 1) {
+      throw new AdminError("invalid_request", "expectedRevisions must be a positive safe integer.");
+    }
+    return this.#withPackMutationLock(async () => {
+      await this.refresh();
+      const pack = this.#state.byPackId.get(input.packId);
+      if (pack === undefined) throw new AdminError("pack_not_found", `Pack ${input.packId} was not found.`, 404, { packId: input.packId });
+      const asset = this.#state.byAssetId.get(input.assetId);
+      if (asset === undefined) throw new AdminError("asset_not_found", `Asset ${input.assetId} was not found.`, 404, { assetId: input.assetId });
+      if (!pack.assets.includes(asset.id)) {
+        throw new AdminError("invalid_request", `Asset ${asset.id} does not belong to Pack ${pack.id}.`);
+      }
+      const result = resetPackWorkspaceAsset({
+        packId: pack.id,
+        assetId: asset.id,
+        expectedRevisions: Number(input.expectedRevisions),
+      }, this.#packRuntime());
+      if (!result.ok) return this.#packResetFailure(result);
+      return Object.freeze({
+        schemaVersion: 1,
+        ...result,
+        effects: Object.freeze({
+          workspaceChanged: true,
+          stagingCleared: result.stagingCleared,
+          released: false,
+          discordContacted: false,
+        }),
+      });
+    });
+  }
+
+  resetPackWorkspacePack(input: {
+    readonly packId: string;
+    readonly confirmation: unknown;
+    readonly expectedCapturedAssetIds: unknown;
+  }): Promise<Readonly<Record<string, unknown>>> {
+    if (input.confirmation !== "reset_pack") {
+      throw new AdminError("pack_workspace_reset_confirmation_invalid", "Reset Pack requires an explicit current confirmation.");
+    }
+    if (
+      !Array.isArray(input.expectedCapturedAssetIds) ||
+      input.expectedCapturedAssetIds.some((assetId) => typeof assetId !== "string")
+    ) {
+      throw new AdminError("invalid_request", "expectedCapturedAssetIds must be an array of Asset IDs.");
+    }
+    const expectedCapturedAssetIds = Object.freeze([...input.expectedCapturedAssetIds] as string[]);
+    return this.#withPackMutationLock(async () => {
+      await this.refresh();
+      const pack = this.#state.byPackId.get(input.packId);
+      if (pack === undefined) throw new AdminError("pack_not_found", `Pack ${input.packId} was not found.`, 404, { packId: input.packId });
+      const result = resetPackWorkspacePack({
+        packId: pack.id,
+        expectedCapturedAssetIds,
+      }, this.#packRuntime());
+      if (!result.ok) return this.#packResetFailure(result);
+      return Object.freeze({
+        schemaVersion: 1,
+        ...result,
+        effects: Object.freeze({
+          workspaceChanged: true,
+          stagingCleared: result.stagingCleared,
+          released: false,
+          discordContacted: false,
+        }),
       });
     });
   }

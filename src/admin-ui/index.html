@@ -36,7 +36,10 @@
       <section class="window workspace-overview" aria-labelledby="workspace-heading">
         <header class="window-header">
           <div><p class="micro-label">GOVERNED PACK CAPTURE</p><h1 id="workspace-heading">PACK WORKSPACE</h1></div>
-          <span class="context-fact">PUBLISH UNAVAILABLE</span>
+          <div class="window-header-actions">
+            <span class="context-fact">PUBLISH UNAVAILABLE</span>
+            <button id="workspace-reset-pack" class="danger-action" type="button" hidden>RESET PACK</button>
+          </div>
         </header>
         <p class="window-help">Import one Pack member chart, inspect the canonical render, then explicitly accept it into staging. Previewing alone changes no Pack state.</p>
         <div class="workspace-overview-grid">
@@ -88,7 +91,7 @@
         </header>
         <div class="table-wrap workspace-table-wrap">
           <table>
-            <thead><tr><th>ASSET</th><th>TRADINGVIEW</th><th>STATUS</th><th>REVISION</th><th>CAPTURED</th></tr></thead>
+            <thead><tr><th>ASSET</th><th>TRADINGVIEW</th><th>STATUS</th><th>REVISION</th><th>CAPTURED</th><th>ACTION</th></tr></thead>
             <tbody id="workspace-members-body"></tbody>
           </table>
         </div>

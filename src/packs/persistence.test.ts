@@ -104,6 +104,19 @@ describe("auto-save on mutation (one save discipline)", () => {
     expect(onDisk.captures[0]).toEqual({ assetId: "btc", capturedAt: "t2", revisions: 2 });
   });
 
+  it("saves after resetAsset and clears its revision history only", () => {
+    const ws = createPersistentWorkspace({ packs, path });
+    ws.capture("btc", "t1");
+    ws.capture("btc", "t2");
+    ws.capture("aapl", "t3");
+
+    expect(ws.resetAsset("btc")).toBe(true);
+
+    const onDisk = JSON.parse(readFileSync(path, "utf8"));
+    expect(onDisk.captures).toEqual([{ assetId: "aapl", capturedAt: "t3", revisions: 1 }]);
+    expect(ws.capture("btc", "t4").revisions).toBe(1);
+  });
+
   it("saves after resetPack (that pack's facts cleared on disk; others kept)", () => {
     const ws = createPersistentWorkspace({ packs, path });
     ws.capture("btc", "t1");

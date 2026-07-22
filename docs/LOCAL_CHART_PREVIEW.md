@@ -86,8 +86,20 @@ evidence, so the same review cannot be replayed. A later accepted preview for
 the same Asset replaces only its current staged artifact and increments its
 revision count.
 
+Current work can also be reset from this room. **RESET** on a captured Asset
+names and confirms that Asset's current revision count, removes its current
+Analysis and staged publication, and returns it to Remaining Required. **RESET
+PACK** names and confirms every currently captured Asset, clears that Pack's
+current instance, and returns the Pack to Empty. A stale confirmation is
+rejected without mutation if the reviewed revisions or captured-Asset set has
+changed. Both reset operations clear current revision history only; the Archive
+is unreachable and remains untouched. If staged-file cleanup cannot be
+verified, the reset result says so explicitly and the UI warns the operator not
+to publish until storage is inspected.
+
 Publication remains unavailable in this UI milestone. Preview, acceptance, and
-discard do not create a Release, resolve a Discord thread, or contact Discord.
+discard and reset do not create a Release, resolve a Discord thread, or contact
+Discord.
 
 ### Pack capture and staging
 

@@ -73,4 +73,20 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(js).not.toContain("/publish");
     expect(js).not.toContain("publishPack(");
   });
+
+  it("keeps confirmed reset controls inside current Workspace custody", async () => {
+    const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
+    const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
+
+    expect(html).toContain("RESET PACK");
+    expect(js).toContain("window.confirm(");
+    expect(js).toContain('confirmation: "reset_asset"');
+    expect(js).toContain('confirmation: "reset_pack"');
+    expect(js).toContain("expectedRevisions: asset.revisions");
+    expect(js).toContain("expectedCapturedAssetIds: capturedAssetIds");
+    expect(js).toContain("The Archive is not affected.");
+    expect(js).not.toContain("/api/v1/pack-workspace/reset");
+    expect(js).not.toContain("/api/v1/releases");
+    expect(js).not.toContain("/publish");
+  });
 });

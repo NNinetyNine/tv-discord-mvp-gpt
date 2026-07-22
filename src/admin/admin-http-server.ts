@@ -405,6 +405,31 @@ async function routeApi(
     if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     return ok(response, service.packWorkspaceState());
   }
+  const packAssetReset = /^\/api\/v1\/pack-workspace\/packs\/([^/]+)\/assets\/([^/]+)\/reset$/u.exec(pathname);
+  if (packAssetReset !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Reset Asset body must be an object.");
+    exactFields(body, ["confirmation", "expectedRevisions"], "Reset Asset body");
+    return ok(response, await service.resetPackWorkspaceAsset({
+      packId: packAssetReset[1] ?? "",
+      assetId: packAssetReset[2] ?? "",
+      confirmation: body.confirmation,
+      expectedRevisions: body.expectedRevisions,
+    }));
+  }
+  const packReset = /^\/api\/v1\/pack-workspace\/packs\/([^/]+)\/reset$/u.exec(pathname);
+  if (packReset !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Reset Pack body must be an object.");
+    exactFields(body, ["confirmation", "expectedCapturedAssetIds"], "Reset Pack body");
+    return ok(response, await service.resetPackWorkspacePack({
+      packId: packReset[1] ?? "",
+      confirmation: body.confirmation,
+      expectedCapturedAssetIds: body.expectedCapturedAssetIds,
+    }));
+  }
   if (pathname === "/api/v1/pack-workspace/previews") {
     if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     exactSearchParameters(url, ["packId", "assetId", "filename"], "Pack preview request");

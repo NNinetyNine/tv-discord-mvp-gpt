@@ -40,7 +40,7 @@ import { createWorkspace, type Workspace, type AssetCapture } from "./workspace.
  * PersistenceError. Progress is never silently discarded.
  *
  * Auto-save happens after every successful state mutation (capture,
- * resetPack). Writes use the same plain-write discipline as before —
+ * resetAsset, resetPack). Writes use the same plain-write discipline as before —
  * durability behavior is unchanged.
  *
  * No singleton, no runtime imports, no UI. Packs and the file path are
@@ -157,7 +157,7 @@ function writeState(path: string, state: PersistedState): void {
 
 /**
  * The auto-saving Workspace surface: reads delegate to the shared instance;
- * the two mutations persist through the shared save().
+ * every mutation persists through the shared save().
  */
 function makePersistedWorkspace(workspace: Workspace, save: () => void): Workspace {
   return {
@@ -173,6 +173,11 @@ function makePersistedWorkspace(workspace: Workspace, save: () => void): Workspa
     packState: (packId) => workspace.packState(packId),
     pendingAssets: (packId) => workspace.pendingAssets(packId),
     capturedFor: (packId) => workspace.capturedFor(packId),
+    resetAsset(assetId: string): boolean {
+      const reset = workspace.resetAsset(assetId);
+      if (reset) save();
+      return reset;
+    },
     resetPack(packId: string): void {
       workspace.resetPack(packId);
       save();

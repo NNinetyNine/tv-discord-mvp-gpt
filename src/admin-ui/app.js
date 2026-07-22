@@ -717,6 +717,7 @@ function selectedWorkspaceAsset() {
 
 function updateWorkspacePreviewButton() {
   const asset = selectedWorkspaceAsset();
+  const pack = selectedWorkspacePack();
   const locked = state.packBusy || state.packPreview !== null;
   qs("#workspace-pack").disabled = locked;
   qs("#workspace-asset").disabled = locked;
@@ -726,6 +727,8 @@ function updateWorkspacePreviewButton() {
   );
   qs("#workspace-accept").disabled = state.packBusy || state.packPreview === null;
   qs("#workspace-discard").disabled = state.packBusy || state.packPreview === null;
+  qs("#workspace-reset-pack").hidden = locked || pack === null || pack.capturedCount === 0;
+  qsa("[data-reset-workspace-asset]").forEach((button) => { button.hidden = locked; });
 }
 
 function workspaceAssetStatus(asset) {
@@ -777,8 +780,12 @@ function renderPackWorkspace() {
       <td><span class="workspace-status ${className}">${escapeHtml(status)}</span></td>
       <td>${asset.revisions > 0 ? `REV ${asset.revisions}` : "—"}</td>
       <td>${escapeHtml(asset.capturedAt ?? "—")}</td>
+      <td>${asset.captured ? `<button class="danger-action compact-action" type="button" data-reset-workspace-asset="${escapeAttribute(asset.id)}">RESET</button>` : ""}</td>
     </tr>`;
   }).join("");
+  qsa("[data-reset-workspace-asset]").forEach((button) => {
+    button.addEventListener("click", () => void resetWorkspaceAsset(button.dataset.resetWorkspaceAsset));
+  });
 
   const asset = selectedWorkspaceAsset();
   if (state.packPreview === null && !state.packBusy) {
@@ -895,6 +902,83 @@ async function discardPackPreview() {
   }
 }
 
+async function resetWorkspaceAsset(assetId) {
+  const pack = selectedWorkspacePack();
+  const asset = pack?.assets.find((candidate) => candidate.id === assetId) ?? null;
+  if (pack === null || asset === null || !asset.captured || state.packBusy || state.packPreview !== null) return;
+  const confirmed = window.confirm(
+    `Reset ${asset.id.toUpperCase()} in ${pack.displayName}?\n\n` +
+    `This discards its current Analysis and all ${asset.revisions} revision${asset.revisions === 1 ? "" : "s"}, then returns the Asset to Remaining Required. The Archive is not affected.`,
+  );
+  if (!confirmed) return;
+
+  clearMessage();
+  state.packBusy = true;
+  qs("#workspace-review-state").textContent = `RESETTING ${asset.id.toUpperCase()}`;
+  updateWorkspacePreviewButton();
+  try {
+    const result = await api(
+      `/api/v1/pack-workspace/packs/${encodeURIComponent(pack.id)}/assets/${encodeURIComponent(asset.id)}/reset`,
+      {
+        method: "POST",
+        body: JSON.stringify({ confirmation: "reset_asset", expectedRevisions: asset.revisions }),
+      },
+    );
+    await loadPackWorkspace();
+    qs("#workspace-review-state").textContent = `${asset.id.toUpperCase()} RESET`;
+    showMessage(
+      result.stagingCleared
+        ? `${asset.id.toUpperCase()} was reset and returned to Remaining Required. The Archive was untouched.`
+        : `${asset.id.toUpperCase()} was reset, but its staged-file cleanup could not be verified. Do not publish until storage is inspected.`,
+      !result.stagingCleared,
+    );
+  } catch (error) {
+    qs("#workspace-review-state").textContent = "RESET NOT APPLIED";
+    showMessage(error.message);
+    await loadPackWorkspace().catch(() => undefined);
+  } finally {
+    state.packBusy = false;
+    updateWorkspacePreviewButton();
+  }
+}
+
+async function resetWorkspacePack() {
+  const pack = selectedWorkspacePack();
+  if (pack === null || pack.capturedCount === 0 || state.packBusy || state.packPreview !== null) return;
+  const capturedAssetIds = pack.assets.filter((asset) => asset.captured).map((asset) => asset.id);
+  const confirmed = window.confirm(
+    `Reset the ${pack.displayName} Pack?\n\n` +
+    `This discards ${capturedAssetIds.length} current Analys${capturedAssetIds.length === 1 ? "is" : "es"} (${capturedAssetIds.map((id) => id.toUpperCase()).join(", ")}) and returns the Pack to Empty. The Archive is not affected.`,
+  );
+  if (!confirmed) return;
+
+  clearMessage();
+  state.packBusy = true;
+  qs("#workspace-review-state").textContent = `RESETTING ${pack.displayName.toUpperCase()}`;
+  updateWorkspacePreviewButton();
+  try {
+    const result = await api(`/api/v1/pack-workspace/packs/${encodeURIComponent(pack.id)}/reset`, {
+      method: "POST",
+      body: JSON.stringify({ confirmation: "reset_pack", expectedCapturedAssetIds: capturedAssetIds }),
+    });
+    await loadPackWorkspace();
+    qs("#workspace-review-state").textContent = `${pack.displayName.toUpperCase()} RESET`;
+    showMessage(
+      result.stagingCleared
+        ? `${pack.displayName} was reset to Empty. ${result.resetAssetIds.length} current Analyses were discarded; the Archive was untouched.`
+        : `${pack.displayName} was reset to Empty, but staged-file cleanup could not be verified. Do not publish until storage is inspected.`,
+      !result.stagingCleared,
+    );
+  } catch (error) {
+    qs("#workspace-review-state").textContent = "RESET NOT APPLIED";
+    showMessage(error.message);
+    await loadPackWorkspace().catch(() => undefined);
+  } finally {
+    state.packBusy = false;
+    updateWorkspacePreviewButton();
+  }
+}
+
 qsa("[data-view]").forEach((button) => button.addEventListener("click", () => {
   qsa("[data-view]").forEach((item) => item.removeAttribute("aria-current"));
   button.setAttribute("aria-current", "page");
@@ -936,6 +1020,7 @@ qs("#workspace-source").addEventListener("change", (event) => {
 qs("#workspace-preview-button").addEventListener("click", () => void runPackPreview());
 qs("#workspace-accept").addEventListener("click", () => void acceptPackPreview());
 qs("#workspace-discard").addEventListener("click", () => void discardPackPreview());
+qs("#workspace-reset-pack").addEventListener("click", () => void resetWorkspacePack());
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";

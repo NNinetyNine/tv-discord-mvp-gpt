@@ -95,6 +95,12 @@ export interface Workspace {
   capturedFor(packId: string): readonly AssetCapture[];
 
   /**
+   * Discard one Asset's current Analysis (§4.7), including its revision
+   * history. Returns true when a capture existed and was removed.
+   */
+  resetAsset(assetId: string): boolean;
+
+  /**
    * End one pack's instance (§4.7 reset / the post-publish workspace reset of
    * §4.5): clears captures — including revision history — for that pack's
    * definition members ONLY. Captures for other packs' assets, held work, and
@@ -220,6 +226,11 @@ export function createWorkspace(
         if (rec !== undefined) out.push(rec);
       }
       return out;
+    },
+
+    resetAsset(assetId: string): boolean {
+      assertNonEmpty("assetId", assetId);
+      return captured.delete(assetId);
     },
 
     resetPack(packId: string): void {

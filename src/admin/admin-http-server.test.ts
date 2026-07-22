@@ -238,6 +238,97 @@ describe("Admin HTTP server", () => {
       artifactReady: true,
       revisions: 2,
     });
+
+    const unconfirmedAssetReset = await jsonRequest(
+      server.url,
+      "/api/v1/pack-workspace/packs/crypto/assets/btc/reset",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: "", expectedRevisions: 2 }),
+      },
+    );
+    expect(unconfirmedAssetReset.response.status).toBe(400);
+    expect(unconfirmedAssetReset.body.error.code).toBe("pack_workspace_reset_confirmation_invalid");
+
+    const staleAssetReset = await jsonRequest(
+      server.url,
+      "/api/v1/pack-workspace/packs/crypto/assets/btc/reset",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: "reset_asset", expectedRevisions: 1 }),
+      },
+    );
+    expect(staleAssetReset.response.status).toBe(409);
+    expect(staleAssetReset.body.error.code).toBe("pack_workspace_reset_state_conflict");
+    expect(await readFile(join(service.packRenders.stagingRoot, "active", "btc.png"))).toEqual(secondPublication);
+
+    const assetReset = await jsonRequest(
+      server.url,
+      "/api/v1/pack-workspace/packs/crypto/assets/btc/reset",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: "reset_asset", expectedRevisions: 2 }),
+      },
+    );
+    expect(assetReset.body.data).toMatchObject({
+      outcome: "asset_reset",
+      resetAssetIds: ["btc"],
+      packState: "empty",
+      capturedCount: 0,
+      stagedArtifactCount: 1,
+      stagingCleared: true,
+      effects: { workspaceChanged: true, stagingCleared: true, released: false, discordContacted: false },
+    });
+    expect(await readdir(join(service.packRenders.stagingRoot, "active"))).toEqual([]);
+    const afterAssetReset = await jsonRequest(server.url, "/api/v1/pack-workspace");
+    expect(afterAssetReset.body.data.packs.find((pack: any) => pack.id === "crypto").assets.find((asset: any) => asset.id === "btc")).toMatchObject({
+      captured: false,
+      artifactReady: false,
+      revisions: 0,
+    });
+
+    const third = await preview("2026-07-24");
+    expect(third.nextRevision).toBe(1);
+    const thirdAccepted = await jsonRequest(server.url, `/api/v1/pack-workspace/previews/${third.previewId}/accept`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    expect(thirdAccepted.body.data).toMatchObject({ revisions: 1, capturedCount: 1, packState: "building" });
+
+    const stalePackReset = await jsonRequest(
+      server.url,
+      "/api/v1/pack-workspace/packs/crypto/reset",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: "reset_pack", expectedCapturedAssetIds: [] }),
+      },
+    );
+    expect(stalePackReset.response.status).toBe(409);
+    expect(stalePackReset.body.error.code).toBe("pack_workspace_reset_state_conflict");
+
+    const packReset = await jsonRequest(
+      server.url,
+      "/api/v1/pack-workspace/packs/crypto/reset",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: "reset_pack", expectedCapturedAssetIds: ["btc"] }),
+      },
+    );
+    expect(packReset.body.data).toMatchObject({
+      outcome: "pack_reset",
+      resetAssetIds: ["btc"],
+      packState: "empty",
+      capturedCount: 0,
+      stagedArtifactCount: 1,
+      stagingCleared: true,
+      effects: { workspaceChanged: true, stagingCleared: true, released: false, discordContacted: false },
+    });
+    expect(await readdir(join(service.packRenders.stagingRoot, "active"))).toEqual([]);
+    const afterPackReset = await jsonRequest(server.url, "/api/v1/pack-workspace");
+    expect(afterPackReset.body.data.packs.find((pack: any) => pack.id === "crypto")).toMatchObject({ state: "empty", capturedCount: 0 });
+
     const after = await Promise.all(canonicalPaths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
     expect(after).toEqual(before);
   });
