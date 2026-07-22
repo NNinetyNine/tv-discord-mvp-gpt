@@ -6,12 +6,12 @@
  * transforms are identity-preserving for every input: they change a symbol's
  * representation but never which asset it denotes.
  *
- * Anything semantic — exchange prefixes, quote-currency suffixes, futures
- * markers, separator styles, punctuation differences — is NOT handled here. Such
- * mappings are declared registry DATA (`tradingViewAliases`) and matched by the
- * registry's combined-namespace lookup, not by translating symbols in code. This
- * keeps the resolver a pure lookup and makes every "this export name means that
- * asset" decision an explicit, validated, collision-checked piece of data.
+ * Anything semantic — quote-currency suffixes, futures markers, separator
+ * styles, or punctuation differences — is NOT handled here. The Registry owns
+ * filename identity: a qualified canonical TradingView value contributes its
+ * instrument segment (`CRYPTO:BTCUSD` -> `BTCUSD`), while temporary historical
+ * mappings remain explicit `tradingViewAliases`. Both are validated in one
+ * collision-checked filename namespace.
  *
  * (The earlier provisional rule that kept only the segment after the last
  * underscore was semantic translation and has been removed: it mis-resolved

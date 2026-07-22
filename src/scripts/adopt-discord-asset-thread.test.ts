@@ -81,6 +81,7 @@ function fixture(
     }),
     loadRegistry: () => ({
       lookupByTradingView: () => null,
+      lookupByFilenameSymbol: () => null,
       all: () => Object.freeze([
         Object.freeze({
           id: "btc",

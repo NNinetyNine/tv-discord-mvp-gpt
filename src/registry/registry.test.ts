@@ -27,6 +27,47 @@ describe("registry — reverse lookup", () => {
     expect(reg.all().map((a) => a.id).sort()).toEqual(["aapl", "btc", "eth", "spx"]);
   });
 });
+describe("registry — canonical filename-symbol lookup", () => {
+  it("resolves a qualified canonical identity by its instrument token without an alias", () => {
+    const reg = buildRegistry(
+      { btc: { tradingView: "CRYPTO:BTCUSD", display: "Bitcoin / U.S. Dollar", currency: "USD", channel: "crypto" } },
+      channels,
+    );
+    expect(reg.lookupByTradingView("CRYPTO:BTCUSD")?.id).toBe("btc");
+    expect(reg.lookupByTradingView("BTCUSD")).toBeNull();
+    expect(reg.lookupByFilenameSymbol("BTCUSD")?.id).toBe("btc");
+    expect(reg.lookupByFilenameSymbol("crypto:btcusd")?.id).toBe("btc");
+  });
+
+  it("keeps temporary aliases in the filename namespace", () => {
+    const reg = buildRegistry(
+      { eth: { tradingView: "ETH", display: "Ethereum", channel: "crypto", tradingViewAliases: ["ETHUSD"] } },
+      channels,
+    );
+    expect(reg.lookupByFilenameSymbol("ethusd")?.id).toBe("eth");
+  });
+
+  it("rejects qualified canonical identities with the same export instrument", () => {
+    expect(() => buildRegistry(
+      {
+        one: { tradingView: "NASDAQ:ABC", display: "One", channel: "stocks" },
+        two: { tradingView: "NYSE:ABC", display: "Two", channel: "stocks" },
+      },
+      channels,
+    )).toThrow(/duplicate filename symbol "ABC"/);
+  });
+
+  it("rejects an alias that collides with a qualified canonical instrument", () => {
+    expect(() => buildRegistry(
+      {
+        one: { tradingView: "NASDAQ:ABC", display: "One", channel: "stocks" },
+        two: { tradingView: "XYZ", display: "Two", channel: "stocks", tradingViewAliases: ["ABC"] },
+      },
+      channels,
+    )).toThrow(/duplicate filename symbol "ABC"/);
+  });
+});
+
 describe("registry — validation (fails loudly)", () => {
   it("throws on duplicate TradingView symbols", () => {
     expect(() =>
@@ -74,6 +115,15 @@ describe("registry — real config loads and validates", () => {
       resolve(process.cwd(), "config", "channels.json"),
     );
     expect(reg.all().length).toBeGreaterThan(0);
+    const btc = reg.lookupByTradingView("CRYPTO:BTCUSD");
+    expect(btc).toMatchObject({
+      id: "btc",
+      display: "Bitcoin / U.S. Dollar",
+      currency: "USD",
+      channel: "crypto",
+    });
+    expect(btc?.tradingViewAliases).toBeUndefined();
+    expect(reg.lookupByFilenameSymbol("BTCUSD")?.id).toBe("btc");
   });
 });
 describe("registry — tradingViewAliases", () => {

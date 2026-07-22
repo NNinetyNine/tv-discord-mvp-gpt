@@ -1,17 +1,19 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import type { Asset } from "../types.ts";
-import { validatePublicationCurrency } from "./asset-market-identity.ts";
+import { isQualifiedTradingViewSymbol, validatePublicationCurrency } from "./asset-market-identity.ts";
 /**
- * Asset registry. Keyed by stable internal id (e.g. "btc"); the `tradingView`
- * field is what filenames resolve against, and `tradingViewAliases` lists
- * additional TradingView symbols that also denote the asset. Validated loudly on
- * load, with an O(1) reverse index built once over the combined
- * {tradingView} ∪ tradingViewAliases namespace.
+ * Asset registry. Keyed by stable internal id (e.g. "btc"); `tradingView` is
+ * the canonical TradingView identity, while `tradingViewAliases` retains
+ * temporary compatibility tokens for historical definitions.
  *
- * This module knows NOTHING about filenames or parsing — it does exact lookups
- * on a normalized TradingView symbol the resolver hands it. It performs no
- * business translation: alternate symbols are declared DATA (aliases), not
- * algorithmic rules.
+ * The registry owns two validated O(1) indexes:
+ * - exact TradingView identity/alias lookup; and
+ * - filename-symbol lookup, where a qualified canonical identity such as
+ *   `CRYPTO:BTCUSD` contributes the deterministic export token `BTCUSD`.
+ *
+ * The filename namespace is collision-checked across canonical identities,
+ * derived instrument tokens, and aliases so resolution can never select an
+ * arbitrary owner.
  */
 export class RegistryError extends Error {
   constructor(message: string) {
@@ -21,10 +23,14 @@ export class RegistryError extends Error {
 }
 export interface Registry {
   /**
-   * Exact lookup by TradingView symbol (already normalized by the resolver).
-   * Matches the canonical `tradingView` token OR any `tradingViewAlias`.
+   * Exact lookup by canonical TradingView identity or a temporary legacy alias.
    */
   lookupByTradingView(symbol: string): Asset | null;
+  /**
+   * Lookup for a normalized filename token. Qualified canonical identities are
+   * addressable by both their full value and their instrument segment.
+   */
+  lookupByFilenameSymbol(symbol: string): Asset | null;
   /** All assets (e.g. for future listing). */
   all(): readonly Asset[];
 }
@@ -38,15 +44,23 @@ interface RawEntry {
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
 }
+
+function canonicalInstrumentToken(tradingView: string): string {
+  if (!isQualifiedTradingViewSymbol(tradingView)) return tradingView;
+  return tradingView.slice(tradingView.indexOf(":") + 1);
+}
 /**
  * Build a validated Registry from already-parsed data. Pure (no I/O) so tests
  * can exercise validation without touching disk.
  *
- * Collision rule: across ALL assets, the combined namespace of every canonical
- * `tradingView` token plus every `tradingViewAlias` must be unique (compared
- * case-insensitively). Any symbol claimed twice — by two assets, by an alias
- * and another asset's token, by a duplicate alias within one asset, or by an
- * alias equal to its own canonical token (self-alias) — is a RegistryError.
+ * Collision rules (case-insensitive):
+ * - exact canonical `tradingView` values and aliases share one namespace; and
+ * - filename symbols share a second namespace containing each canonical value,
+ *   each qualified canonical instrument token, and every alias.
+ *
+ * A collision in either namespace is a RegistryError. In particular,
+ * `NASDAQ:ABC` and `NYSE:ABC` cannot coexist because both would export as
+ * `ABC_...png`; nor may an alias claim another Asset's derived instrument.
  *
  * @param raw       registry object: id -> entry
  * @param channels  channel-name -> discord id map (to validate channel refs)
@@ -57,8 +71,10 @@ export function buildRegistry(
 ): Registry {
   const assets: Asset[] = [];
   const seenIds = new Set<string>();
-  const seenTradingView = new Map<string, string>(); // UPPER(symbol) -> owning id (combined namespace)
+  const seenTradingView = new Map<string, string>(); // UPPER(symbol) -> owning id (exact identity/alias namespace)
+  const seenFilenameSymbol = new Map<string, string>(); // UPPER(symbol) -> owning id (filename namespace)
   const byTradingView = new Map<string, Asset>();
+  const byFilenameSymbol = new Map<string, Asset>();
   for (const [id, entry] of Object.entries(raw)) {
     if (!isNonEmptyString(id)) {
       throw new RegistryError("asset id must be a non-empty string");
@@ -122,10 +138,24 @@ export function buildRegistry(
     seenIds.add(id);
     seenTradingView.set(tvKey, id);
     byTradingView.set(tvKey, asset);
-    // Claim each alias in the SAME namespace as canonical tokens. A collision
-    // with any prior symbol — another asset's token/alias, this asset's own
-    // canonical token (self-alias, already claimed just above), or an earlier
-    // duplicate of this alias within the same asset — is rejected loudly.
+
+    const filenameSymbols = [tv];
+    const instrument = canonicalInstrumentToken(tv);
+    if (instrument.toUpperCase() !== tvKey) filenameSymbols.push(instrument);
+    for (const symbol of filenameSymbols) {
+      const key = symbol.toUpperCase();
+      if (seenFilenameSymbol.has(key)) {
+        throw new RegistryError(
+          `duplicate filename symbol "${symbol}" on ids "${seenFilenameSymbol.get(key)}" and "${id}"`,
+        );
+      }
+      seenFilenameSymbol.set(key, id);
+      byFilenameSymbol.set(key, asset);
+    }
+
+    // Claim each alias in BOTH exact and filename namespaces. A collision with
+    // a canonical identity, a derived canonical instrument, another alias, or
+    // a redundant alias on this same Asset is rejected loudly.
     if (aliases) {
       for (const a of aliases) {
         const aKey = a.toUpperCase();
@@ -134,8 +164,15 @@ export function buildRegistry(
             `duplicate TradingView symbol "${a}" (alias of "${id}") already used by "${seenTradingView.get(aKey)}"`,
           );
         }
+        if (seenFilenameSymbol.has(aKey)) {
+          throw new RegistryError(
+            `duplicate filename symbol "${a}" (alias of "${id}") already used by "${seenFilenameSymbol.get(aKey)}"`,
+          );
+        }
         seenTradingView.set(aKey, id);
         byTradingView.set(aKey, asset);
+        seenFilenameSymbol.set(aKey, id);
+        byFilenameSymbol.set(aKey, asset);
       }
     }
     assets.push(asset);
@@ -146,6 +183,9 @@ export function buildRegistry(
   return {
     lookupByTradingView(symbol: string): Asset | null {
       return byTradingView.get(symbol.toUpperCase()) ?? null;
+    },
+    lookupByFilenameSymbol(symbol: string): Asset | null {
+      return byFilenameSymbol.get(symbol.toUpperCase()) ?? null;
     },
     all(): readonly Asset[] {
       return assets;

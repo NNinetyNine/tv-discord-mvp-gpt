@@ -41,8 +41,14 @@ interface SourceFixture {
   readonly packs: readonly Pack[];
 }
 
-function sourceFixture(channelsOverride?: Readonly<Record<string, unknown>>): SourceFixture {
-  const registryBytes = readFileSync(resolve("definitions/registry.json"));
+function sourceFixture(
+  channelsOverride?: Readonly<Record<string, unknown>>,
+  transformRegistryText?: (text: string) => string,
+): SourceFixture {
+  const sourceRegistryBytes = readFileSync(resolve("definitions/registry.json"));
+  const registryBytes = transformRegistryText === undefined
+    ? sourceRegistryBytes
+    : Buffer.from(transformRegistryText(sourceRegistryBytes.toString("utf8")), "utf8");
   const packsBytes = readFileSync(resolve("definitions/packs.json"));
   const baseChannels = JSON.parse(readFileSync(resolve("config/channels.json"), "utf8")) as Record<string, unknown>;
   const channels = Object.freeze({ ...baseChannels, ...(channelsOverride ?? {}) });
@@ -65,6 +71,7 @@ interface ArtifactOptions {
   readonly decision?: "approved" | "rejected";
   readonly placements?: AssetRegistrationApplicationAuthorization["packPlacements"];
   readonly fixture?: SourceFixture;
+  readonly proposedCurrency?: string;
 }
 
 function artifacts(options: ArtifactOptions = {}) {
@@ -103,7 +110,7 @@ function artifacts(options: ArtifactOptions = {}) {
         symbol: "AAPL",
         market: "NASDAQ",
         tradingViewSymbol: "NASDAQ:AAPL",
-        currency: "USD",
+        currency: options.proposedCurrency ?? "USD",
         channel: current?.channel ?? "stocks",
       },
       targetPackIds: [],
@@ -409,10 +416,26 @@ describe("Asset registration source-change generation", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const registry = JSON.parse(result.registryAfterBytes.toString("utf8")) as Record<string, Record<string, unknown>>;
-    expect(registry.aapl).toEqual({ tradingView: "NASDAQ:AAPL", display: "Apple Updated", channel: "stocks" });
+    expect(registry.aapl).toEqual({ tradingView: "NASDAQ:AAPL", display: "Apple Updated", currency: "USD", channel: "stocks" });
     expect(result.packsAfterBytes.equals(value.fixture.packsBytes)).toBe(true);
     expect(result.patchBytes.toString("utf8")).not.toContain('"market"');
-    expect(result.patchBytes.toString("utf8")).not.toContain('"currency"');
+    expect(result.patchBytes.toString("utf8")).toContain('+  "aapl": { "tradingView": "NASDAQ:AAPL",   "display": "Apple Updated",       "currency": "USD", "channel": "stocks" },');
+  });
+
+  test("update_identity replaces an existing canonical currency", () => {
+    const fixture = sourceFixture(undefined, (text) => text
+      .split("\n")
+      .map((line) => line.trimStart().startsWith('"aapl":')
+        ? line.replace('"channel": "stocks"', '"currency": "EUR", "channel": "stocks"')
+        : line)
+      .join("\n"));
+    const value = artifacts({ operation: "update_identity", assetId: "aapl", fixture, proposedCurrency: "GBP" });
+    const result = generate(value);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const registry = JSON.parse(result.registryAfterBytes.toString("utf8")) as Record<string, Record<string, unknown>>;
+    expect(registry.aapl?.currency).toBe("GBP");
+    expect(result.registryAfterBytes.toString("utf8")).toContain('"display": "Apple Updated",       "currency": "GBP", "channel": "stocks"');
   });
 
   test("duplicate Registry source entries fail closed", () => {

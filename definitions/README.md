@@ -12,7 +12,7 @@ The asset registry, keyed by a stable internal `id` (e.g. `btc`). Internal IDs
 are intended to stay stable even if a TradingView symbol changes later. Each
 entry has:
 
-- `tradingView` — the symbol as extracted from our Discord cashtags
+- `tradingView` — the canonical TradingView identity, preferably qualified as `MARKET:INSTRUMENT`
 - `display` — human-readable name
 - `currency` — optional canonical chart currency. Historical Assets may omit it; every Asset created through the task-oriented Pack builder must provide it explicitly. Currency is never inferred or defaulted.
 - `channel` — the single grouping field (see `config/channels.json`)
@@ -23,15 +23,14 @@ Entries are grouped by channel for easier review. New entries are appended witho
 
 The ordered pack definitions (array order is the publishing/workflow order).
 
-## Not yet reconciled
+## Reconciliation state
 
-The `tradingView` values are the symbols **exactly as extracted from Discord**.
-They have NOT been reconciled against the real filenames TradingView produces
-when a chart snapshot is downloaded, and may differ — for example a Discord
-`BTC` cashtag may download as `BTCUSD`, and symbols containing `_`, `.`, or `!`
-(e.g. `NOVO_B`, `BRK.B`, `HG1!`) may be sanitized differently. Filename
-reconciliation is a **later phase**; until then, treat `tradingView` as
-provisional.
+Qualified canonical identities resolve downloaded filenames through their
+instrument segment (`CRYPTO:BTCUSD` resolves `BTCUSD_...png`). The Registry
+rejects duplicate instrument tokens so two markets cannot silently claim the
+same export filename. Historical `tradingViewAliases` remain temporary
+compatibility data for Assets that have not yet been reconciled; new workflows
+should supply the exact qualified TradingView ticker instead of creating aliases.
 
 ## Known exclusions
 

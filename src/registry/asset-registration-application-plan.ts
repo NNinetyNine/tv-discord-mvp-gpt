@@ -325,11 +325,7 @@ function proposedAssetAsRegistryAsset(
     id: proposed.id,
     tradingView: proposed.tradingViewSymbol,
     display: proposed.displayName,
-    ...(existing === undefined
-      ? { currency: proposed.currency }
-      : existing.currency === undefined
-        ? {}
-        : { currency: existing.currency }),
+    currency: proposed.currency,
     channel: proposed.channel,
     ...(existing?.tradingViewAliases === undefined
       ? {}

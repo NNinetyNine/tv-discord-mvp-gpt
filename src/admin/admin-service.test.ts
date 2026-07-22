@@ -27,15 +27,15 @@ describe("AdminService", () => {
       registryAssetCount: 131,
       packCount: 5,
       packMembershipCount: 131,
-      registryFingerprint: "2ba08b1d9454f321a40eb1be90ca52653fea61d71c4be2a62ce9c092533c63b9",
-      auditGapCount: 262,
+      registryFingerprint: "2cc98138471949ac3da3411840fa0ef77c0a91e06f31a851e64259f696af4d9b",
+      auditGapCount: 260,
     });
   });
 
   it("reports exact canonical source hashes", async () => {
     const service = await createService();
     expect(service.status()).toMatchObject({
-      registrySourceSha256: "1da65e9cade5d5dd516e726787ac9a9ac8f916543de35ccb9d823bd2bb4b1286",
+      registrySourceSha256: "20c060e458285aa51dd38764a3b56516ba2ae35c44d05b58e283f1a76747d6cc",
       packSourceSha256: "29a8284033f1c67466f7a50b54a64d208e72e8dcce25e1cd897a650bdbc3c0b4",
       channelConfigurationSha256: "11bda2d95b9a93497c673f400bd78fd0215df18a02b2915089e397c13e5b0aad",
     });

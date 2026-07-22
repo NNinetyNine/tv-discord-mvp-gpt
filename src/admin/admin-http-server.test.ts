@@ -55,8 +55,8 @@ describe("Admin HTTP server", () => {
       registryAssetCount: 131,
       packCount: 5,
       packMembershipCount: 131,
-      auditGapCount: 262,
-      registrySourceSha256: "1da65e9cade5d5dd516e726787ac9a9ac8f916543de35ccb9d823bd2bb4b1286",
+      auditGapCount: 260,
+      registrySourceSha256: "20c060e458285aa51dd38764a3b56516ba2ae35c44d05b58e283f1a76747d6cc",
     });
   });
 

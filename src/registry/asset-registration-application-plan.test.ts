@@ -285,10 +285,19 @@ describe("Asset registration application planning schemaVersion 2", () => {
       asset: { ...ADD_INPUT.asset, id: "aem", displayName: "Agnico Eagle Mines", symbol: "AEM", market: "NYSE", tradingViewSymbol: "NYSE:AEM", channel: "stocks" },
       expectedCurrent: { display: "Agnico Eagle Mines", tradingView: "AEM", channel: "stocks" },
     };
-    expect(planFor(proposalFor(updateInput))).toMatchObject({
+    const result = planFor(proposalFor(updateInput));
+    expect(result).toMatchObject({
       ok: true,
-      plan: { operations: [{ type: "update_asset_identity", asset: { id: "aem", channel: "stocks" } }] },
+      plan: { operations: [{ type: "update_asset_identity", asset: { id: "aem", currency: "USD", channel: "stocks" } }] },
     });
+    if (result.ok) {
+      const expectedAssets = ASSETS.map((asset) => asset.id === "aem"
+        ? Object.freeze({ ...asset, tradingView: "NYSE:AEM", display: "Agnico Eagle Mines", currency: "USD" })
+        : asset);
+      expect(result.plan.simulatedResult.registryFingerprintAfter).toBe(
+        computeAssetRegistrationRegistryFingerprint(expectedAssets, PACKS),
+      );
+    }
     expect(() => proposalFor({ ...updateInput, asset: { ...updateInput.asset, channel: "crypto" } })).toThrow("channel_change_not_authorized");
   });
 

@@ -24,7 +24,7 @@ export function createResolver(registry: Registry): Resolver {
       }
 
       const symbol = normalizeSymbol(token);
-      const asset = registry.lookupByTradingView(symbol);
+      const asset = registry.lookupByFilenameSymbol(symbol);
       if (asset === null) {
         return { ok: false, reason: "unknown_symbol", symbol };
       }

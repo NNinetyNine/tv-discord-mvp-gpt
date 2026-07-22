@@ -13,7 +13,7 @@
   "sol":  { "tradingView": "SOL",    "tradingViewAliases": ["SOLUSD"],    "display": "Solana",      "channel": "crypto" },
   "hype": { "tradingView": "HYPE",   "tradingViewAliases": ["HYPEHUSD"],  "display": "Hyperliquid", "channel": "crypto" },
   "eth":  { "tradingView": "ETH",    "tradingViewAliases": ["ETHUSD"],    "display": "Ethereum",    "channel": "crypto" },
-  "btc":  { "tradingView": "BTC",    "tradingViewAliases": ["BTCUSD"],    "display": "Bitcoin",     "channel": "crypto" },
+  "btc":  { "tradingView": "CRYPTO:BTCUSD", "display": "Bitcoin / U.S. Dollar", "currency": "USD", "channel": "crypto" },
   "total3": { "tradingView": "TOTAL3", "display": "Crypto Total Market Cap Ex BTC/ETH", "channel": "crypto" },
 
   "moh":  { "tradingView": "MOH",    "display": "Molina Healthcare", "channel": "stocks" },

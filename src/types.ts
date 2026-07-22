@@ -85,14 +85,12 @@ export type Publisher = (
 export interface Asset {
   /** Stable internal identifier, e.g. "aapl". */
   readonly id: string;
-  /** Canonical TradingView filename token used for resolution, e.g. "AAPL". */
+  /** Canonical TradingView identity, preferably qualified, e.g. "NASDAQ:AAPL". */
   readonly tradingView: string;
   /**
-   * Alternate TradingView symbols that also denote this asset (e.g. "BTCUSD"
-   * for canonical "BTC"). Mechanism-independent — these are TradingView's names
-   * for the asset, whether carried by a filename export or a future browser/CDP
-   * source. Optional; assets with no alternates omit it. buildRegistry validates
-   * the combined {tradingView} ∪ tradingViewAliases namespace for collisions.
+   * Temporary compatibility tokens for historical definitions whose downloaded
+   * filename cannot yet be reached from the canonical identity. New workflows
+   * do not need aliases when supplied an exact qualified TradingView ticker.
    */
   readonly tradingViewAliases?: readonly string[];
   /** Human-readable display name. */

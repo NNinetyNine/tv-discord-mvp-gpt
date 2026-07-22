@@ -5,7 +5,7 @@ import { createResolver } from "./index.ts";
 
 const channels = { crypto: "", stocks: "", indices: "" };
 const fixture = {
-  btc:  { tradingView: "BTCUSD", display: "Bitcoin",  channel: "crypto" },
+  btc:  { tradingView: "CRYPTO:BTCUSD", display: "Bitcoin / U.S. Dollar", currency: "USD", channel: "crypto" },
   eth:  { tradingView: "ETHUSD", display: "Ethereum", channel: "crypto" },
   aapl: { tradingView: "AAPL",   display: "Apple",    channel: "stocks" },
   spx:  { tradingView: "SPX",    display: "S&P 500",  channel: "indices" },
@@ -14,6 +14,7 @@ const fixture = {
   // With formatting-only normalization, "NOVO_B" resolves to novob (not b).
   novob: { tradingView: "NOVO_B", display: "Novo Nordisk", channel: "stocks" },
   b:     { tradingView: "B",      display: "Barrick Mining", channel: "stocks" },
+  legacy: { tradingView: "LEGACY", tradingViewAliases: ["LEGACYUSD"], display: "Legacy", channel: "crypto" },
 };
 const resolver = createResolver(buildRegistry(fixture, channels));
 
@@ -29,7 +30,10 @@ describe("resolver — real filenames resolve to assets", () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.asset.id).toBe("btc");
-      expect(r.asset.display).toBe("Bitcoin");
+      expect(r.asset.display).toBe("Bitcoin / U.S. Dollar");
+      expect(r.asset.tradingView).toBe("CRYPTO:BTCUSD");
+      expect(r.asset.currency).toBe("USD");
+      expect(r.asset.tradingViewAliases).toBeUndefined();
       expect(r.asset.channel).toBe("crypto");
     }
   });
@@ -38,6 +42,12 @@ describe("resolver — real filenames resolve to assets", () => {
     const r = resolver.resolve("btcusd_2026-06-25_01-18-55.png");
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.asset.id).toBe("btc");
+  });
+
+  it("temporary legacy aliases still resolve", () => {
+    const r = resolver.resolve("LEGACYUSD_2026-06-25_01-21-06.png");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.asset.id).toBe("legacy");
   });
 
   it("SPX_<stamp>.png -> spx (real export form, no exchange prefix)", () => {

@@ -369,6 +369,29 @@ function replaceSingleJsonStringProperty(
   return line.replace(pattern, `$1${JSON.stringify(value)}`);
 }
 
+function upsertSingleJsonStringPropertyBefore(
+  line: string,
+  property: string,
+  value: string,
+  beforeProperty: string,
+): string | AssetRegistrationSourceChangeFailure {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const pattern = new RegExp(`("${escaped}"\\s*:\\s*)"(?:\\\\.|[^"\\\\])*"`, "gu");
+  const matches = [...line.matchAll(pattern)];
+  if (matches.length > 1) {
+    return failure("source_shape_unsupported", `Asset source line must contain at most one ${property} string field`);
+  }
+  if (matches.length === 1) return line.replace(pattern, `$1${JSON.stringify(value)}`);
+
+  const escapedBefore = beforeProperty.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const beforePattern = new RegExp(`"${escapedBefore}"\\s*:`, "gu");
+  const beforeMatches = [...line.matchAll(beforePattern)];
+  if (beforeMatches.length !== 1) {
+    return failure("source_shape_unsupported", `Asset source line must contain exactly one ${beforeProperty} field to insert ${property}`);
+  }
+  return line.replace(beforePattern, `${JSON.stringify(property)}: ${JSON.stringify(value)}, $&`);
+}
+
 function transformRegistrySource(
   state: ParsedSourceState,
   plan: AssetRegistrationApplicationPlanV2,
@@ -423,7 +446,22 @@ function transformRegistrySource(
     if (!isRecord(currentEntry)) {
       return failure("stale_asset_state", `Asset ${asset.id} is absent or malformed in Registry source`);
     }
-    const nextEntry = { ...currentEntry, tradingView: asset.tradingViewSymbol, display: asset.displayName, channel: asset.channel };
+    const nextEntry: Record<string, unknown> = {};
+    const hasCurrency = Object.prototype.hasOwnProperty.call(currentEntry, "currency");
+    for (const [key, value] of Object.entries(currentEntry)) {
+      if (key === "tradingView") {
+        nextEntry[key] = asset.tradingViewSymbol;
+      } else if (key === "display") {
+        nextEntry[key] = asset.displayName;
+      } else if (key === "currency") {
+        nextEntry[key] = asset.currency;
+      } else if (key === "channel") {
+        if (!hasCurrency) nextEntry.currency = asset.currency;
+        nextEntry[key] = asset.channel;
+      } else {
+        nextEntry[key] = value;
+      }
+    }
     candidate = { ...current, [asset.id]: nextEntry };
     try {
       buildRegistry(candidate as Parameters<typeof buildRegistry>[0], state.channels as Record<string, unknown>);
@@ -444,6 +482,9 @@ function transformRegistrySource(
     const display = replaceSingleJsonStringProperty(line, "display", asset.displayName);
     if (typeof display !== "string") return display;
     line = display;
+    const currency = upsertSingleJsonStringPropertyBefore(line, "currency", asset.currency, "channel");
+    if (typeof currency !== "string") return currency;
+    line = currency;
     const channel = replaceSingleJsonStringProperty(line, "channel", asset.channel);
     if (typeof channel !== "string") return channel;
     lines[lineIndex] = channel;
