@@ -25,6 +25,31 @@ The source fails closed if it is not a regular non-symlink file, does not match
 the supported schema, references an unknown Pack or non-member Asset, or maps
 one Discord thread to more than one Pack Asset.
 
+## Pack routing readiness
+
+Coverage is necessary but is not proof that a destination still works. Once a
+Pack has a configured forum and one persistent binding for every member, the UI
+enables **Verify Pack Routing**. This is a separately confirmed, read-only gate.
+
+The verifier:
+
+1. snapshots the governed binding file;
+2. fails before Discord contact if any Pack binding is missing, malformed, or
+   duplicated;
+3. opens one short-lived Discord session;
+4. inspects every bound destination sequentially in canonical Pack order;
+5. requires each thread to exist, report the expected identity, remain in the
+   Pack's configured forum, and be active and unlocked;
+6. closes the session and rereads the binding file;
+7. discards the result if binding custody changed during inspection.
+
+Missing or inaccessible threads, wrong-parent threads, archived threads,
+locked threads, and unknown archive or lock state are visible per-Asset
+blockers. A session-close failure also withholds readiness. Verification does
+not edit Discord content or bindings and does not stage or publish a chart or
+create a Release. Its result is intentionally transient and is invalidated
+when the binding source changes.
+
 ## Existing-post adoption
 
 The administration process enables adoption only when `DISCORD_BOT_TOKEN` is

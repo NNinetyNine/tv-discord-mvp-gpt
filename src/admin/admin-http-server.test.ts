@@ -459,6 +459,7 @@ describe("Admin HTTP server", () => {
     expect(html).toContain("PACK BUILDER");
     expect(html).toContain("PACK WORKSPACE");
     expect(html).toContain("DISCORD THREAD ROUTING");
+    expect(html).toContain("PACK ROUTING READINESS");
     expect(html).toContain("INSPECT &amp; ADOPT");
     expect(html).toContain("INSPECT &amp; PROVISION");
     expect(html).toContain("EXPLICIT CONFIRMATION REQUIRED");

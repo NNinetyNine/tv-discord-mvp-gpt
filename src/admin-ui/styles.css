@@ -133,6 +133,8 @@ h1, h2 { margin: 0; font-size: .78rem; letter-spacing: .15em; font-weight: 850; 
 .thread-adoption-fields .primary-action { min-width: 11.5rem; }
 .thread-provisioning-fields { display: grid; grid-template-columns: auto 1.3fr 1.25fr auto; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
 .thread-provisioning-fields button { min-width: 11.5rem; }
+.thread-readiness-grid { display: grid; grid-template-columns: .8fr .8fr .65fr auto; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
+.thread-readiness-grid .primary-action { min-width: 13rem; }
 .thread-tags { margin: 0 1.1rem .8rem; padding: .7rem .8rem; border: 1px solid var(--border); border-radius: .55rem; }
 .thread-tags legend { padding: 0 .35rem; color: var(--text-faint); font-size: .57rem; font-weight: 800; letter-spacing: .12em; }
 .thread-tags p { margin: 0; color: var(--text-faint); font-size: .62rem; }
@@ -170,6 +172,7 @@ footer { padding: 1rem 2.2rem; color: var(--text-faint); font-size: .55rem; lett
   .thread-overview-grid { grid-template-columns: 1fr 1fr; }
   .thread-adoption-fields { grid-template-columns: 1fr 1fr; }
   .thread-provisioning-fields { grid-template-columns: 1fr 1fr; }
+  .thread-readiness-grid { grid-template-columns: 1fr 1fr; }
   .workspace-import-fields { grid-template-columns: 1fr 1fr; }
   .member-editor { grid-template-columns: 1fr 1fr; }
   .member-editor .wide { grid-column: span 1; }

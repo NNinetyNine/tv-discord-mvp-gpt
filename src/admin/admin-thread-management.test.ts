@@ -25,6 +25,10 @@ import {
 const CRYPTO_FORUM_ID = "1529334738454839349";
 const ADOPTED_THREAD_ID = "1529999999999999999";
 const OTHER_FORUM_ID = "1528888888888888888";
+const CRYPTO_ASSET_IDS = Object.freeze([
+  "akt", "zec", "pepe", "doge", "fet", "xlm", "xrp", "sui",
+  "tao", "trx", "link", "sol", "hype", "eth", "btc", "total3",
+]);
 
 const cleanup: string[] = [];
 const servers: RunningAdminHttpServer[] = [];
@@ -40,6 +44,22 @@ async function temporaryRepository(): Promise<string> {
   await cp(resolve("definitions"), join(root, "definitions"), { recursive: true });
   await cp(resolve("config"), join(root, "config"), { recursive: true });
   return root;
+}
+
+function completeCryptoBindings(): Readonly<Record<string, string>> {
+  return Object.freeze(Object.fromEntries(CRYPTO_ASSET_IDS.map((assetId, index) => [
+    assetId,
+    `1530000000000000${String(index + 1).padStart(3, "0")}`,
+  ])));
+}
+
+async function writeCompleteCryptoBindings(repositoryRoot: string): Promise<Readonly<Record<string, string>>> {
+  const crypto = completeCryptoBindings();
+  await writeFile(join(repositoryRoot, "config/asset-threads.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    packs: { crypto },
+  }, null, 2)}\n`);
+  return crypto;
 }
 
 async function createService(
@@ -76,6 +96,7 @@ function sessionFactory(options: {
   readonly parentId?: string;
   readonly found?: boolean;
   readonly closeFails?: boolean;
+  readonly inspect?: (threadId: string) => Promise<DiscordAssetThreadFacts | null>;
 } = {}): {
   readonly factory: AdminDiscordForumSessionFactory;
   readonly opened: string[];
@@ -90,6 +111,7 @@ function sessionFactory(options: {
     return Object.freeze({
       inspectThread: async (threadId: string): Promise<DiscordAssetThreadFacts | null> => {
         inspected.push(threadId);
+        if (options.inspect !== undefined) return options.inspect(threadId);
         if (options.found === false) return null;
         return Object.freeze({
           threadId,
@@ -187,6 +209,7 @@ describe("Administration Discord thread routing", () => {
       boundCount: 1,
       totalCount: 16,
       missingCount: 15,
+      verificationEligible: false,
     });
     expect(crypto?.assets.find((asset) => asset.id === "btc")).toMatchObject({
       bindingState: "bound",
@@ -508,6 +531,168 @@ describe("Administration Discord thread routing", () => {
     expect((await retryService.threadManagementState()).boundCount).toBe(1);
   });
 
+  it("refuses Pack routing verification before every Asset is bound and makes no Discord call", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const mock = sessionFactory();
+    const service = await createService(repositoryRoot, mock.factory);
+
+    await expect(service.verifyPackThreadRouting({
+      packId: "crypto",
+      confirmation: "yes",
+    })).rejects.toMatchObject({ code: "thread_routing_verification_confirmation_invalid" });
+    await expect(service.verifyPackThreadRouting({
+      packId: "crypto",
+      confirmation: "verify_pack_routing",
+    })).rejects.toMatchObject({
+      code: "thread_routing_incomplete",
+      status: 409,
+      details: { missingAssetIds: expect.arrayContaining(["akt", "total3"]) },
+    });
+    expect(mock.opened).toEqual([]);
+    expect(mock.inspected).toEqual([]);
+  });
+
+  it("verifies one complete Pack through a single read-only Discord session", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const bindings = await writeCompleteCryptoBindings(repositoryRoot);
+    const bindingsPath = join(repositoryRoot, "config/asset-threads.json");
+    const before = await readFile(bindingsPath);
+    const mock = sessionFactory();
+    const service = await createService(repositoryRoot, mock.factory);
+
+    const dashboard = await service.threadManagementState();
+    expect(dashboard.publicationAvailable).toBe(false);
+    expect(dashboard.packs.find((pack) => pack.id === "crypto")).toMatchObject({
+      boundCount: 16,
+      missingCount: 0,
+      verificationEligible: true,
+    });
+    const result = await service.verifyPackThreadRouting({
+      packId: "crypto",
+      confirmation: "verify_pack_routing",
+    });
+    expect(result).toMatchObject({
+      packId: "crypto",
+      operationallyReady: true,
+      verifiedCount: 16,
+      totalCount: 16,
+      sessionClosed: true,
+      warnings: [],
+      effects: {
+        discordInspected: true,
+        discordContentChanged: false,
+        bindingChanged: false,
+        published: false,
+        released: false,
+      },
+    });
+    expect(result.assets.map((asset) => asset.assetId)).toEqual(CRYPTO_ASSET_IDS);
+    expect(result.assets.every((asset) => asset.state === "ready" && asset.issues.length === 0)).toBe(true);
+    expect(mock.opened).toEqual(["session"]);
+    expect(mock.inspected).toEqual(CRYPTO_ASSET_IDS.map((assetId) => bindings[assetId]));
+    expect(mock.closed).toEqual(["session"]);
+    expect(await readFile(bindingsPath)).toEqual(before);
+  });
+
+  it("discards verification when binding custody changes during inspection", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const bindings = await writeCompleteCryptoBindings(repositoryRoot);
+    const bindingsPath = join(repositoryRoot, "config/asset-threads.json");
+    let changed = false;
+    const mock = sessionFactory({
+      inspect: async (threadId) => {
+        if (!changed) {
+          changed = true;
+          await writeFile(bindingsPath, `${JSON.stringify({
+            schemaVersion: 1,
+            packs: { crypto: { ...bindings, total3: "1530000000000000999" } },
+          }, null, 2)}\n`);
+        }
+        return Object.freeze({
+          threadId,
+          parentId: CRYPTO_FORUM_ID,
+          name: `Thread ${threadId}`,
+          archived: false,
+          locked: false,
+          appliedTagIds: Object.freeze([]),
+        });
+      },
+    });
+    const service = await createService(repositoryRoot, mock.factory);
+
+    await expect(service.verifyPackThreadRouting({
+      packId: "crypto",
+      confirmation: "verify_pack_routing",
+    })).rejects.toMatchObject({
+      code: "thread_routing_state_changed",
+      status: 409,
+      details: { sessionClosed: true },
+    });
+    expect(mock.opened).toEqual(["session"]);
+    expect(mock.inspected).toHaveLength(16);
+    expect(mock.closed).toEqual(["session"]);
+  });
+
+  it("reports archived, locked, and wrong-forum threads as blockers without changing bindings", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const bindings = await writeCompleteCryptoBindings(repositoryRoot);
+    const reverse = new Map(Object.entries(bindings).map(([assetId, threadId]) => [threadId, assetId]));
+    const bindingsPath = join(repositoryRoot, "config/asset-threads.json");
+    const before = await readFile(bindingsPath);
+    const mock = sessionFactory({
+      inspect: async (threadId) => Object.freeze({
+        threadId,
+        parentId: reverse.get(threadId) === "eth" ? OTHER_FORUM_ID : CRYPTO_FORUM_ID,
+        name: `Thread ${threadId}`,
+        archived: reverse.get(threadId) === "btc",
+        locked: reverse.get(threadId) === "total3",
+        appliedTagIds: Object.freeze([]),
+      }),
+    });
+    const service = await createService(repositoryRoot, mock.factory);
+    const result = await service.verifyPackThreadRouting({
+      packId: "crypto",
+      confirmation: "verify_pack_routing",
+    });
+
+    expect(result).toMatchObject({
+      operationallyReady: false,
+      verifiedCount: 13,
+      totalCount: 16,
+      effects: { discordContentChanged: false, bindingChanged: false, published: false, released: false },
+    });
+    expect(result.assets.find((asset) => asset.assetId === "eth")).toMatchObject({
+      state: "blocked",
+      issues: ["thread_parent_mismatch"],
+    });
+    expect(result.assets.find((asset) => asset.assetId === "btc")).toMatchObject({
+      state: "blocked",
+      issues: ["thread_archived"],
+    });
+    expect(result.assets.find((asset) => asset.assetId === "total3")).toMatchObject({
+      state: "blocked",
+      issues: ["thread_locked"],
+    });
+    expect(await readFile(bindingsPath)).toEqual(before);
+  });
+
+  it("withholds operational readiness when the verification session does not close cleanly", async () => {
+    const repositoryRoot = await temporaryRepository();
+    await writeCompleteCryptoBindings(repositoryRoot);
+    const mock = sessionFactory({ closeFails: true });
+    const service = await createService(repositoryRoot, mock.factory);
+
+    await expect(service.verifyPackThreadRouting({
+      packId: "crypto",
+      confirmation: "verify_pack_routing",
+    })).resolves.toMatchObject({
+      operationallyReady: false,
+      verifiedCount: 16,
+      sessionClosed: false,
+      warnings: ["discord_session_close_failed"],
+    });
+  });
+
   it("fails closed on incoherent thread-binding custody", async () => {
     const repositoryRoot = await temporaryRepository();
     await writeFile(join(repositoryRoot, "config/asset-threads.json"), `${JSON.stringify({
@@ -635,5 +820,42 @@ describe("Administration Discord thread routing", () => {
     expect(malformed.status).toBe(400);
     expect((await malformed.json() as any).error.code).toBe("invalid_request");
     expect(mock.createCalls).toHaveLength(1);
+  });
+
+  it("serves one strict read-only Pack routing verification route without publication authority", async () => {
+    const repositoryRoot = await temporaryRepository();
+    await writeCompleteCryptoBindings(repositoryRoot);
+    const mock = sessionFactory();
+    const service = await createService(repositoryRoot, mock.factory);
+    const server = await startAdminHttpServer({ service, host: "127.0.0.1", port: 0 });
+    servers.push(server);
+
+    const response = await fetch(`${server.url}/api/v1/thread-management/packs/crypto/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation: "verify_pack_routing" }),
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json() as any).data).toMatchObject({
+      operationallyReady: true,
+      verifiedCount: 16,
+      effects: {
+        discordContentChanged: false,
+        bindingChanged: false,
+        published: false,
+        released: false,
+      },
+    });
+
+    const extraField = await fetch(`${server.url}/api/v1/thread-management/packs/crypto/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation: "verify_pack_routing", publish: true }),
+    });
+    expect(extraField.status).toBe(400);
+    expect((await extraField.json() as any).error.code).toBe("invalid_request");
+    expect((await fetch(`${server.url}/api/v1/thread-management/packs/crypto/verify`)).status).toBe(405);
+    expect((await fetch(`${server.url}/api/v1/thread-management/packs/crypto/publish`)).status).toBe(404);
+    expect(mock.opened).toEqual(["session"]);
   });
 });

@@ -153,6 +153,24 @@
         </div>
       </section>
 
+      <section class="window thread-readiness" aria-labelledby="thread-readiness-heading">
+        <header class="window-header">
+          <div><p class="micro-label">LIVE DESTINATION GATE</p><h2 id="thread-readiness-heading">PACK ROUTING READINESS</h2></div>
+          <span id="thread-readiness-state" class="context-fact">INCOMPLETE</span>
+        </header>
+        <p class="window-help">Once every Pack Asset is bound, inspect all destinations in canonical order. Every thread must still exist in the configured forum and be active and unlocked. Verification is read-only and does not enable publication.</p>
+        <div class="thread-readiness-grid">
+          <div class="derived-channel"><span>PERSISTENT BINDINGS</span><strong id="thread-readiness-bindings">0 / 0</strong></div>
+          <div class="derived-channel"><span>LIVE VERIFIED</span><strong id="thread-readiness-verified">0 / 0</strong></div>
+          <div class="derived-channel"><span>BLOCKERS</span><strong id="thread-readiness-blockers">—</strong></div>
+          <button id="thread-verify-routing" class="primary-action" type="button" disabled>VERIFY PACK ROUTING</button>
+        </div>
+        <div class="renderer-guidance">
+          <span id="thread-readiness-detail">COMPLETE EVERY PERSISTENT BINDING BEFORE LIVE VERIFICATION</span>
+          <span>READ-ONLY DISCORD INSPECTION · PUBLICATION REMAINS DISABLED</span>
+        </div>
+      </section>
+
       <section class="window thread-members" aria-labelledby="thread-members-heading">
         <header class="window-header">
           <div><p class="micro-label">PACK ROUTING COVERAGE</p><h2 id="thread-members-heading">ASSET THREAD BINDINGS</h2></div>
@@ -160,7 +178,7 @@
         </header>
         <div class="table-wrap workspace-table-wrap">
           <table>
-            <thead><tr><th>ASSET</th><th>STATUS</th><th>PERSISTENT THREAD ID</th></tr></thead>
+            <thead><tr><th>ASSET</th><th>STATUS</th><th>PERSISTENT THREAD ID</th><th>LIVE READINESS</th></tr></thead>
             <tbody id="thread-members-body"></tbody>
           </table>
         </div>

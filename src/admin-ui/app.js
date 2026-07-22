@@ -16,6 +16,7 @@ const state = {
   packPreview: null,
   packBusy: false,
   threadManagement: null,
+  threadVerification: null,
   threadBusy: false,
   threadForumInspection: null,
   threadLogo: null,
@@ -716,6 +717,25 @@ function updateThreadAdoptButton() {
     title.length <= 100 &&
     tagIds.length <= 5
   );
+  qs("#thread-verify-routing").disabled = !(
+    !state.threadBusy &&
+    available &&
+    pack?.forumConfigured === true &&
+    pack?.verificationEligible === true
+  );
+}
+
+function currentThreadVerification(pack) {
+  const verification = state.threadVerification;
+  const dashboard = state.threadManagement;
+  return verification?.packId === pack?.id &&
+    verification?.bindingSourceSha256 === dashboard?.bindingsSourceSha256
+    ? verification
+    : null;
+}
+
+function routingIssueLabel(issue) {
+  return issue.replaceAll("_", " ").toUpperCase();
 }
 
 function renderThreadManagement() {
@@ -731,6 +751,11 @@ function renderThreadManagement() {
     qs("#thread-members-body").innerHTML = "";
     qs("#thread-member-count").textContent = "0 ASSETS";
     qs("#thread-provisioning-state").textContent = "SELECT A PACK";
+    qs("#thread-readiness-state").textContent = "INCOMPLETE";
+    qs("#thread-readiness-bindings").textContent = "0 / 0";
+    qs("#thread-readiness-verified").textContent = "0 / 0";
+    qs("#thread-readiness-blockers").textContent = "—";
+    qs("#thread-readiness-detail").textContent = "COMPLETE EVERY PERSISTENT BINDING BEFORE LIVE VERIFICATION";
     updateThreadAdoptButton();
     return;
   }
@@ -742,6 +767,38 @@ function renderThreadManagement() {
   qs("#thread-total-context").textContent = `${dashboard.boundCount} OF ${dashboard.totalCount} ASSETS BOUND · ${dashboard.missingCount} MISSING ACROSS ALL PACKS`;
   qs("#thread-member-count").textContent = `${pack.totalCount} ASSET${pack.totalCount === 1 ? "" : "S"}`;
 
+  const verification = currentThreadVerification(pack);
+  const blockedCount = verification?.assets.filter((asset) => asset.state === "blocked").length ?? 0;
+  qs("#thread-readiness-bindings").textContent = `${pack.boundCount} / ${pack.totalCount}`;
+  qs("#thread-readiness-verified").textContent = `${verification?.verifiedCount ?? 0} / ${pack.totalCount}`;
+  qs("#thread-readiness-blockers").textContent = pack.missingCount > 0
+    ? String(pack.missingCount)
+    : verification === null
+      ? "—"
+      : String(blockedCount + (verification.sessionClosed ? 0 : 1));
+  if (!pack.forumConfigured) {
+    qs("#thread-readiness-state").textContent = "FORUM NOT CONFIGURED";
+    qs("#thread-readiness-detail").textContent = "CONFIGURE THE PACK FORUM BEFORE LIVE VERIFICATION";
+  } else if (pack.missingCount > 0) {
+    qs("#thread-readiness-state").textContent = "INCOMPLETE";
+    qs("#thread-readiness-detail").textContent = `${pack.missingCount} PERSISTENT BINDING${pack.missingCount === 1 ? "" : "S"} REQUIRED BEFORE DISCORD CONTACT`;
+  } else if (!dashboard.adoptionAvailable) {
+    qs("#thread-readiness-state").textContent = "TOKEN REQUIRED";
+    qs("#thread-readiness-detail").textContent = "START ADMIN WITH DISCORD_BOT_TOKEN TO ENABLE READ-ONLY VERIFICATION";
+  } else if (verification?.operationallyReady === true) {
+    qs("#thread-readiness-state").textContent = "READY";
+    qs("#thread-readiness-detail").textContent = "ALL DESTINATIONS EXIST IN THE CONFIGURED FORUM AND ARE ACTIVE AND UNLOCKED";
+  } else if (verification !== null && !verification.sessionClosed) {
+    qs("#thread-readiness-state").textContent = "SESSION CLOSE FAILED";
+    qs("#thread-readiness-detail").textContent = "READINESS WITHHELD · RESTART ADMIN BEFORE ANOTHER DISCORD OPERATION";
+  } else if (verification !== null) {
+    qs("#thread-readiness-state").textContent = "BLOCKED";
+    qs("#thread-readiness-detail").textContent = `${blockedCount} DESTINATION${blockedCount === 1 ? "" : "S"} REQUIRE OPERATOR ACTION`;
+  } else {
+    qs("#thread-readiness-state").textContent = "UNVERIFIED";
+    qs("#thread-readiness-detail").textContent = "ALL BINDINGS ARE PRESENT · LIVE DESTINATIONS HAVE NOT BEEN VERIFIED";
+  }
+
   const priorAssetId = qs("#thread-asset").value;
   const unbound = pack.assets.filter((asset) => asset.bindingState === "unbound");
   qs("#thread-asset").innerHTML = '<option value="">SELECT UNBOUND ASSET</option>' + unbound
@@ -751,11 +808,27 @@ function renderThreadManagement() {
     ? priorAssetId
     : unbound[0]?.id ?? "";
 
-  qs("#thread-members-body").innerHTML = pack.assets.map((asset) => `<tr>
+  qs("#thread-members-body").innerHTML = pack.assets.map((asset) => {
+    const live = verification?.assets.find((candidate) => candidate.assetId === asset.id) ?? null;
+    const liveClass = asset.bindingState !== "bound" || live === null
+      ? "pending"
+      : live.state === "ready"
+        ? "valid"
+        : "blocked";
+    const liveLabel = asset.bindingState !== "bound"
+      ? "NOT ELIGIBLE"
+      : live === null
+        ? "UNVERIFIED"
+        : live.state === "ready"
+          ? "READY"
+          : `BLOCKED · ${live.issues.map(routingIssueLabel).join(" · ")}`;
+    return `<tr>
     <td>${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)}</td>
     <td><span class="workspace-status ${asset.bindingState === "bound" ? "valid" : "pending"}">${asset.bindingState === "bound" ? "BOUND" : "MISSING"}</span></td>
     <td>${escapeHtml(asset.threadId ?? "—")}</td>
-  </tr>`).join("");
+    <td><span class="workspace-status ${liveClass}">${escapeHtml(liveLabel)}</span></td>
+  </tr>`;
+  }).join("");
 
   if (!dashboard.adoptionAvailable) {
     qs("#thread-adoption-state").textContent = "START ADMIN WITH DISCORD_BOT_TOKEN TO ENABLE INSPECTION";
@@ -782,8 +855,13 @@ function renderThreadManagement() {
 
 async function loadThreadManagement() {
   const selectedPackId = qs("#thread-pack").value;
+  const priorBindingsSha256 = state.threadManagement?.bindingsSourceSha256 ?? null;
   const dashboard = await api("/api/v1/thread-management");
   state.threadManagement = dashboard;
+  if (
+    (priorBindingsSha256 !== null && priorBindingsSha256 !== dashboard.bindingsSourceSha256) ||
+    (state.threadVerification !== null && state.threadVerification.bindingSourceSha256 !== dashboard.bindingsSourceSha256)
+  ) state.threadVerification = null;
   qs("#thread-pack").innerHTML = dashboard.packs
     .map((pack) => `<option value="${escapeAttribute(pack.id)}">${escapeHtml(pack.displayName.toUpperCase())} · ${pack.boundCount}/${pack.totalCount}</option>`)
     .join("");
@@ -791,6 +869,54 @@ async function loadThreadManagement() {
     ? selectedPackId
     : dashboard.packs[0]?.id ?? "";
   renderThreadManagement();
+}
+
+async function verifyPackRouting() {
+  const pack = selectedThreadPack();
+  if (
+    pack === null ||
+    pack.verificationEligible !== true ||
+    state.threadBusy ||
+    state.threadManagement?.adoptionAvailable !== true
+  ) return;
+
+  const confirmed = window.confirm(
+    `Inspect all ${pack.totalCount} persistent Discord destinations for ${pack.displayName} in canonical Pack order?\n\n` +
+    "Every thread must still exist in the configured forum and be active and unlocked. This is read-only: no Discord content or binding changes, chart publication, or Release creation.",
+  );
+  if (!confirmed) return;
+
+  clearMessage();
+  state.threadBusy = true;
+  state.threadVerification = null;
+  qs("#thread-readiness-state").textContent = "VERIFYING";
+  qs("#thread-readiness-detail").textContent = "INSPECTING CANONICAL PACK DESTINATIONS";
+  updateThreadAdoptButton();
+  try {
+    const result = await api(`/api/v1/thread-management/packs/${encodeURIComponent(pack.id)}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ confirmation: "verify_pack_routing" }),
+    });
+    state.threadVerification = result;
+    renderThreadManagement();
+    const blockedCount = result.assets.filter((asset) => asset.state === "blocked").length;
+    showMessage(
+      result.operationallyReady
+        ? `${pack.displayName} routing is live-verified: ${result.verifiedCount}/${result.totalCount} destinations are current, active, and unlocked. Publication remains disabled.`
+        : result.sessionClosed
+          ? `${pack.displayName} routing is blocked by ${blockedCount} destination${blockedCount === 1 ? "" : "s"}. Review the per-Asset readiness results.`
+          : "Destination inspection completed, but the Discord session did not close cleanly. Readiness is withheld; restart the administration service.",
+      !result.operationallyReady,
+    );
+  } catch (error) {
+    qs("#thread-readiness-state").textContent = "VERIFICATION FAILED";
+    qs("#thread-readiness-detail").textContent = "NO DISCORD CONTENT OR LOCAL BINDING WAS CHANGED";
+    showMessage(error.message);
+    await loadThreadManagement().catch(() => undefined);
+  } finally {
+    state.threadBusy = false;
+    updateThreadAdoptButton();
+  }
 }
 
 async function adoptExistingThread() {
@@ -1374,6 +1500,7 @@ qs("#workspace-discard").addEventListener("click", () => void discardPackPreview
 qs("#workspace-reset-pack").addEventListener("click", () => void resetWorkspacePack());
 qs("#thread-pack").addEventListener("change", () => {
   qs("#thread-id").value = "";
+  state.threadVerification = null;
   resetThreadProvisioning();
   renderThreadManagement();
 });
@@ -1387,6 +1514,7 @@ qs("#thread-inspect-forum").addEventListener("click", () => void inspectThreadFo
 qs("#thread-title").addEventListener("input", updateThreadAdoptButton);
 qs("#thread-logo").addEventListener("change", (event) => void stageThreadLogo(event.target.files?.[0] ?? null));
 qs("#thread-provision-button").addEventListener("click", () => void provisionNewThread());
+qs("#thread-verify-routing").addEventListener("click", () => void verifyPackRouting());
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";

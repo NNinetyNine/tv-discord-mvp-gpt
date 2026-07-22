@@ -93,6 +93,10 @@ import {
   resetPackWorkspacePack,
   type ResetPackWorkspaceResult,
 } from "../application/reset-pack-workspace.ts";
+import {
+  verifyPackDiscordThreadRouting,
+  type VerifyPackDiscordThreadRoutingResult,
+} from "../application/verify-pack-discord-thread-routing.ts";
 import { createPersistentWorkspace } from "../packs/persistence.ts";
 import { createStagingStore } from "../wiring/staging.ts";
 import { DEFAULT_VALIDATION_POLICY, validateImage } from "../validation/validate-image.ts";
@@ -289,6 +293,7 @@ export interface AdminThreadManagementPackState {
   readonly boundCount: number;
   readonly totalCount: number;
   readonly missingCount: number;
+  readonly verificationEligible: boolean;
   readonly assets: readonly AdminThreadManagementAssetState[];
 }
 
@@ -370,6 +375,31 @@ export interface AdminThreadProvisioningResult {
     readonly discordInspected: true;
     readonly discordContentChanged: true;
     readonly bindingChanged: true;
+    readonly published: false;
+    readonly released: false;
+  };
+}
+
+export interface AdminPackThreadRoutingVerificationResult {
+  readonly schemaVersion: 1;
+  readonly packId: string;
+  readonly operationallyReady: boolean;
+  readonly bindingSourceSha256: string;
+  readonly verifiedCount: number;
+  readonly totalCount: number;
+  readonly assets: readonly {
+    readonly assetId: string;
+    readonly threadId: string;
+    readonly name: string | null;
+    readonly state: "ready" | "blocked";
+    readonly issues: readonly string[];
+  }[];
+  readonly sessionClosed: boolean;
+  readonly warnings: readonly ("discord_session_close_failed")[];
+  readonly effects: {
+    readonly discordInspected: true;
+    readonly discordContentChanged: false;
+    readonly bindingChanged: false;
     readonly published: false;
     readonly released: false;
   };
@@ -721,6 +751,10 @@ export class AdminService {
         boundCount: packBoundCount,
         totalCount: assets.length,
         missingCount: assets.length - packBoundCount,
+        verificationEligible:
+          assets.length > 0 &&
+          packBoundCount === assets.length &&
+          resolveChannel(pack.channel) !== null,
         assets: Object.freeze(assets),
       });
     });
@@ -858,6 +892,131 @@ export class AdminService {
     await prior;
     try { return await operation(); }
     finally { release(); }
+  }
+
+  #threadRoutingVerificationFailure(
+    result: Exclude<VerifyPackDiscordThreadRoutingResult, { readonly ok: true } | { readonly outcome: "thread_issues" }>,
+    sessionClosed: boolean,
+  ): never {
+    switch (result.outcome) {
+      case "unknown_pack":
+        throw new AdminError("pack_not_found", `Pack ${result.packId} was not found.`, 404, { packId: result.packId });
+      case "forum_channel_unresolved":
+        throw new AdminError("thread_routing_verification_failed", "The selected Pack does not have a configured Discord forum.", 409, { outcome: result.outcome });
+      case "missing_bindings":
+        throw new AdminError(
+          "thread_routing_incomplete",
+          "Every Pack Asset requires a persistent thread binding before live routing verification.",
+          409,
+          { missingAssetIds: result.missingAssetIds },
+        );
+      case "invalid_binding":
+      case "duplicate_binding":
+        throw new AdminError("invalid_thread_bindings", "Persistent thread bindings are not coherent enough for verification.", 500, { outcome: result.outcome });
+      case "discord_inspection_failed":
+        throw new AdminError(
+          "thread_routing_verification_failed",
+          `Discord inspection failed while verifying Asset ${result.assetId}. No Discord content or local binding was changed.`,
+          502,
+          { outcome: result.outcome, assetId: result.assetId, sessionClosed },
+        );
+    }
+  }
+
+  async verifyPackThreadRouting(input: {
+    readonly packId: string;
+    readonly confirmation: unknown;
+  }): Promise<AdminPackThreadRoutingVerificationResult> {
+    if (input.confirmation !== "verify_pack_routing") {
+      throw new AdminError(
+        "thread_routing_verification_confirmation_invalid",
+        "Live Pack routing verification requires an explicit current confirmation.",
+      );
+    }
+    if (this.#openDiscordForumSession === undefined) {
+      throw new AdminError(
+        "discord_operations_unavailable",
+        "Discord thread verification is unavailable until the administration process has an explicit bot token.",
+        503,
+      );
+    }
+
+    return this.#withThreadMutationLock(async () => {
+      await this.refresh();
+      const before = await this.#readThreadBindings();
+      let session: DiscordForumSession | null = null;
+      let result: VerifyPackDiscordThreadRoutingResult | undefined;
+      let operationError: unknown;
+      try {
+        result = await verifyPackDiscordThreadRouting({
+          packs: this.#state.packs,
+          resolveChannel: buildChannelResolver(this.#state.rawChannels as Record<string, unknown>),
+          resolveThread: (packId, assetId) => before.bindings.packs[packId]?.[assetId] ?? null,
+          inspectThread: async (threadId) => {
+            session ??= await this.#openDiscordForumSession!();
+            return session.inspectThread(threadId);
+          },
+        }, input.packId);
+      } catch (error) {
+        operationError = error;
+      }
+
+      let sessionClosed = true;
+      const openedSession = session as DiscordForumSession | null;
+      if (openedSession !== null) {
+        try { await openedSession.close(); }
+        catch { sessionClosed = false; }
+      }
+      const after = await this.#readThreadBindings();
+      if (after.file.sha256 !== before.file.sha256) {
+        throw new AdminError(
+          "thread_routing_state_changed",
+          "Persistent thread bindings changed during live verification. The result was discarded.",
+          409,
+          { sessionClosed },
+        );
+      }
+      if (operationError !== undefined) {
+        throw new AdminError(
+          "thread_routing_verification_failed",
+          "Live Pack routing verification failed without changing Discord content or local bindings.",
+          502,
+          { sessionClosed },
+        );
+      }
+      if (result === undefined) throw new AdminError("internal_error", "Pack routing verification produced no result.", 500);
+      if (!result.ok && result.outcome !== "thread_issues") {
+        return this.#threadRoutingVerificationFailure(result, sessionClosed);
+      }
+
+      const inspections = result.inspections;
+      const assets = Object.freeze(inspections.map((item) => Object.freeze({
+        assetId: item.assetId,
+        threadId: item.threadId,
+        name: item.name,
+        state: item.issues.length === 0 ? "ready" as const : "blocked" as const,
+        issues: Object.freeze([...item.issues]),
+      })));
+      const verifiedCount = assets.filter((asset) => asset.state === "ready").length;
+      return Object.freeze({
+        schemaVersion: 1,
+        packId: result.packId,
+        operationallyReady: result.ok && sessionClosed,
+        bindingSourceSha256: before.file.sha256,
+        verifiedCount,
+        totalCount: assets.length,
+        assets,
+        sessionClosed,
+        warnings: Object.freeze(sessionClosed ? [] : ["discord_session_close_failed"] as const),
+        effects: Object.freeze({
+          discordInspected: true,
+          discordContentChanged: false,
+          bindingChanged: false,
+          published: false,
+          released: false,
+        }),
+      });
+    });
   }
 
   #threadAdoptionFailure(result: Exclude<AdoptDiscordAssetThreadResult, { readonly ok: true }>): never {

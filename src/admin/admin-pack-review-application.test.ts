@@ -109,4 +109,18 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(js).toContain("window.confirm(");
     expect(js).not.toContain("/api/v1/thread-management/publish");
   });
+
+  it("exposes a confirmed read-only Pack routing gate without publication authority", async () => {
+    const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
+    const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
+
+    expect(html).toContain("PACK ROUTING READINESS");
+    expect(html).toContain("VERIFY PACK ROUTING");
+    expect(html).toContain("READ-ONLY DISCORD INSPECTION · PUBLICATION REMAINS DISABLED");
+    expect(js).toContain("/api/v1/thread-management/packs/${encodeURIComponent(pack.id)}/verify");
+    expect(js).toContain('confirmation: "verify_pack_routing"');
+    expect(js).toContain("pack.verificationEligible !== true");
+    expect(js).toContain("state.threadVerification = null");
+    expect(js).not.toContain("/api/v1/thread-management/publish");
+  });
 });

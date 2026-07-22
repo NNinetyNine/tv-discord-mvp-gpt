@@ -384,6 +384,21 @@ async function routeApi(
     if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     return ok(response, await service.threadManagementState());
   }
+  const routingVerification = /^\/api\/v1\/thread-management\/packs\/([^/]+)\/verify$/u.exec(pathname);
+  if (routingVerification !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Pack routing verification request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Pack routing verification body must be an object.");
+    exactFields(body, ["confirmation"], "Pack routing verification body");
+    if (typeof body.confirmation !== "string") {
+      throw new AdminError("invalid_request", "Pack routing verification confirmation must be a string.");
+    }
+    return ok(response, await service.verifyPackThreadRouting({
+      packId: routingVerification[1] ?? "",
+      confirmation: body.confirmation,
+    }));
+  }
   const forumInspection = /^\/api\/v1\/thread-management\/packs\/([^/]+)\/forum\/inspect$/u.exec(pathname);
   if (forumInspection !== null) {
     if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
