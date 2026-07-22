@@ -11,6 +11,10 @@ const state = {
   renderOptions: null,
   renderSourceFile: null,
   renderBusy: false,
+  packWorkspace: null,
+  packSourceFile: null,
+  packPreview: null,
+  packBusy: false,
 };
 
 const qs = (selector) => document.querySelector(selector);
@@ -703,10 +707,199 @@ async function runStandaloneRender() {
   }
 }
 
+function selectedWorkspacePack() {
+  return state.packWorkspace?.packs.find((pack) => pack.id === qs("#workspace-pack").value) ?? null;
+}
+
+function selectedWorkspaceAsset() {
+  return selectedWorkspacePack()?.assets.find((asset) => asset.id === qs("#workspace-asset").value) ?? null;
+}
+
+function updateWorkspacePreviewButton() {
+  const asset = selectedWorkspaceAsset();
+  const locked = state.packBusy || state.packPreview !== null;
+  qs("#workspace-pack").disabled = locked;
+  qs("#workspace-asset").disabled = locked;
+  qs("#workspace-source").disabled = locked;
+  qs("#workspace-preview-button").disabled = !(
+    asset?.renderReady && state.packSourceFile && !locked
+  );
+  qs("#workspace-accept").disabled = state.packBusy || state.packPreview === null;
+  qs("#workspace-discard").disabled = state.packBusy || state.packPreview === null;
+}
+
+function workspaceAssetStatus(asset) {
+  if (asset.captured && !asset.artifactReady) return "STAGED ARTIFACT MISSING";
+  if (asset.captured) return "CURRENT ANALYSIS";
+  if (!asset.renderReady) return "METADATA REQUIRED";
+  return "REQUIRED";
+}
+
+function renderPackWorkspace() {
+  const pack = selectedWorkspacePack();
+  if (pack === null) {
+    qs("#workspace-timeframe").textContent = "—";
+    qs("#workspace-progress").textContent = "0 / 0";
+    qs("#workspace-state").textContent = "NO PACK";
+    qs("#workspace-progress-fill").style.width = "0%";
+    qs("#workspace-remaining").textContent = "NO PACK SELECTED";
+    qs("#workspace-asset").innerHTML = '<option value="">SELECT ASSET</option>';
+    qs("#workspace-members-body").innerHTML = "";
+    qs("#workspace-member-count").textContent = "0 ASSETS";
+    updateWorkspacePreviewButton();
+    return;
+  }
+
+  const priorAssetId = qs("#workspace-asset").value;
+  qs("#workspace-timeframe").textContent = pack.timeframe;
+  qs("#workspace-progress").textContent = `${pack.capturedCount} / ${pack.totalCount}`;
+  qs("#workspace-state").textContent = pack.state.toUpperCase();
+  qs("#workspace-progress-fill").style.width = `${pack.totalCount === 0 ? 0 : Math.round((pack.capturedCount / pack.totalCount) * 100)}%`;
+  qs("#workspace-remaining").textContent = pack.remainingRequiredAssetIds.length === 0
+    ? "COMPLETE · ALL REQUIRED ASSETS CAPTURED"
+    : `${pack.remainingRequiredAssetIds.length} REMAINING · ${pack.remainingRequiredAssetIds.map((id) => id.toUpperCase()).join(" · ")}`;
+  qs("#workspace-member-count").textContent = `${pack.totalCount} ASSET${pack.totalCount === 1 ? "" : "S"}`;
+
+  qs("#workspace-asset").innerHTML = '<option value="">SELECT ASSET</option>' + pack.assets
+    .map((asset) => `<option value="${escapeAttribute(asset.id)}"${asset.renderReady ? "" : " disabled"}>${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)}${asset.renderReady ? "" : " · METADATA REQUIRED"}</option>`)
+    .join("");
+  const selectable = pack.assets.filter((asset) => asset.renderReady);
+  qs("#workspace-asset").value = selectable.some((asset) => asset.id === priorAssetId)
+    ? priorAssetId
+    : selectable[0]?.id ?? "";
+
+  qs("#workspace-members-body").innerHTML = pack.assets.map((asset) => {
+    const status = workspaceAssetStatus(asset);
+    const className = status === "CURRENT ANALYSIS" ? "valid" : status === "REQUIRED" ? "pending" : "blocked";
+    return `<tr>
+      <td>${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)}</td>
+      <td>${escapeHtml(asset.tradingViewSymbol || "—")}</td>
+      <td><span class="workspace-status ${className}">${escapeHtml(status)}</span></td>
+      <td>${asset.revisions > 0 ? `REV ${asset.revisions}` : "—"}</td>
+      <td>${escapeHtml(asset.capturedAt ?? "—")}</td>
+    </tr>`;
+  }).join("");
+
+  const asset = selectedWorkspaceAsset();
+  if (state.packPreview === null && !state.packBusy) {
+    qs("#workspace-review-state").textContent = asset === null
+      ? "SELECT AN ASSET"
+      : state.packSourceFile === null
+        ? `${asset.id.toUpperCase()} · ${pack.timeframe} · SELECT PNG`
+        : `${asset.id.toUpperCase()} · ${pack.timeframe} · READY`;
+  }
+  updateWorkspacePreviewButton();
+}
+
+async function loadPackWorkspace() {
+  const selectedPackId = qs("#workspace-pack").value;
+  const result = await api("/api/v1/pack-workspace");
+  state.packWorkspace = result;
+  qs("#workspace-pack").innerHTML = result.packs
+    .map((pack) => `<option value="${escapeAttribute(pack.id)}">${escapeHtml(pack.displayName.toUpperCase())} · ${pack.capturedCount}/${pack.totalCount}</option>`)
+    .join("");
+  qs("#workspace-pack").value = result.packs.some((pack) => pack.id === selectedPackId)
+    ? selectedPackId
+    : result.packs[0]?.id ?? "";
+  renderPackWorkspace();
+}
+
+function clearPackPreviewView() {
+  state.packPreview = null;
+  qs("#workspace-preview").hidden = true;
+  qs("#workspace-preview-image").removeAttribute("src");
+  qs("#workspace-preview-receipt").removeAttribute("href");
+  renderPackWorkspace();
+}
+
+async function runPackPreview() {
+  const pack = selectedWorkspacePack();
+  const asset = selectedWorkspaceAsset();
+  const file = state.packSourceFile;
+  if (pack === null || asset === null || !asset.renderReady || file === null || state.packBusy || state.packPreview !== null) return;
+
+  clearMessage();
+  state.packBusy = true;
+  qs("#workspace-review-state").textContent = "RENDERING REVIEW ARTIFACT";
+  updateWorkspacePreviewButton();
+  try {
+    const query = new URLSearchParams({ packId: pack.id, assetId: asset.id, filename: file.name });
+    const result = await api(`/api/v1/pack-workspace/previews?${query.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "image/png" },
+      body: file,
+    });
+    state.packPreview = result;
+    qs("#workspace-preview").hidden = false;
+    qs("#workspace-preview-heading").textContent = `${result.asset.id.toUpperCase()} REVISION ${result.nextRevision} READY`;
+    qs("#workspace-preview-context").textContent = `${result.timeframe} · DATA AS OF ${result.dataAsOf}`;
+    qs("#workspace-preview-image").src = result.publicationUrl;
+    qs("#workspace-preview-caption").textContent = `${result.asset.displayName} · ${result.asset.tradingViewSymbol} · SHA-256 ${result.outputSha256}`;
+    qs("#workspace-preview-receipt").href = result.receiptUrl;
+    qs("#workspace-accept").textContent = `ACCEPT REVISION ${result.nextRevision}`;
+    qs("#workspace-review-state").textContent = "AWAITING ACCEPTANCE";
+  } catch (error) {
+    qs("#workspace-review-state").textContent = "ACTION REQUIRED";
+    showMessage(error.message);
+  } finally {
+    state.packBusy = false;
+    updateWorkspacePreviewButton();
+  }
+}
+
+async function acceptPackPreview() {
+  const preview = state.packPreview;
+  if (preview === null || state.packBusy) return;
+  clearMessage();
+  state.packBusy = true;
+  qs("#workspace-review-state").textContent = "VERIFYING & STAGING";
+  updateWorkspacePreviewButton();
+  try {
+    const result = await api(`/api/v1/pack-workspace/previews/${encodeURIComponent(preview.previewId)}/accept`, { method: "POST", body: "{}" });
+    const assetId = result.assetId;
+    const revision = result.revisions;
+    clearPackPreviewView();
+    state.packSourceFile = null;
+    qs("#workspace-source").value = "";
+    qs("#workspace-file-state").textContent = "SELECT A TRADINGVIEW PNG EXPORT";
+    await loadPackWorkspace();
+    qs("#workspace-review-state").textContent = `${assetId.toUpperCase()} · REV ${revision} ACCEPTED`;
+    showMessage(`${assetId.toUpperCase()} revision ${revision} is staged. ${result.capturedCount} of ${result.totalCount} Pack analyses are complete. Nothing was sent to Discord.`, false);
+  } catch (error) {
+    qs("#workspace-review-state").textContent = "ACCEPTANCE FAILED";
+    showMessage(error.message);
+  } finally {
+    state.packBusy = false;
+    updateWorkspacePreviewButton();
+  }
+}
+
+async function discardPackPreview() {
+  const preview = state.packPreview;
+  if (preview === null || state.packBusy) return;
+  clearMessage();
+  state.packBusy = true;
+  qs("#workspace-review-state").textContent = "DISCARDING PREVIEW";
+  updateWorkspacePreviewButton();
+  try {
+    await api(`/api/v1/pack-workspace/previews/${encodeURIComponent(preview.previewId)}`, { method: "DELETE" });
+    clearPackPreviewView();
+    qs("#workspace-review-state").textContent = "PREVIEW DISCARDED · READY TO RENDER";
+    showMessage("The preview was discarded. Pack progress and staging were not changed.", false);
+  } catch (error) {
+    qs("#workspace-review-state").textContent = "ACTION REQUIRED";
+    showMessage(error.message);
+  } finally {
+    state.packBusy = false;
+    updateWorkspacePreviewButton();
+  }
+}
+
 qsa("[data-view]").forEach((button) => button.addEventListener("click", () => {
   qsa("[data-view]").forEach((item) => item.removeAttribute("aria-current"));
   button.setAttribute("aria-current", "page");
   qsa("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== button.dataset.view; });
+  if (button.dataset.view === "workspace") void loadPackWorkspace().catch((error) => showMessage(error.message));
   if (button.dataset.view === "registry") void loadRegistry();
   if (button.dataset.view === "renderer") void loadStandaloneRenderOptions().catch((error) => showMessage(error.message));
 }));
@@ -725,6 +918,24 @@ qs("#renderer-source").addEventListener("change", (event) => {
   resetStandaloneResult();
 });
 qs("#render-chart").addEventListener("click", () => void runStandaloneRender());
+qs("#workspace-pack").addEventListener("change", () => {
+  state.packSourceFile = null;
+  qs("#workspace-source").value = "";
+  qs("#workspace-file-state").textContent = "SELECT A TRADINGVIEW PNG EXPORT";
+  renderPackWorkspace();
+});
+qs("#workspace-asset").addEventListener("change", renderPackWorkspace);
+qs("#workspace-source").addEventListener("change", (event) => {
+  const file = event.target.files?.[0] ?? null;
+  state.packSourceFile = file;
+  qs("#workspace-file-state").textContent = file === null
+    ? "SELECT A TRADINGVIEW PNG EXPORT"
+    : `${file.name} · ${file.size.toLocaleString()} BYTES`;
+  renderPackWorkspace();
+});
+qs("#workspace-preview-button").addEventListener("click", () => void runPackPreview());
+qs("#workspace-accept").addEventListener("click", () => void acceptPackPreview());
+qs("#workspace-discard").addEventListener("click", () => void discardPackPreview());
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";
@@ -738,6 +949,7 @@ for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
 async function start() {
   try {
     await refreshStatus();
+    await loadPackWorkspace();
     await loadChannels();
     restoreInput();
     await loadChannels();

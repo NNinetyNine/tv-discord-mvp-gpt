@@ -162,6 +162,111 @@ describe("Admin HTTP server", () => {
     expect(await readdir(service.standaloneRenders.root)).toEqual([]);
   });
 
+  it("reviews before staging, accepts revisions, and exposes exact Pack progress without publishing", async () => {
+    const { service, server } = await start();
+    const canonicalPaths = ["definitions/registry.json", "definitions/packs.json", "config/channels.json"].map((path) => resolve(path));
+    const before = await Promise.all(canonicalPaths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
+
+    const initial = await jsonRequest(server.url, "/api/v1/pack-workspace");
+    const crypto = initial.body.data.packs.find((pack: any) => pack.id === "crypto");
+    const etfs = initial.body.data.packs.find((pack: any) => pack.id === "etfs");
+    expect(initial.body.data.publishAvailable).toBe(false);
+    expect(crypto).toMatchObject({ timeframe: "1D", state: "empty", capturedCount: 0, totalCount: 16 });
+    expect(etfs.timeframe).toBe("4D");
+    expect(crypto.assets.find((asset: any) => asset.id === "btc")).toMatchObject({
+      renderReady: true,
+      captured: false,
+      revisions: 0,
+    });
+
+    const preview = async (date: string) => {
+      const query = new URLSearchParams({
+        packId: "crypto",
+        assetId: "btc",
+        filename: `BTCUSD_${date}_18-58-01.png`,
+      });
+      const response = await fetch(`${server.url}/api/v1/pack-workspace/previews?${query.toString()}`, {
+        method: "POST",
+        headers: { "Content-Type": "image/png" },
+        body: await framedPng(),
+      });
+      expect(response.status).toBe(201);
+      return (await response.json() as any).data;
+    };
+
+    const first = await preview("2026-07-22");
+    expect(first).toMatchObject({
+      packId: "crypto",
+      asset: { id: "btc" },
+      timeframe: "1D",
+      dataAsOf: "2026-07-22",
+      nextRevision: 1,
+      effects: { workspaceChanged: false, staged: false, released: false, discordContacted: false },
+    });
+    const unchanged = await jsonRequest(server.url, "/api/v1/pack-workspace");
+    expect(unchanged.body.data.packs.find((pack: any) => pack.id === "crypto")).toMatchObject({ capturedCount: 0, state: "empty" });
+
+    const publicationResponse = await fetch(`${server.url}${first.publicationUrl}`);
+    const firstPublication = Buffer.from(await publicationResponse.arrayBuffer());
+    expect(publicationResponse.headers.get("content-type")).toBe("image/png");
+    expect(createHash("sha256").update(firstPublication).digest("hex")).toBe(first.outputSha256);
+    expect((await (await fetch(`${server.url}${first.receiptUrl}`)).json() as any).metadata.timeframe).toBe("1D");
+
+    const accepted = await jsonRequest(server.url, `/api/v1/pack-workspace/previews/${first.previewId}/accept`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    expect(accepted.body.data).toMatchObject({
+      accepted: true,
+      assetId: "btc",
+      revisions: 1,
+      packState: "building",
+      capturedCount: 1,
+      totalCount: 16,
+      effects: { staged: true, workspaceChanged: true, released: false, discordContacted: false },
+    });
+    expect(await readFile(join(service.packRenders.stagingRoot, "active", "btc.png"))).toEqual(firstPublication);
+    expect((await fetch(`${server.url}${first.publicationUrl}`)).status).toBe(404);
+
+    const second = await preview("2026-07-23");
+    expect(second.nextRevision).toBe(2);
+    const secondPublication = Buffer.from(await (await fetch(`${server.url}${second.publicationUrl}`)).arrayBuffer());
+    const replacement = await jsonRequest(server.url, `/api/v1/pack-workspace/previews/${second.previewId}/accept`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    expect(replacement.body.data).toMatchObject({ revisions: 2, capturedCount: 1, packState: "building" });
+    expect(await readFile(join(service.packRenders.stagingRoot, "active", "btc.png"))).toEqual(secondPublication);
+
+    const current = await jsonRequest(server.url, "/api/v1/pack-workspace");
+    expect(current.body.data.packs.find((pack: any) => pack.id === "crypto").assets.find((asset: any) => asset.id === "btc")).toMatchObject({
+      captured: true,
+      artifactReady: true,
+      revisions: 2,
+    });
+    const after = await Promise.all(canonicalPaths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
+    expect(after).toEqual(before);
+  });
+
+  it("discards a Pack preview without staging or changing Workspace progress", async () => {
+    const { service, server } = await start();
+    const query = new URLSearchParams({
+      packId: "crypto",
+      assetId: "btc",
+      filename: "BTCUSD_2026-07-22_18-58-01.png",
+    });
+    const response = await fetch(`${server.url}/api/v1/pack-workspace/previews?${query.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "image/png" },
+      body: await framedPng(),
+    });
+    const preview = (await response.json() as any).data;
+
+    const discarded = await jsonRequest(server.url, `/api/v1/pack-workspace/previews/${preview.previewId}`, { method: "DELETE" });
+    expect(discarded.body.data).toMatchObject({
+      discarded: true,
+      effects: { workspaceChanged: false, staged: false, released: false, discordContacted: false },
+    });
+    expect((await fetch(`${server.url}${preview.publicationUrl}`)).status).toBe(404);
+    expect(await readdir(join(service.packRenders.stagingRoot))).toEqual([]);
+    const state = await jsonRequest(server.url, "/api/v1/pack-workspace");
+    expect(state.body.data.packs.find((pack: any) => pack.id === "crypto")).toMatchObject({ capturedCount: 0, state: "empty" });
+  });
+
   it("returns exact Pack ordering", async () => {
     const { server } = await start();
     const { body } = await jsonRequest(server.url, "/api/v1/packs/crypto");
@@ -256,10 +361,12 @@ describe("Admin HTTP server", () => {
     expect(response.headers.get("content-security-policy")).toBe(ADMIN_CSP);
   });
 
-  it("serves the Pack builder, standalone renderer, and read-only Registry without external resources", async () => {
+  it("serves the Pack Workspace, Pack builder, standalone renderer, and read-only Registry without external resources", async () => {
     const { server } = await start();
     const html = await (await fetch(`${server.url}/`)).text();
     expect(html).toContain("PACK BUILDER");
+    expect(html).toContain("PACK WORKSPACE");
+    expect(html).toContain("PUBLISH UNAVAILABLE");
     expect(html).toContain("/visionx-emblem.png");
     expect(html).toContain("/visionx-wordmark.png");
     expect(html).toContain("CREATE PACK");

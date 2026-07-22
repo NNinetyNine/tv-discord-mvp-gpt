@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VisionX Pack Builder</title>
+  <title>VisionX Administration</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main-content">Skip to Pack builder</a>
+  <a class="skip-link" href="#main-content">Skip to administration workspace</a>
   <div class="ambient-layer" aria-hidden="true"></div>
   <header class="app-header">
-    <div class="brand-lockup" aria-label="VisionX Pack builder">
+    <div class="brand-lockup" aria-label="VisionX administration">
       <img class="brand-emblem" src="/visionx-emblem.png" alt="" aria-hidden="true">
       <span class="brand-rule" aria-hidden="true"></span>
-      <span class="brand-copy"><img class="brand-wordmark" src="/visionx-wordmark.png" alt="VISIONX"><small>PACK BUILDER</small></span>
+      <span class="brand-copy"><img class="brand-wordmark" src="/visionx-wordmark.png" alt="VISIONX"><small>ADMINISTRATION</small></span>
     </div>
     <div class="canonical-context" aria-live="polite">
       <span id="source-state">CANONICAL STATE · LOADING</span>
@@ -23,7 +23,8 @@
   </header>
 
   <nav class="primary-nav" aria-label="Primary">
-    <button type="button" data-view="packs" aria-current="page">PACKS</button>
+    <button type="button" data-view="workspace" aria-current="page">WORKSPACE</button>
+    <button type="button" data-view="packs">PACKS</button>
     <button type="button" data-view="renderer">RENDER</button>
     <button type="button" data-view="registry">REGISTRY</button>
   </nav>
@@ -31,10 +32,73 @@
   <main id="main-content">
     <div id="message" class="message" role="alert" tabindex="-1" hidden></div>
 
-    <section class="view" data-view-panel="packs">
+    <section class="view" data-view-panel="workspace">
+      <section class="window workspace-overview" aria-labelledby="workspace-heading">
+        <header class="window-header">
+          <div><p class="micro-label">GOVERNED PACK CAPTURE</p><h1 id="workspace-heading">PACK WORKSPACE</h1></div>
+          <span class="context-fact">PUBLISH UNAVAILABLE</span>
+        </header>
+        <p class="window-help">Import one Pack member chart, inspect the canonical render, then explicitly accept it into staging. Previewing alone changes no Pack state.</p>
+        <div class="workspace-overview-grid">
+          <label><span>PACK</span><select id="workspace-pack"><option value="">LOADING PACKS</option></select></label>
+          <div class="derived-channel"><span>POLICY TIMEFRAME</span><strong id="workspace-timeframe">—</strong></div>
+          <div class="derived-channel"><span>PROGRESS</span><strong id="workspace-progress">0 / 0</strong></div>
+          <div class="derived-channel"><span>STATE</span><strong id="workspace-state">LOADING</strong></div>
+        </div>
+        <div class="workspace-progress-track" aria-hidden="true"><span id="workspace-progress-fill"></span></div>
+        <p id="workspace-remaining" class="workspace-remaining">LOADING REQUIRED ASSETS</p>
+      </section>
+
+      <section class="window workspace-import" aria-labelledby="workspace-import-heading">
+        <header class="window-header">
+          <div><p class="micro-label">NEXT ANALYSIS</p><h2 id="workspace-import-heading">IMPORT &amp; REVIEW</h2></div>
+          <span id="workspace-review-state" class="context-fact">SELECT AN ASSET</span>
+        </header>
+        <div class="workspace-import-fields">
+          <label><span>PACK ASSET</span><select id="workspace-asset"><option value="">SELECT ASSET</option></select></label>
+          <label class="renderer-file"><span>TRADINGVIEW PNG</span><input id="workspace-source" type="file" accept="image/png"></label>
+          <button id="workspace-preview-button" class="primary-action" type="button" disabled>RENDER PREVIEW</button>
+        </div>
+        <div class="renderer-guidance">
+          <span id="workspace-file-state">SELECT A TRADINGVIEW PNG EXPORT</span>
+          <span>ACCEPTANCE STAGES THE RENDERED PUBLICATION · NO DISCORD ACTION</span>
+        </div>
+      </section>
+
+      <section id="workspace-preview" class="window renderer-result" hidden aria-live="polite">
+        <header class="window-header">
+          <div><p class="micro-label">REVIEW GATE</p><h2 id="workspace-preview-heading">RENDER READY</h2></div>
+          <span id="workspace-preview-context" class="context-fact"></span>
+        </header>
+        <figure class="renderer-preview">
+          <img id="workspace-preview-image" alt="Pack chart publication awaiting acceptance">
+          <figcaption id="workspace-preview-caption"></figcaption>
+        </figure>
+        <div class="workspace-review-actions">
+          <a id="workspace-preview-receipt" class="outline-action download-link" target="_blank" rel="noreferrer">VIEW RECEIPT</a>
+          <button id="workspace-discard" class="outline-action" type="button">DISCARD</button>
+          <button id="workspace-accept" class="primary-action" type="button">ACCEPT REVISION</button>
+        </div>
+      </section>
+
+      <section class="window workspace-members" aria-labelledby="workspace-members-heading">
+        <header class="window-header">
+          <div><p class="micro-label">PACK PROGRESS</p><h2 id="workspace-members-heading">CURRENT ANALYSES &amp; REMAINING REQUIRED</h2></div>
+          <span id="workspace-member-count" class="context-fact">0 ASSETS</span>
+        </header>
+        <div class="table-wrap workspace-table-wrap">
+          <table>
+            <thead><tr><th>ASSET</th><th>TRADINGVIEW</th><th>STATUS</th><th>REVISION</th><th>CAPTURED</th></tr></thead>
+            <tbody id="workspace-members-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section class="view" data-view-panel="packs" hidden>
       <section class="window pack-controls" aria-labelledby="pack-controls-heading">
         <header class="window-header">
-          <div><p class="micro-label">CREATE PACK</p><h1 id="pack-controls-heading">PACK IDENTITY</h1></div>
+          <div><p class="micro-label">PACK BUILDER</p><h1 id="pack-controls-heading">PACK IDENTITY</h1></div>
           <span id="member-count" class="context-fact">0 MEMBERS</span>
         </header>
         <div class="compact-fields">
@@ -132,6 +196,6 @@
     </section>
   </main>
 
-  <footer>VISIONX · LOCAL ADMINISTRATION · NO PUBLICATION</footer>
+  <footer>VISIONX · LOCAL ADMINISTRATION · DISCORD PUBLICATION DISABLED</footer>
 </body>
 </html>

@@ -83,9 +83,18 @@ import {
 import { previewChartPublicationFile } from "../application/chart-publication-preview-file.ts";
 import {
   SUPPORTED_CHART_PUBLICATION_TIMEFRAMES,
+  defaultChartPublicationTimeframeForPack,
   validateChartPublicationTimeframe,
   type ChartPublicationTimeframe,
 } from "../application/chart-publication-preview.ts";
+import { acceptPackChartPublicationFile } from "../application/accept-pack-chart-publication-file.ts";
+import { createPersistentWorkspace } from "../packs/persistence.ts";
+import { createStagingStore } from "../wiring/staging.ts";
+import { DEFAULT_VALIDATION_POLICY, validateImage } from "../validation/validate-image.ts";
+import {
+  AdminPackRenderWorkspace,
+  type PackRenderPreviewArtifactName,
+} from "./admin-pack-render-workspace.ts";
 
 import {
   reviewPackSourceChange,
@@ -210,6 +219,31 @@ export interface AdminStandaloneRenderResult {
   };
 }
 
+export interface AdminPackWorkspaceAssetState extends AdminStandaloneRenderAsset {
+  readonly renderReady: boolean;
+  readonly captured: boolean;
+  readonly artifactReady: boolean;
+  readonly revisions: number;
+  readonly capturedAt: string | null;
+}
+
+export interface AdminPackWorkspacePackState {
+  readonly id: string;
+  readonly displayName: string;
+  readonly timeframe: ChartPublicationTimeframe;
+  readonly state: "empty" | "building" | "complete";
+  readonly capturedCount: number;
+  readonly totalCount: number;
+  readonly remainingRequiredAssetIds: readonly string[];
+  readonly assets: readonly AdminPackWorkspaceAssetState[];
+}
+
+export interface AdminPackWorkspaceState {
+  readonly schemaVersion: 1;
+  readonly publishAvailable: false;
+  readonly packs: readonly AdminPackWorkspacePackState[];
+}
+
 export interface AdminServiceOptions {
   readonly repositoryRoot: string;
   readonly workspaceRoot: string;
@@ -308,7 +342,9 @@ export class AdminService {
   readonly assetRegistrations: AdminAssetRegistrationWorkspace;
   readonly packBuilder: AdminPackBuilderWorkspace;
   readonly standaloneRenders: AdminStandaloneRenderWorkspace;
+  readonly packRenders: AdminPackRenderWorkspace;
   #state: LiveState;
+  #packAcceptanceLock: Promise<void> = Promise.resolve();
 
   private constructor(
     repositoryRoot: string,
@@ -317,6 +353,7 @@ export class AdminService {
     assetRegistrations: AdminAssetRegistrationWorkspace,
     packBuilder: AdminPackBuilderWorkspace,
     standaloneRenders: AdminStandaloneRenderWorkspace,
+    packRenders: AdminPackRenderWorkspace,
     state: LiveState,
   ) {
     this.repositoryRoot = repositoryRoot;
@@ -325,6 +362,7 @@ export class AdminService {
     this.assetRegistrations = assetRegistrations;
     this.packBuilder = packBuilder;
     this.standaloneRenders = standaloneRenders;
+    this.packRenders = packRenders;
     this.#state = state;
   }
 
@@ -338,8 +376,9 @@ export class AdminService {
     const assetRegistrations = await AdminAssetRegistrationWorkspace.open(workspace.root);
     const packBuilder = await AdminPackBuilderWorkspace.open(workspace.root);
     const standaloneRenders = await AdminStandaloneRenderWorkspace.open(workspace.root);
+    const packRenders = await AdminPackRenderWorkspace.open(workspace.root);
     const state = await AdminService.#loadState(repositoryRoot);
-    return new AdminService(repositoryRoot, workspace, promotions, assetRegistrations, packBuilder, standaloneRenders, state);
+    return new AdminService(repositoryRoot, workspace, promotions, assetRegistrations, packBuilder, standaloneRenders, packRenders, state);
   }
 
   static async #loadState(repositoryRoot: string): Promise<LiveState> {
@@ -556,6 +595,200 @@ export class AdminService {
     artifact: StandaloneRenderArtifactName,
   ): Promise<Buffer> {
     return this.standaloneRenders.readArtifact(renderId, artifact);
+  }
+
+  #packRuntime() {
+    return Object.freeze({
+      workspace: createPersistentWorkspace({
+        packs: this.#state.packs,
+        path: this.packRenders.sessionPath,
+      }),
+      staging: createStagingStore(this.packRenders.stagingRoot),
+    });
+  }
+
+  packWorkspaceState(): AdminPackWorkspaceState {
+    const runtime = this.#packRuntime();
+    const packs = this.#state.packs.map((pack) => {
+      const assets = pack.assets.map((assetId) => {
+        const asset = this.#state.byAssetId.get(assetId);
+        if (asset === undefined) throw new AdminError("invalid_registry", `Pack ${pack.id} references an unknown Asset.`);
+        const capture = runtime.workspace.captureOf(asset.id);
+        return Object.freeze({
+          id: asset.id,
+          displayName: asset.display,
+          tradingViewSymbol: asset.tradingView,
+          currency: asset.currency ?? "",
+          renderReady: asset.currency !== undefined && asset.tradingView.indexOf(":") > 0,
+          captured: capture !== null,
+          artifactReady: runtime.staging.has(asset.id),
+          revisions: capture?.revisions ?? 0,
+          capturedAt: capture?.capturedAt ?? null,
+        });
+      });
+      const remainingRequiredAssetIds = Object.freeze([...runtime.workspace.pendingAssets(pack.id)]);
+      return Object.freeze({
+        id: pack.id,
+        displayName: pack.display,
+        timeframe: defaultChartPublicationTimeframeForPack(pack),
+        state: runtime.workspace.packState(pack.id),
+        capturedCount: pack.assets.length - remainingRequiredAssetIds.length,
+        totalCount: pack.assets.length,
+        remainingRequiredAssetIds,
+        assets: Object.freeze(assets),
+      });
+    });
+    return Object.freeze({ schemaVersion: 1, publishAvailable: false, packs: Object.freeze(packs) });
+  }
+
+  async previewPackWorkspaceChart(input: {
+    readonly packId: string;
+    readonly assetId: string;
+    readonly sourceFilename: string;
+    readonly sourceBytes: Buffer;
+  }): Promise<Readonly<Record<string, unknown>>> {
+    await this.refresh();
+    const pack = this.#state.byPackId.get(input.packId);
+    if (pack === undefined) throw new AdminError("pack_not_found", `Pack ${input.packId} was not found.`, 404, { packId: input.packId });
+    const asset = this.#state.byAssetId.get(input.assetId);
+    if (asset === undefined) throw new AdminError("asset_not_found", `Asset ${input.assetId} was not found.`, 404, { assetId: input.assetId });
+    if (!pack.assets.includes(asset.id)) {
+      throw new AdminError("invalid_pack_render_preview", `Asset ${asset.id} does not belong to Pack ${pack.id}.`);
+    }
+    if (asset.currency === undefined || asset.tradingView.indexOf(":") <= 0) {
+      throw new AdminError("invalid_pack_render_preview", `Asset ${asset.id} needs qualified TradingView identity and canonical currency before rendering.`);
+    }
+
+    const task = await this.packRenders.createPreview(input.sourceFilename, input.sourceBytes);
+    try {
+      const rendered = await previewChartPublicationFile({
+        inputPath: task.sourcePath,
+        request: { context: "pack", assetId: asset.id, packId: pack.id },
+        outputPath: task.outputPath,
+        receiptPath: task.receiptPath,
+        registryPath: this.#state.registryFile.canonicalPath,
+        channelsPath: this.#state.channelsFile.canonicalPath,
+        packsPath: this.#state.packsFile.canonicalPath,
+      });
+      if (!rendered.ok) {
+        throw new AdminError("invalid_pack_render_preview", rendered.detail, 400, { reason: rendered.reason });
+      }
+      if (rendered.context !== "pack" || rendered.packId !== pack.id) {
+        throw new AdminError("internal_error", "Pack preview renderer returned an incompatible context.", 500);
+      }
+      const record = await this.packRenders.finalizePreview(task, {
+        packId: pack.id,
+        assetId: asset.id,
+        sourceBasename: rendered.sourceBasename,
+        timeframe: rendered.timeframe,
+        dataAsOf: rendered.dataAsOf,
+        outputSha256: rendered.outputSha256,
+        registrySourceSha256: this.#state.registryFile.sha256,
+        packSourceSha256: this.#state.packsFile.sha256,
+        channelConfigurationSha256: this.#state.channelsFile.sha256,
+      });
+      const current = this.#packRuntime().workspace.captureOf(asset.id);
+      return Object.freeze({
+        schemaVersion: 1,
+        previewId: record.previewId,
+        packId: pack.id,
+        asset: Object.freeze({ id: asset.id, displayName: asset.display, tradingViewSymbol: asset.tradingView, currency: asset.currency }),
+        timeframe: record.timeframe,
+        dataAsOf: record.dataAsOf,
+        sourceBasename: record.sourceBasename,
+        outputSha256: record.outputSha256,
+        nextRevision: (current?.revisions ?? 0) + 1,
+        publicationUrl: `/api/v1/pack-workspace/previews/${record.previewId}/publication.png`,
+        receiptUrl: `/api/v1/pack-workspace/previews/${record.previewId}/receipt.json`,
+        effects: Object.freeze({ workspaceChanged: false, staged: false, released: false, discordContacted: false }),
+      });
+    } catch (error) {
+      await this.packRenders.discardPreview(task.previewId).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  readPackWorkspacePreviewArtifact(
+    previewId: string,
+    artifact: PackRenderPreviewArtifactName,
+  ): Promise<Buffer> {
+    return this.packRenders.readPreviewArtifact(previewId, artifact);
+  }
+
+  discardPackWorkspacePreview(previewId: string): Promise<void> {
+    return this.packRenders.discardPreview(previewId);
+  }
+
+  async #withPackAcceptanceLock<T>(operation: () => Promise<T>): Promise<T> {
+    const prior = this.#packAcceptanceLock;
+    let release!: () => void;
+    this.#packAcceptanceLock = new Promise<void>((resolvePromise) => { release = resolvePromise; });
+    await prior;
+    try { return await operation(); }
+    finally { release(); }
+  }
+
+  acceptPackWorkspacePreview(previewId: string): Promise<Readonly<Record<string, unknown>>> {
+    return this.#withPackAcceptanceLock(async () => {
+      await this.refresh();
+      const claimed = await this.packRenders.claimPreview(previewId);
+      const record = claimed.record;
+      if (
+        record.registrySourceSha256 !== this.#state.registryFile.sha256 ||
+        record.packSourceSha256 !== this.#state.packsFile.sha256 ||
+        record.channelConfigurationSha256 !== this.#state.channelsFile.sha256
+      ) {
+        await this.packRenders.releaseClaim(previewId);
+        throw new AdminError("pack_render_preview_state_conflict", "Registry, Pack, or channel definitions changed after this preview. Render a new preview.", 409);
+      }
+
+      const runtime = this.#packRuntime();
+      let accepted;
+      try {
+        accepted = await acceptPackChartPublicationFile({
+          sourceBasename: record.sourceBasename,
+          outputPath: claimed.task.outputPath,
+          receiptPath: claimed.task.receiptPath,
+          outputBasename: "publication.png",
+          receiptBasename: "receipt.json",
+          outputSha256: record.outputSha256,
+          assetId: record.assetId,
+          packId: record.packId,
+          timeframe: record.timeframe,
+          dataAsOf: record.dataAsOf,
+        }, {
+          workspace: runtime.workspace,
+          staging: runtime.staging,
+          validate: (path) => validateImage(path, DEFAULT_VALIDATION_POLICY),
+          now: () => new Date().toISOString(),
+        });
+      } catch {
+        throw new AdminError("pack_render_preview_state_conflict", "Pack preview acceptance stopped in an indeterminate state. Do not retry this preview.", 500);
+      }
+      if (!accepted.ok) {
+        await this.packRenders.releaseClaim(previewId);
+        throw new AdminError("invalid_pack_render_preview", "Pack preview could not be accepted.", 400, { outcome: accepted.outcome });
+      }
+      try { await this.packRenders.completeClaim(previewId); }
+      catch {
+        throw new AdminError("pack_render_preview_state_conflict", "Pack capture succeeded but its evidence could not be finalized. Do not retry this preview.", 500);
+      }
+      return Object.freeze({
+        schemaVersion: 1,
+        previewId,
+        accepted: true,
+        assetId: accepted.assetId,
+        packId: accepted.packId,
+        timeframe: accepted.timeframe,
+        dataAsOf: accepted.dataAsOf,
+        revisions: accepted.revisions,
+        packState: accepted.packState,
+        capturedCount: accepted.capturedCount,
+        totalCount: accepted.totalCount,
+        remainingRequiredAssetIds: accepted.remainingRequiredAssetIds,
+        effects: Object.freeze({ staged: true, workspaceChanged: true, released: false, discordContacted: false }),
+      });
+    });
   }
 
   promotionContext(): PackPromotionContext {

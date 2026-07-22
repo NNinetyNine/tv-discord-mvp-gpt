@@ -1,6 +1,4 @@
-import { basename } from "node:path";
-
-import type { Workspace, PackState } from "../packs/workspace.ts";
+import type { Workspace } from "../packs/workspace.ts";
 import type { StagingStore } from "../wiring/staging.ts";
 import type { ValidationResult } from "../types.ts";
 import {
@@ -8,7 +6,10 @@ import {
   type PreviewChartPublicationFileDependencies,
   type PreviewChartPublicationFileResult,
 } from "./chart-publication-preview-file.ts";
-import type { ChartPublicationTimeframe } from "./chart-publication-preview.ts";
+import {
+  acceptPackChartPublicationFile,
+  type AcceptPackChartPublicationFileResult,
+} from "./accept-pack-chart-publication-file.ts";
 
 /**
  * One accepted Pack render entering publication custody.
@@ -39,48 +40,13 @@ export interface CapturePackChartPublicationFileDependencies {
 }
 
 export type CapturePackChartPublicationFileResult =
-  | {
-      readonly ok: true;
-      readonly outcome: "staged_render";
-      readonly sourceBasename: string;
-      readonly outputBasename: string;
-      readonly receiptBasename: string;
-      readonly outputSha256: string;
-      readonly assetId: string;
-      readonly packId: string;
-      readonly timeframe: ChartPublicationTimeframe;
-      readonly dataAsOf: string;
-      readonly revisions: number;
-      readonly packState: PackState;
-      readonly capturedCount: number;
-      readonly totalCount: number;
-      readonly remainingRequiredAssetIds: readonly string[];
-    }
+  | AcceptPackChartPublicationFileResult
   | {
       readonly ok: false;
       readonly outcome: "render_failed";
       readonly reason: string;
       readonly detail: string;
-    }
-  | {
-      readonly ok: false;
-      readonly outcome: "validation_failed";
-      readonly assetId: string;
-      readonly packId: string;
-      readonly reason: string;
-      readonly checks: Readonly<Record<string, boolean>>;
-    }
-  | {
-      readonly ok: false;
-      readonly outcome: "staging_failed";
-      readonly assetId: string;
-      readonly packId: string;
-      readonly detail: string;
     };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function renderFailure(
   result: Exclude<PreviewChartPublicationFileResult, { readonly ok: true }>,
@@ -116,43 +82,10 @@ export async function capturePackChartPublicationFile(
     throw new Error("Pack chart capture received a non-Pack or mismatched render result");
   }
 
-  const validation = await dependencies.validate(options.outputPath);
-  if (!validation.ok) {
-    return Object.freeze({
-      ok: false,
-      outcome: "validation_failed",
-      assetId: options.assetId,
-      packId: options.packId,
-      reason: validation.reason ?? "validation failed",
-      checks: Object.freeze({ ...validation.checks }),
-    });
-  }
-
-  try {
-    dependencies.staging.stage(options.assetId, options.outputPath);
-  } catch (error) {
-    return Object.freeze({
-      ok: false,
-      outcome: "staging_failed",
-      assetId: options.assetId,
-      packId: options.packId,
-      detail: errorMessage(error),
-    });
-  }
-
-  const capture = dependencies.workspace.capture(options.assetId, dependencies.now());
-  const pack = dependencies.workspace.pack(options.packId);
-  if (pack === null) {
-    throw new Error(`Pack ${options.packId} disappeared after its render was prepared`);
-  }
-  const remainingRequiredAssetIds = Object.freeze([
-    ...dependencies.workspace.pendingAssets(options.packId),
-  ]);
-
-  return Object.freeze({
-    ok: true,
-    outcome: "staged_render",
-    sourceBasename: basename(options.inputPath),
+  return acceptPackChartPublicationFile({
+    sourceBasename: rendered.sourceBasename,
+    outputPath: options.outputPath,
+    receiptPath: options.receiptPath,
     outputBasename: rendered.outputBasename,
     receiptBasename: rendered.receiptBasename,
     outputSha256: rendered.outputSha256,
@@ -160,10 +93,5 @@ export async function capturePackChartPublicationFile(
     packId: options.packId,
     timeframe: rendered.timeframe,
     dataAsOf: rendered.dataAsOf,
-    revisions: capture.revisions,
-    packState: dependencies.workspace.packState(options.packId),
-    capturedCount: pack.assets.length - remainingRequiredAssetIds.length,
-    totalCount: pack.assets.length,
-    remainingRequiredAssetIds,
-  });
+  }, dependencies);
 }

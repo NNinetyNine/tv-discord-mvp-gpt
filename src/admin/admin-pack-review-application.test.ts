@@ -57,4 +57,20 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(js).not.toContain("publishPack(");
     expect(js).not.toContain("capturePackChartFromFile(");
   });
+
+  it("requires explicit Pack preview acceptance while keeping publication unavailable", async () => {
+    const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
+    const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
+
+    expect(html).toContain("PACK WORKSPACE");
+    expect(html).toContain("CURRENT ANALYSES &amp; REMAINING REQUIRED");
+    expect(html).toContain("PUBLISH UNAVAILABLE");
+    expect(html).toContain("ACCEPT REVISION");
+    expect(js).toContain('api(`/api/v1/pack-workspace/previews?${query.toString()}`');
+    expect(js).toContain('api(`/api/v1/pack-workspace/previews/${encodeURIComponent(preview.previewId)}/accept`');
+    expect(js).toContain('method: "DELETE"');
+    expect(html).not.toMatch(/<button[^>]*>[^<]*(?:release|publish)[^<]*<\/button>/iu);
+    expect(js).not.toContain("/publish");
+    expect(js).not.toContain("publishPack(");
+  });
 });

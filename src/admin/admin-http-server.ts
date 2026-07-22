@@ -222,12 +222,15 @@ async function readAssetLogoBody(
   return Buffer.concat(chunks);
 }
 
-async function readStandaloneRenderBody(request: IncomingMessage): Promise<Buffer> {
+async function readChartRenderBody(
+  request: IncomingMessage,
+  context: "Standalone" | "Pack",
+): Promise<Buffer> {
   const contentType = request.headers["content-type"];
   if (typeof contentType !== "string" || !/^image\/png(?:\s*;|$)/iu.test(contentType)) {
     throw new AdminError(
       "invalid_content_type",
-      "Standalone chart uploads require Content-Type: image/png.",
+      `${context} chart uploads require Content-Type: image/png.`,
       415,
     );
   }
@@ -239,7 +242,7 @@ async function readStandaloneRenderBody(request: IncomingMessage): Promise<Buffe
     if (length > ADMIN_STANDALONE_RENDER_BODY_LIMIT) {
       throw new AdminError(
         "request_body_too_large",
-        `Standalone chart exceeds ${ADMIN_STANDALONE_RENDER_BODY_LIMIT} bytes.`,
+        `${context} chart exceeds ${ADMIN_STANDALONE_RENDER_BODY_LIMIT} bytes.`,
         413,
       );
     }
@@ -383,7 +386,7 @@ async function routeApi(
   if (pathname === "/api/v1/standalone-renders") {
     if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     exactSearchParameters(url, ["assetId", "timeframe", "filename"], "Standalone render request");
-    const bytes = await readStandaloneRenderBody(request);
+    const bytes = await readChartRenderBody(request, "Standalone");
     return ok(response, await service.renderStandaloneChart({
       assetId: url.searchParams.get("assetId") ?? "",
       timeframe: url.searchParams.get("timeframe"),
@@ -397,6 +400,48 @@ async function routeApi(
     const artifact = standaloneArtifact[2] as "publication.png" | "receipt.json";
     const bytes = await service.readStandaloneRenderArtifact(standaloneArtifact[1] ?? "", artifact);
     return binaryArtifact(request, response, bytes, artifact);
+  }
+  if (pathname === "/api/v1/pack-workspace") {
+    if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    return ok(response, service.packWorkspaceState());
+  }
+  if (pathname === "/api/v1/pack-workspace/previews") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, ["packId", "assetId", "filename"], "Pack preview request");
+    const bytes = await readChartRenderBody(request, "Pack");
+    return ok(response, await service.previewPackWorkspaceChart({
+      packId: url.searchParams.get("packId") ?? "",
+      assetId: url.searchParams.get("assetId") ?? "",
+      sourceFilename: url.searchParams.get("filename") ?? "",
+      sourceBytes: bytes,
+    }), 201);
+  }
+  const packPreviewArtifact = /^\/api\/v1\/pack-workspace\/previews\/([a-f0-9]{32})\/(publication\.png|receipt\.json)$/u.exec(pathname);
+  if (packPreviewArtifact !== null) {
+    if (method !== "GET" && method !== "HEAD") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const artifact = packPreviewArtifact[2] as "publication.png" | "receipt.json";
+    const bytes = await service.readPackWorkspacePreviewArtifact(packPreviewArtifact[1] ?? "", artifact);
+    return binaryArtifact(request, response, bytes, artifact);
+  }
+  const packPreviewAccept = /^\/api\/v1\/pack-workspace\/previews\/([a-f0-9]{32})\/accept$/u.exec(pathname);
+  if (packPreviewAccept !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Pack preview acceptance body must be an object.");
+    exactFields(body, [], "Pack preview acceptance body");
+    return ok(response, await service.acceptPackWorkspacePreview(packPreviewAccept[1] ?? ""));
+  }
+  const packPreview = /^\/api\/v1\/pack-workspace\/previews\/([a-f0-9]{32})$/u.exec(pathname);
+  if (packPreview !== null) {
+    if (method !== "DELETE") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const previewId = packPreview[1] ?? "";
+    await service.discardPackWorkspacePreview(previewId);
+    return ok(response, {
+      schemaVersion: 1,
+      previewId,
+      discarded: true,
+      effects: Object.freeze({ workspaceChanged: false, staged: false, released: false, discordContacted: false }),
+    });
   }
   if (pathname === "/api/v1/refresh" && method === "POST") return ok(response, await service.refresh());
   if (pathname === "/api/v1/assets" && method === "GET") {

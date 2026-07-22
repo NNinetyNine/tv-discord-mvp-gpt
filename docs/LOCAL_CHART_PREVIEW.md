@@ -61,8 +61,33 @@ then derives the timeframe from Pack policy:
 - the `etfs` Pack defaults to `4D`.
 
 The caller cannot override the Pack timeframe through this command. The result
-includes its Pack context so a later milestone can admit an accepted render to
-Pack staging without changing the deterministic render contract.
+includes its Pack context so the same deterministic render contract can be
+reviewed and admitted to Pack staging.
+
+### Pack Workspace UI
+
+Start the loopback administration service with `npm run admin` and choose
+**WORKSPACE**. The Pack Workspace shows each Pack's policy timeframe, current
+state, captured count, remaining required Assets, per-Asset revision count, and
+whether the current staged artifact is present.
+
+The browser workflow is deliberately two-phase:
+
+1. **RENDER PREVIEW** preserves the raw upload and creates a canonical Pack
+   publication plus receipt in a unique review workspace. Pack progress and
+   staging remain unchanged.
+2. **ACCEPT REVISION** re-verifies the immutable preview evidence, validates the
+   rendered publication, stages that publication, and records the Workspace
+   capture/revision.
+
+**DISCARD** removes an unaccepted preview without changing staging or Pack
+progress. Once accepted, the preview is consumed and retained as accepted local
+evidence, so the same review cannot be replayed. A later accepted preview for
+the same Asset replaces only its current staged artifact and increments its
+revision count.
+
+Publication remains unavailable in this UI milestone. Preview, acceptance, and
+discard do not create a Release, resolve a Discord thread, or contact Discord.
 
 ### Pack capture and staging
 
