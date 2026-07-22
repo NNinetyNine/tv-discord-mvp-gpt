@@ -4,12 +4,18 @@ import {
   Events,
   GatewayIntentBits,
   type Channel,
+  type ForumThreadChannel,
 } from "discord.js";
 
 import type {
   DiscordAssetThreadFacts,
   DiscordAssetThreadInspector,
 } from "../application/adopt-discord-asset-thread.ts";
+import type {
+  DiscordAssetThreadCreateInput,
+  DiscordAssetThreadCreator,
+  DiscordAssetThreadDeleter,
+} from "../application/provision-discord-asset-thread.ts";
 
 export type DiscordChannelFetcher = (
   channelId: string,
@@ -19,6 +25,47 @@ export interface DiscordForumSession {
   readonly inspectThread:
     DiscordAssetThreadInspector;
   close(): Promise<void>;
+}
+
+export interface DiscordForumProvisioningOperations {
+  readonly createThread:
+    DiscordAssetThreadCreator;
+  readonly deleteThread:
+    DiscordAssetThreadDeleter;
+}
+
+export interface DiscordForumProvisioningSession
+  extends DiscordForumSession,
+    DiscordForumProvisioningOperations {}
+
+interface ThreadFactSource {
+  readonly id: string;
+  readonly parentId: string | null;
+  readonly name: string;
+  readonly archived: boolean | null;
+  readonly locked: boolean | null;
+  readonly appliedTags: readonly string[];
+}
+
+function errorDetail(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : String(error);
+}
+
+function threadFacts(
+  thread: ThreadFactSource,
+): DiscordAssetThreadFacts {
+  return Object.freeze({
+    threadId: thread.id,
+    parentId: thread.parentId,
+    name: thread.name,
+    archived: thread.archived,
+    locked: thread.locked,
+    appliedTagIds: Object.freeze([
+      ...thread.appliedTags,
+    ]),
+  });
 }
 
 /**
@@ -72,26 +119,156 @@ export async function inspectDiscordForumThread(
     );
   }
 
+  return threadFacts(candidate);
+}
+
+/**
+ * Build provisioning operations around one Discord channel fetcher.
+ *
+ * Compensation is deliberately confined to threads created through this exact
+ * operations instance. deleteThread() refuses every unrelated thread ID.
+ */
+export function buildDiscordForumProvisioningOperations(
+  fetchChannel: DiscordChannelFetcher,
+): DiscordForumProvisioningOperations {
+  const provisionalThreads =
+    new Map<string, ForumThreadChannel>();
+
+  const createThread:
+  DiscordAssetThreadCreator =
+    async (
+      input: DiscordAssetThreadCreateInput,
+    ) => {
+      const candidate = await fetchChannel(
+        input.forumChannelId,
+      );
+
+      if (candidate === null) {
+        throw new Error(
+          `forum channel ${input.forumChannelId} was not found or is not visible to the bot`,
+        );
+      }
+
+      if (
+        candidate.id !==
+        input.forumChannelId
+      ) {
+        throw new Error(
+          `Discord returned channel "${candidate.id}" for requested forum "${input.forumChannelId}"`,
+        );
+      }
+
+      if (
+        candidate.type !==
+        ChannelType.GuildForum
+      ) {
+        throw new Error(
+          `channel ${input.forumChannelId} is not a Discord forum channel`,
+        );
+      }
+
+      const availableTagIds = new Set(
+        candidate.availableTags.map(
+          (tag) => tag.id,
+        ),
+      );
+
+      for (
+        const tagId of input.appliedTagIds
+      ) {
+        if (!availableTagIds.has(tagId)) {
+          throw new Error(
+            `tag ${tagId} is not available in forum ${input.forumChannelId}`,
+          );
+        }
+      }
+
+      const thread =
+        await candidate.threads.create({
+          name: input.title,
+          appliedTags: [
+            ...input.appliedTagIds,
+          ],
+          message: {
+            files: [
+              {
+                attachment: Buffer.from(
+                  input.starterLogoBytes,
+                ),
+                name:
+                  input.starterLogoFilename,
+              },
+            ],
+          },
+        });
+
+      if (
+        thread.parentId !==
+        input.forumChannelId
+      ) {
+        let cleanupDetail:
+          string | undefined;
+
+        try {
+          await thread.delete(
+            "VisionX rejected an invalid provisioning result",
+          );
+        } catch (error) {
+          cleanupDetail = errorDetail(error);
+        }
+
+        throw new Error(
+          [
+            `Discord created thread ${thread.id} under parent ${String(thread.parentId)}, not requested forum ${input.forumChannelId}`,
+            cleanupDetail === undefined
+              ? "the invalid thread was deleted"
+              : `the invalid thread could not be deleted: ${cleanupDetail}`,
+          ].join("; "),
+        );
+      }
+
+      provisionalThreads.set(
+        thread.id,
+        thread,
+      );
+
+      return threadFacts(thread);
+    };
+
+  const deleteThread:
+  DiscordAssetThreadDeleter =
+    async (threadId: string) => {
+      const thread =
+        provisionalThreads.get(threadId);
+
+      if (thread === undefined) {
+        throw new Error(
+          `refusing to delete thread ${threadId}: it was not created by this provisioning session`,
+        );
+      }
+
+      await thread.delete(
+        "VisionX provisioning compensation after binding failure",
+      );
+
+      provisionalThreads.delete(threadId);
+    };
+
   return Object.freeze({
-    threadId: candidate.id,
-    parentId: candidate.parentId,
-    name: candidate.name,
-    archived: candidate.archived,
-    locked: candidate.locked,
-    appliedTagIds: Object.freeze([
-      ...candidate.appliedTags,
-    ]),
+    createThread,
+    deleteThread,
   });
 }
 
 /**
- * Open one read-only Discord forum inspection session.
+ * Open one Discord forum session.
  *
- * Login is completed before the session is returned. Call close() in a
- * finally block so the gateway socket is always destroyed.
+ * Login is completed before the session is returned. Adoption inspection is
+ * read-only. Provisioning creation is explicit, and compensation can delete
+ * only threads created through this same session.
  */
 export async function openDiscordForumSession():
-Promise<DiscordForumSession> {
+Promise<DiscordForumProvisioningSession> {
   const token = process.env.DISCORD_BOT_TOKEN;
 
   if (!token || token.trim().length === 0) {
@@ -115,13 +292,20 @@ Promise<DiscordForumSession> {
     await client.login(token);
     await ready;
   } catch (error) {
-    await client.destroy().catch(() => undefined);
+    await client.destroy().catch(
+      () => undefined,
+    );
     throw error;
   }
 
   const fetchChannel: DiscordChannelFetcher =
     async (channelId) =>
       client.channels.fetch(channelId);
+
+  const provisioning =
+    buildDiscordForumProvisioningOperations(
+      fetchChannel,
+    );
 
   return Object.freeze({
     inspectThread:
@@ -130,6 +314,12 @@ Promise<DiscordForumSession> {
           fetchChannel,
           threadId,
         ),
+
+    createThread:
+      provisioning.createThread,
+
+    deleteThread:
+      provisioning.deleteThread,
 
     async close(): Promise<void> {
       await client.destroy();
