@@ -49,6 +49,16 @@ The caller cannot override the Pack timeframe through this command. The result
 includes its Pack context so a later milestone can admit an accepted render to
 Pack staging without changing the deterministic render contract.
 
+### Pack capture and staging
+
+The application composition root exposes `capturePackChartFromFile(...)` as
+the canonical Pack artifact path. It prepares the Pack-context render, validates
+the rendered PNG, copies that PNG (never the raw TradingView export) into the
+asset-keyed staging slot used by `publishPack()`, and only then records the
+Workspace capture/revision. The raw export and the no-overwrite rendered PNG and
+receipt remain intact. Standalone renders do not call this service and therefore
+cannot change staging, Workspace state, Releases, thread bindings, or Discord.
+
 ```bash
 npm run preview-chart -- \
   --context pack \

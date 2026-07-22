@@ -21,6 +21,11 @@ import {
   type CaptureFromFileReceipt,
 } from "../application/capture-from-file.ts";
 import {
+  capturePackChartPublicationFile,
+  type CapturePackChartPublicationFileOptions,
+  type CapturePackChartPublicationFileResult,
+} from "../application/capture-pack-chart-publication-file.ts";
+import {
   publishPack,
   resumeInterruptedRelease,
   type PublishPackResult,
@@ -102,6 +107,13 @@ export interface App {
   readonly releases: ReleaseStore;
   /** Application use case: capture one operator-exported file. */
   captureFromFile(filePath: string): Promise<CaptureFromFileReceipt>;
+  /** Canonical Pack path: render, validate, and stage the publication artifact. */
+  capturePackChartFromFile(
+    options: Pick<
+      CapturePackChartPublicationFileOptions,
+      "inputPath" | "assetId" | "packId" | "outputPath" | "receiptPath"
+    >,
+  ): Promise<CapturePackChartPublicationFileResult>;
   /** Orchestration: publish the given pack as an archived Release. */
   publishPack(packId: string, options: PublishOptions): Promise<PublishPackResult>;
   /** Orchestration: resume the given pack's interrupted release. */
@@ -151,6 +163,17 @@ export function buildApp(opts: BuildAppOptions): App {
     releases,
     captureFromFile(filePath: string): Promise<CaptureFromFileReceipt> {
       return captureFromFile({ filePath, resolver, registry, workspace, staging, validate });
+    },
+    capturePackChartFromFile(options): Promise<CapturePackChartPublicationFileResult> {
+      return capturePackChartPublicationFile(
+        {
+          ...options,
+          registryPath: opts.registryPath,
+          channelsPath: opts.channelsPath,
+          packsPath: opts.packsPath,
+        },
+        { workspace, staging, validate, now },
+      );
     },
     publishPack(packId: string, options: PublishOptions): Promise<PublishPackResult> {
       return publishPack(

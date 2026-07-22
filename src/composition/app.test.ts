@@ -90,6 +90,7 @@ describe("buildApp — assembles against real config", () => {
   it("exposes registry, resolver, workspace, staging, releases, and the services", () => {
     const app = makeApp();
     expect(typeof app.captureFromFile).toBe("function");
+    expect(typeof app.capturePackChartFromFile).toBe("function");
     expect(typeof app.publishPack).toBe("function");
     expect(typeof app.resumePack).toBe("function");
     expect(typeof app.resolver.resolve).toBe("function");
