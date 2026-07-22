@@ -27,15 +27,15 @@ describe("AdminService", () => {
       registryAssetCount: 131,
       packCount: 5,
       packMembershipCount: 131,
-      registryFingerprint: "2cc98138471949ac3da3411840fa0ef77c0a91e06f31a851e64259f696af4d9b",
-      auditGapCount: 260,
+      registryFingerprint: "cc326744ab56e49260e0979e0cd8475552d9fd48e024c87a84a6ed613e26981a",
+      auditGapCount: 230,
     });
   });
 
   it("reports exact canonical source hashes", async () => {
     const service = await createService();
     expect(service.status()).toMatchObject({
-      registrySourceSha256: "20c060e458285aa51dd38764a3b56516ba2ae35c44d05b58e283f1a76747d6cc",
+      registrySourceSha256: "922bd65da2b222d6bfae647e155829c2c4de9b2767c7d57795530fef821b66b2",
       packSourceSha256: "29a8284033f1c67466f7a50b54a64d208e72e8dcce25e1cd897a650bdbc3c0b4",
       channelConfigurationSha256: "11bda2d95b9a93497c673f400bd78fd0215df18a02b2915089e397c13e5b0aad",
     });
@@ -65,7 +65,15 @@ describe("AdminService", () => {
       tradingViewSymbol: "CRYPTO:BTCUSD",
       currency: "USD",
     });
+    expect(options.assets).toContainEqual({
+      id: "tao",
+      displayName: "Bittensor",
+      tradingViewSymbol: "BINANCE:TAOUSDT",
+      currency: "USDT",
+    });
     expect(options.assets.every((asset) => asset.tradingViewSymbol.includes(":") && asset.currency.length > 0)).toBe(true);
+    expect(options.assets).toHaveLength(16);
+    expect(options.unavailableAssetCount).toBe(115);
     expect(options.assets.length + options.unavailableAssetCount).toBe(131);
   });
 

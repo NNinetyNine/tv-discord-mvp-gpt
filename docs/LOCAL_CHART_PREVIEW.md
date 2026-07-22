@@ -64,6 +64,10 @@ The caller cannot override the Pack timeframe through this command. The result
 includes its Pack context so the same deterministic render contract can be
 reviewed and admitted to Pack staging.
 
+All 16 Crypto Pack members have reconciled qualified identities and canonical
+currencies and are available for Pack and standalone rendering. Other Packs
+remain available member-by-member as their identities are reconciled.
+
 ### Pack Workspace UI
 
 Start the loopback administration service with `npm run admin` and choose

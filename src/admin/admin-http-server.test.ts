@@ -77,8 +77,8 @@ describe("Admin HTTP server", () => {
       registryAssetCount: 131,
       packCount: 5,
       packMembershipCount: 131,
-      auditGapCount: 260,
-      registrySourceSha256: "20c060e458285aa51dd38764a3b56516ba2ae35c44d05b58e283f1a76747d6cc",
+      auditGapCount: 230,
+      registrySourceSha256: "922bd65da2b222d6bfae647e155829c2c4de9b2767c7d57795530fef821b66b2",
     });
   });
 
@@ -178,6 +178,7 @@ describe("Admin HTTP server", () => {
       captured: false,
       revisions: 0,
     });
+    expect(crypto.assets.every((asset: any) => asset.renderReady === true)).toBe(true);
 
     const preview = async (date: string) => {
       const query = new URLSearchParams({

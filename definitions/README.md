@@ -31,14 +31,12 @@ rejects duplicate instrument tokens so two markets cannot silently claim the
 same export filename. Historical `tradingViewAliases` remain temporary
 compatibility data for Assets that have not yet been reconciled; new workflows
 should supply the exact qualified TradingView ticker instead of creating aliases.
+The Crypto Pack was fully reconciled in Step 528; its qualified identities,
+currencies, filename tokens, and alias dispositions are recorded in
+`docs/CRYPTO_PACK_RECONCILIATION.md`.
 
-## Known exclusions
+## Reconciled source ambiguities
 
-Three items from the source screenshots are intentionally **excluded** to keep
-the data valid, pending a decision:
-
-- `DAX` — appears in both Indices and ETFs (same symbol, two groups)
-- `XLK` — appears twice in ETFs with different names
-- `TOTAL3` — shown without a normal ticker
-
-These are not in registry.json and were not silently assigned to one group.
+Historical duplicate source rows are represented once: `DAX` is assigned to
+Indices and `XLK` is assigned to ETFs. `TOTAL3` is included in Crypto with the
+qualified `CRYPTOCAP:TOTAL3` identity. No duplicate row is silently retained.
