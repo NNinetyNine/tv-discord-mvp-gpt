@@ -325,6 +325,24 @@ export function reportProvisionDiscordAssetThreadResult(
       );
       return 1;
 
+    case "invalid_created_thread_deleted":
+      stderr(
+        `✗ Discord returned invalid facts for newly created thread ${result.thread.threadId}: ${result.detail}`,
+      );
+      stderr(
+        "  The invalid provisional Discord thread was deleted successfully.",
+      );
+      return 1;
+
+    case "invalid_created_thread_retained":
+      stderr(
+        `✗ Discord returned invalid facts for newly created thread ${result.thread.threadId}: ${result.detail}`,
+      );
+      stderr(
+        `  URGENT: provisional thread ${result.thread.threadId} was retained because cleanup failed: ${result.cleanupDetail}`,
+      );
+      return 1;
+
     case "binding_failed_thread_deleted":
       stderr(
         `✗ Binding failed after Discord created thread ${result.thread.threadId}: ${result.detail}`,

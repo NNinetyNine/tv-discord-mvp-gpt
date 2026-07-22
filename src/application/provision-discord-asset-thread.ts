@@ -124,6 +124,23 @@ export type ProvisionDiscordAssetThreadResult =
     }
   | {
       readonly ok: false;
+      readonly outcome: "invalid_created_thread_deleted";
+      readonly packId: string;
+      readonly assetId: string;
+      readonly thread: DiscordAssetThreadFacts;
+      readonly detail: string;
+    }
+  | {
+      readonly ok: false;
+      readonly outcome: "invalid_created_thread_retained";
+      readonly packId: string;
+      readonly assetId: string;
+      readonly thread: DiscordAssetThreadFacts;
+      readonly detail: string;
+      readonly cleanupDetail: string;
+    }
+  | {
+      readonly ok: false;
       readonly outcome: "binding_failed_thread_deleted";
       readonly packId: string;
       readonly assetId: string;
@@ -331,13 +348,41 @@ export async function provisionDiscordAssetThread(
     };
   }
 
-  if (
-    !DISCORD_SNOWFLAKE.test(thread.threadId) ||
-    thread.parentId !== forumChannelId
-  ) {
-    throw new Error(
-      `internal: Discord provisioner returned thread "${thread.threadId}" with parent "${String(thread.parentId)}" for forum "${forumChannelId}"`,
-    );
+  const invalidThreadDetail =
+    !DISCORD_SNOWFLAKE.test(thread.threadId)
+      ? `Discord provisioner returned invalid thread ID "${thread.threadId}".`
+      : thread.parentId !== forumChannelId
+        ? `Discord provisioner returned parent "${String(thread.parentId)}" for thread "${thread.threadId}", expected forum "${forumChannelId}".`
+        : null;
+
+  if (invalidThreadDetail !== null) {
+    try {
+      await deps.deleteThread(
+        thread.threadId,
+      );
+
+      return {
+        ok: false,
+        outcome:
+          "invalid_created_thread_deleted",
+        packId: input.packId,
+        assetId: input.assetId,
+        thread,
+        detail: invalidThreadDetail,
+      };
+    } catch (cleanupError) {
+      return {
+        ok: false,
+        outcome:
+          "invalid_created_thread_retained",
+        packId: input.packId,
+        assetId: input.assetId,
+        thread,
+        detail: invalidThreadDetail,
+        cleanupDetail:
+          errorDetail(cleanupError),
+      };
+    }
   }
 
   try {

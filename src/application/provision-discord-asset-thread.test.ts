@@ -353,6 +353,74 @@ describe("Discord Asset-thread provisioning", () => {
     expect(state.deleted).toEqual([]);
   });
 
+  it("deletes a created thread when the provisioner returns an invalid thread ID", async () => {
+    const invalidThread =
+      Object.freeze({
+        ...THREAD,
+        threadId: "bad-thread",
+      });
+    const state = fixture({
+      createThread:
+        async () => invalidThread,
+    });
+
+    await expect(
+      provisionDiscordAssetThread(
+        state.deps,
+        INPUT,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      outcome:
+        "invalid_created_thread_deleted",
+      packId: "crypto",
+      assetId: "btc",
+      thread: invalidThread,
+      detail:
+        'Discord provisioner returned invalid thread ID "bad-thread".',
+    });
+
+    expect(state.bound).toEqual([]);
+    expect(state.deleted).toEqual([
+      "bad-thread",
+    ]);
+  });
+
+  it("truthfully reports an invalid created thread retained after cleanup failure", async () => {
+    const invalidThread =
+      Object.freeze({
+        ...THREAD,
+        parentId:
+          "423456789012345678",
+      });
+    const state = fixture({
+      createThread:
+        async () => invalidThread,
+      deleteThread: async () => {
+        throw new Error("delete denied");
+      },
+    });
+
+    await expect(
+      provisionDiscordAssetThread(
+        state.deps,
+        INPUT,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      outcome:
+        "invalid_created_thread_retained",
+      packId: "crypto",
+      assetId: "btc",
+      thread: invalidThread,
+      detail:
+        `Discord provisioner returned parent "423456789012345678" for thread "${THREAD_ID}", expected forum "${FORUM_ID}".`,
+      cleanupDetail: "delete denied",
+    });
+
+    expect(state.bound).toEqual([]);
+  });
+
   it("deletes the newly created provisional thread when binding fails", async () => {
     const state = fixture({
       bindThread: async () => {
