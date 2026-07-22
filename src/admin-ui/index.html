@@ -24,6 +24,7 @@
 
   <nav class="primary-nav" aria-label="Primary">
     <button type="button" data-view="workspace" aria-current="page">WORKSPACE</button>
+    <button type="button" data-view="threads">THREADS</button>
     <button type="button" data-view="packs">PACKS</button>
     <button type="button" data-view="renderer">RENDER</button>
     <button type="button" data-view="registry">REGISTRY</button>
@@ -93,6 +94,52 @@
           <table>
             <thead><tr><th>ASSET</th><th>TRADINGVIEW</th><th>STATUS</th><th>REVISION</th><th>CAPTURED</th><th>ACTION</th></tr></thead>
             <tbody id="workspace-members-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section class="view" data-view-panel="threads" hidden>
+      <section class="window thread-overview" aria-labelledby="thread-routing-heading">
+        <header class="window-header">
+          <div><p class="micro-label">PERSISTENT FORUM ROUTING</p><h1 id="thread-routing-heading">DISCORD THREAD ROUTING</h1></div>
+          <span class="context-fact">ADOPTION ONLY</span>
+        </header>
+        <p class="window-help">Inspect an existing Discord forum post and bind it to one Pack Asset. VisionX verifies Pack membership and the configured parent forum before changing the local binding file.</p>
+        <div class="thread-overview-grid">
+          <label><span>PACK</span><select id="thread-pack"><option value="">LOADING PACKS</option></select></label>
+          <div class="derived-channel"><span>PACK COVERAGE</span><strong id="thread-coverage">0 / 0</strong></div>
+          <div class="derived-channel"><span>FORUM CONFIGURATION</span><strong id="thread-forum">LOADING</strong></div>
+          <div class="derived-channel"><span>DISCORD INSPECTION</span><strong id="thread-gateway">LOADING</strong></div>
+        </div>
+        <p id="thread-total-context" class="workspace-remaining">LOADING THREAD BINDINGS</p>
+      </section>
+
+      <section class="window thread-adoption" aria-labelledby="thread-adoption-heading">
+        <header class="window-header">
+          <div><p class="micro-label">EXISTING FORUM POST</p><h2 id="thread-adoption-heading">INSPECT &amp; ADOPT</h2></div>
+          <span class="context-fact">PROVISIONING UNAVAILABLE</span>
+        </header>
+        <div class="thread-adoption-fields">
+          <label><span>UNBOUND PACK ASSET</span><select id="thread-asset"><option value="">SELECT ASSET</option></select></label>
+          <label><span>DISCORD THREAD ID</span><input id="thread-id" inputmode="numeric" autocomplete="off" maxlength="20" pattern="[0-9]{17,20}" placeholder="123456789012345678"></label>
+          <button id="thread-adopt-button" class="primary-action" type="button" disabled>INSPECT &amp; ADOPT</button>
+        </div>
+        <div class="renderer-guidance">
+          <span id="thread-adoption-state">SELECT AN UNBOUND ASSET AND EXISTING THREAD</span>
+          <span>READ-ONLY DISCORD INSPECTION · NO CONTENT EDIT · NO PUBLICATION</span>
+        </div>
+      </section>
+
+      <section class="window thread-members" aria-labelledby="thread-members-heading">
+        <header class="window-header">
+          <div><p class="micro-label">PACK ROUTING COVERAGE</p><h2 id="thread-members-heading">ASSET THREAD BINDINGS</h2></div>
+          <span id="thread-member-count" class="context-fact">0 ASSETS</span>
+        </header>
+        <div class="table-wrap workspace-table-wrap">
+          <table>
+            <thead><tr><th>ASSET</th><th>STATUS</th><th>PERSISTENT THREAD ID</th></tr></thead>
+            <tbody id="thread-members-body"></tbody>
           </table>
         </div>
       </section>

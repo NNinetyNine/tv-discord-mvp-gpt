@@ -1,9 +1,12 @@
+import "dotenv/config";
+
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AdminError } from "../admin/admin-types.ts";
 import { AdminService } from "../admin/admin-service.ts";
 import { startAdminHttpServer } from "../admin/admin-http-server.ts";
+import { openDiscordForumSession } from "../publish/discord-forum-session.ts";
 
 export const START_ADMIN_USAGE = "Usage: npx tsx src/scripts/start-admin.ts --repository-root <path> --workspace-root <path> [--host 127.0.0.1] [--port 4173]";
 
@@ -47,7 +50,12 @@ export async function main(
 ): Promise<number> {
   try {
     const options = parseStartAdminArguments(argv);
-    const service = await AdminService.create({ repositoryRoot: options.repositoryRoot, workspaceRoot: options.workspaceRoot });
+    const discordConfigured = (process.env.DISCORD_BOT_TOKEN?.trim().length ?? 0) > 0;
+    const service = await AdminService.create({
+      repositoryRoot: options.repositoryRoot,
+      workspaceRoot: options.workspaceRoot,
+      ...(discordConfigured ? { openDiscordForumSession } : {}),
+    });
     const server = await startAdminHttpServer({ service, host: options.host, port: options.port });
     stdout(JSON.stringify({
       ok: true,

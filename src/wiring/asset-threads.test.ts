@@ -187,6 +187,26 @@ describe("Asset-thread binding updates", () => {
     ).toThrow(/already bound/);
   });
 
+  it("refuses to assign one Discord thread to a second Pack Asset", () => {
+    const before = parseAssetThreadBindings({
+      schemaVersion: 1,
+      packs: {
+        crypto: {
+          btc: BTC_THREAD,
+        },
+      },
+    });
+
+    expect(() =>
+      bindAssetThread(
+        before,
+        "crypto",
+        "eth",
+        BTC_THREAD,
+      ),
+    ).toThrow(/already bound to crypto\/btc/);
+  });
+
   it("serializes equivalent bindings to identical canonical bytes", () => {
     const first = parseAssetThreadBindings({
       schemaVersion: 1,
@@ -317,6 +337,18 @@ describe("Asset-thread binding validation", () => {
         },
       }),
     ).toThrow(/must be a Discord snowflake/);
+  });
+
+  it("rejects a Discord thread assigned to more than one Pack Asset", () => {
+    expect(() =>
+      parseAssetThreadBindings({
+        schemaVersion: 1,
+        packs: {
+          crypto: { btc: BTC_THREAD },
+          stocks: { aapl: BTC_THREAD },
+        },
+      }),
+    ).toThrow(/assigned to both crypto\/btc and stocks\/aapl/);
   });
 
   it("fails loud when the file cannot be read or parsed", () => {

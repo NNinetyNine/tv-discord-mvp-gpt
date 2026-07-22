@@ -100,6 +100,18 @@ import {
   AdminPackRenderWorkspace,
   type PackRenderPreviewArtifactName,
 } from "./admin-pack-render-workspace.ts";
+import {
+  adoptDiscordAssetThread,
+  type AdoptDiscordAssetThreadResult,
+} from "../application/adopt-discord-asset-thread.ts";
+import type { DiscordForumSession } from "../publish/discord-forum-session.ts";
+import { bindAssetThreadFile } from "../wiring/asset-thread-bindings-file.ts";
+import {
+  AssetThreadsError,
+  parseAssetThreadBindings,
+  type AssetThreadBindings,
+} from "../wiring/asset-threads.ts";
+import { buildChannelResolver } from "../wiring/channels.ts";
 
 import {
   reviewPackSourceChange,
@@ -115,11 +127,16 @@ import {
 const REGISTRY_RELATIVE_PATH = "definitions/registry.json" as const;
 const PACKS_RELATIVE_PATH = "definitions/packs.json" as const;
 const CHANNELS_RELATIVE_PATH = "config/channels.json" as const;
+const THREAD_BINDINGS_RELATIVE_PATH = "config/asset-threads.json" as const;
 const MAX_ASSET_SEARCH_LIMIT = 100 as const;
 const DEFAULT_ASSET_SEARCH_LIMIT = 50 as const;
 
 interface CanonicalFile {
-  readonly relativePath: typeof REGISTRY_RELATIVE_PATH | typeof PACKS_RELATIVE_PATH | typeof CHANNELS_RELATIVE_PATH;
+  readonly relativePath:
+    | typeof REGISTRY_RELATIVE_PATH
+    | typeof PACKS_RELATIVE_PATH
+    | typeof CHANNELS_RELATIVE_PATH
+    | typeof THREAD_BINDINGS_RELATIVE_PATH;
   readonly canonicalPath: string;
   readonly bytes: Buffer;
   readonly sha256: string;
@@ -249,9 +266,66 @@ export interface AdminPackWorkspaceState {
   readonly packs: readonly AdminPackWorkspacePackState[];
 }
 
+export interface AdminThreadManagementAssetState {
+  readonly id: string;
+  readonly displayName: string;
+  readonly bindingState: "bound" | "unbound";
+  readonly threadId: string | null;
+}
+
+export interface AdminThreadManagementPackState {
+  readonly id: string;
+  readonly displayName: string;
+  readonly logicalChannel: string;
+  readonly forumConfigured: boolean;
+  readonly boundCount: number;
+  readonly totalCount: number;
+  readonly missingCount: number;
+  readonly assets: readonly AdminThreadManagementAssetState[];
+}
+
+export interface AdminThreadManagementState {
+  readonly schemaVersion: 1;
+  readonly mode: "adoption_only";
+  readonly adoptionAvailable: boolean;
+  readonly provisioningAvailable: false;
+  readonly publicationAvailable: false;
+  readonly bindingsSourceSha256: string;
+  readonly boundCount: number;
+  readonly totalCount: number;
+  readonly missingCount: number;
+  readonly packs: readonly AdminThreadManagementPackState[];
+}
+
+export interface AdminThreadAdoptionResult {
+  readonly schemaVersion: 1;
+  readonly outcome: "adopted" | "already_adopted";
+  readonly packId: string;
+  readonly assetId: string;
+  readonly thread: {
+    readonly threadId: string;
+    readonly name: string;
+    readonly archived: boolean | null;
+    readonly locked: boolean | null;
+    readonly appliedTagCount: number;
+  };
+  readonly sessionClosed: boolean;
+  readonly warnings: readonly ("discord_session_close_failed")[];
+  readonly effects: {
+    readonly discordInspected: true;
+    readonly discordContentChanged: false;
+    readonly bindingChanged: boolean;
+    readonly published: false;
+    readonly released: false;
+  };
+}
+
+export type AdminDiscordForumSessionFactory = () => Promise<DiscordForumSession>;
+
 export interface AdminServiceOptions {
   readonly repositoryRoot: string;
   readonly workspaceRoot: string;
+  readonly openDiscordForumSession?: AdminDiscordForumSessionFactory;
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -350,6 +424,8 @@ export class AdminService {
   readonly packRenders: AdminPackRenderWorkspace;
   #state: LiveState;
   #packMutationLock: Promise<void> = Promise.resolve();
+  #threadMutationLock: Promise<void> = Promise.resolve();
+  readonly #openDiscordForumSession?: AdminDiscordForumSessionFactory;
 
   private constructor(
     repositoryRoot: string,
@@ -360,6 +436,7 @@ export class AdminService {
     standaloneRenders: AdminStandaloneRenderWorkspace,
     packRenders: AdminPackRenderWorkspace,
     state: LiveState,
+    openDiscordForumSession?: AdminDiscordForumSessionFactory,
   ) {
     this.repositoryRoot = repositoryRoot;
     this.workspace = workspace;
@@ -369,6 +446,7 @@ export class AdminService {
     this.standaloneRenders = standaloneRenders;
     this.packRenders = packRenders;
     this.#state = state;
+    this.#openDiscordForumSession = openDiscordForumSession;
   }
 
   static async create(options: AdminServiceOptions): Promise<AdminService> {
@@ -383,7 +461,17 @@ export class AdminService {
     const standaloneRenders = await AdminStandaloneRenderWorkspace.open(workspace.root);
     const packRenders = await AdminPackRenderWorkspace.open(workspace.root);
     const state = await AdminService.#loadState(repositoryRoot);
-    return new AdminService(repositoryRoot, workspace, promotions, assetRegistrations, packBuilder, standaloneRenders, packRenders, state);
+    return new AdminService(
+      repositoryRoot,
+      workspace,
+      promotions,
+      assetRegistrations,
+      packBuilder,
+      standaloneRenders,
+      packRenders,
+      state,
+      options.openDiscordForumSession,
+    );
   }
 
   static async #loadState(repositoryRoot: string): Promise<LiveState> {
@@ -502,6 +590,238 @@ export class AdminService {
 
   logicalChannels(): readonly string[] {
     return Object.freeze(Object.keys(this.#state.rawChannels).sort((a, b) => a.localeCompare(b, "en")));
+  }
+
+  async #readThreadBindings(): Promise<{
+    readonly file: CanonicalFile;
+    readonly bindings: AssetThreadBindings;
+  }> {
+    const file = await readCanonicalFile(this.repositoryRoot, THREAD_BINDINGS_RELATIVE_PATH);
+    let value: unknown;
+    try {
+      value = JSON.parse(file.bytes.toString("utf8")) as unknown;
+    } catch {
+      throw new AdminError("invalid_thread_bindings", "Thread bindings are not valid JSON.", 500);
+    }
+
+    let bindings: AssetThreadBindings;
+    try {
+      bindings = parseAssetThreadBindings(value);
+    } catch {
+      throw new AdminError("invalid_thread_bindings", "Thread bindings do not match the supported schema.", 500);
+    }
+
+    for (const [packId, assets] of Object.entries(bindings.packs)) {
+      const pack = this.#state.byPackId.get(packId);
+      if (pack === undefined) {
+        throw new AdminError("invalid_thread_bindings", `Thread bindings reference unknown Pack ${packId}.`, 500);
+      }
+      for (const assetId of Object.keys(assets)) {
+        if (!pack.assets.includes(assetId)) {
+          throw new AdminError(
+            "invalid_thread_bindings",
+            `Thread bindings reference Asset ${assetId} outside Pack ${packId}.`,
+            500,
+          );
+        }
+      }
+    }
+
+    return Object.freeze({ file, bindings });
+  }
+
+  async threadManagementState(): Promise<AdminThreadManagementState> {
+    const { file, bindings } = await this.#readThreadBindings();
+    const resolveChannel = buildChannelResolver(this.#state.rawChannels as Record<string, unknown>);
+    let boundCount = 0;
+    const packs = this.#state.packs.map((pack) => {
+      const assets = pack.assets.map((assetId) => {
+        const asset = this.#state.byAssetId.get(assetId);
+        if (asset === undefined) {
+          throw new AdminError("invalid_registry", `Pack ${pack.id} references an unknown Asset.`, 500);
+        }
+        const threadId = bindings.packs[pack.id]?.[asset.id] ?? null;
+        if (threadId !== null) boundCount += 1;
+        return Object.freeze({
+          id: asset.id,
+          displayName: asset.display,
+          bindingState: threadId === null ? "unbound" as const : "bound" as const,
+          threadId,
+        });
+      });
+      const packBoundCount = assets.filter((asset) => asset.bindingState === "bound").length;
+      return Object.freeze({
+        id: pack.id,
+        displayName: pack.display,
+        logicalChannel: pack.channel,
+        forumConfigured: resolveChannel(pack.channel) !== null,
+        boundCount: packBoundCount,
+        totalCount: assets.length,
+        missingCount: assets.length - packBoundCount,
+        assets: Object.freeze(assets),
+      });
+    });
+    const totalCount = packs.reduce((sum, pack) => sum + pack.totalCount, 0);
+    return Object.freeze({
+      schemaVersion: 1,
+      mode: "adoption_only",
+      adoptionAvailable: this.#openDiscordForumSession !== undefined,
+      provisioningAvailable: false,
+      publicationAvailable: false,
+      bindingsSourceSha256: file.sha256,
+      boundCount,
+      totalCount,
+      missingCount: totalCount - boundCount,
+      packs: Object.freeze(packs),
+    });
+  }
+
+  async #withThreadMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const prior = this.#threadMutationLock;
+    let release!: () => void;
+    this.#threadMutationLock = new Promise<void>((resolvePromise) => { release = resolvePromise; });
+    await prior;
+    try { return await operation(); }
+    finally { release(); }
+  }
+
+  #threadAdoptionFailure(result: Exclude<AdoptDiscordAssetThreadResult, { readonly ok: true }>): never {
+    const details = Object.freeze({ outcome: result.outcome });
+    switch (result.outcome) {
+      case "invalid_thread_id":
+        throw new AdminError("thread_adoption_failed", "threadId must be a 17-to-20-digit Discord snowflake.", 400, details);
+      case "unknown_pack":
+        throw new AdminError("pack_not_found", `Pack ${result.packId} was not found.`, 404, { packId: result.packId });
+      case "asset_not_in_pack":
+        throw new AdminError("thread_adoption_failed", `Asset ${result.assetId} does not belong to Pack ${result.packId}.`, 400, details);
+      case "forum_channel_unresolved":
+        throw new AdminError("thread_adoption_failed", "The selected Pack does not have a configured Discord forum.", 409, details);
+      case "thread_not_found":
+        throw new AdminError("thread_adoption_failed", "The Discord thread was not found or is not visible to the bot.", 404, details);
+      case "thread_parent_mismatch":
+        throw new AdminError("thread_adoption_failed", "The Discord thread does not belong to the selected Pack forum.", 409, details);
+      case "discord_inspection_failed":
+        throw new AdminError("thread_adoption_failed", "Discord thread inspection failed. No binding was changed.", 502, details);
+    }
+  }
+
+  async adoptExistingThread(input: {
+    readonly packId: string;
+    readonly assetId: string;
+    readonly threadId: string;
+    readonly confirmation: unknown;
+  }): Promise<AdminThreadAdoptionResult> {
+    if (input.confirmation !== "adopt_existing_thread") {
+      throw new AdminError(
+        "thread_adoption_confirmation_invalid",
+        "Existing-thread adoption requires an explicit current confirmation.",
+      );
+    }
+    if (this.#openDiscordForumSession === undefined) {
+      throw new AdminError(
+        "discord_operations_unavailable",
+        "Discord thread inspection is unavailable until the administration process has an explicit bot token.",
+        503,
+      );
+    }
+
+    return this.#withThreadMutationLock(async () => {
+      await this.refresh();
+      const { bindings } = await this.#readThreadBindings();
+      const currentThreadId = bindings.packs[input.packId]?.[input.assetId];
+      if (currentThreadId !== undefined && currentThreadId !== input.threadId) {
+        throw new AdminError(
+          "thread_binding_conflict",
+          "This Pack Asset already has a different persistent Discord thread binding.",
+          409,
+          { packId: input.packId, assetId: input.assetId },
+        );
+      }
+      for (const [boundPackId, assets] of Object.entries(bindings.packs)) {
+        for (const [boundAssetId, boundThreadId] of Object.entries(assets)) {
+          if (
+            boundThreadId === input.threadId &&
+            (boundPackId !== input.packId || boundAssetId !== input.assetId)
+          ) {
+            throw new AdminError(
+              "thread_binding_conflict",
+              "This Discord thread is already the persistent destination for another Pack Asset.",
+              409,
+            );
+          }
+        }
+      }
+
+      let session: DiscordForumSession | null = null;
+      let result: AdoptDiscordAssetThreadResult | undefined;
+      let operationError: unknown;
+      try {
+        result = await adoptDiscordAssetThread({
+          packs: this.#state.packs,
+          resolveChannel: buildChannelResolver(this.#state.rawChannels as Record<string, unknown>),
+          inspectThread: async (threadId) => {
+            session ??= await this.#openDiscordForumSession!();
+            return session.inspectThread(threadId);
+          },
+          bindThread: async (packId, assetId, threadId) => {
+            const written = await bindAssetThreadFile(
+              join(this.repositoryRoot, THREAD_BINDINGS_RELATIVE_PATH),
+              packId,
+              assetId,
+              threadId,
+            );
+            return Object.freeze({ changed: written.changed });
+          },
+        }, input.packId, input.assetId, input.threadId);
+      } catch (error) {
+        operationError = error;
+      }
+
+      let sessionClosed = true;
+      const openedSession = session as DiscordForumSession | null;
+      if (openedSession !== null) {
+        try { await openedSession.close(); }
+        catch { sessionClosed = false; }
+      }
+
+      if (operationError !== undefined) {
+        if (operationError instanceof AssetThreadsError) {
+          throw new AdminError(
+            "thread_binding_write_failed",
+            "The thread was verified, but its persistent binding could not be recorded safely.",
+            409,
+          );
+        }
+        throw new AdminError("thread_adoption_failed", "Discord thread adoption failed. No retry was attempted.", 502);
+      }
+      if (result === undefined) {
+        throw new AdminError("internal_error", "Thread adoption produced no result.", 500);
+      }
+      if (!result.ok) return this.#threadAdoptionFailure(result);
+
+      return Object.freeze({
+        schemaVersion: 1,
+        outcome: result.outcome,
+        packId: result.packId,
+        assetId: result.assetId,
+        thread: Object.freeze({
+          threadId: result.thread.threadId,
+          name: result.thread.name,
+          archived: result.thread.archived,
+          locked: result.thread.locked,
+          appliedTagCount: result.thread.appliedTagIds.length,
+        }),
+        sessionClosed,
+        warnings: Object.freeze(sessionClosed ? [] : ["discord_session_close_failed"] as const),
+        effects: Object.freeze({
+          discordInspected: true,
+          discordContentChanged: false,
+          bindingChanged: result.outcome === "adopted",
+          published: false,
+          released: false,
+        }),
+      });
+    });
   }
 
   standaloneRenderOptions(): AdminStandaloneRenderOptions {

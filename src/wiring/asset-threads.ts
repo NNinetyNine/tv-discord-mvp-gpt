@@ -90,6 +90,7 @@ export function parseAssetThreadBindings(
   }
 
   const packs: Record<string, Readonly<Record<string, string>>> = {};
+  const ownerByThreadId = new Map<string, string>();
 
   for (const [packId, rawAssets] of Object.entries(rawPacks)) {
     validateDomainId("pack", packId);
@@ -113,6 +114,14 @@ export function parseAssetThreadBindings(
           `packs.${packId}.${assetId} must be a Discord snowflake`,
         );
       }
+
+      const owner = ownerByThreadId.get(rawThreadId);
+      if (owner !== undefined) {
+        throw new AssetThreadsError(
+          `Discord thread ${rawThreadId} is assigned to both ${owner} and ${packId}/${assetId}`,
+        );
+      }
+      ownerByThreadId.set(rawThreadId, `${packId}/${assetId}`);
 
       assets[assetId] = rawThreadId;
     }
@@ -156,6 +165,16 @@ export function bindAssetThread(
   }
 
   if (current === threadId) return bindings;
+
+  for (const [currentPackId, assets] of Object.entries(bindings.packs)) {
+    for (const [currentAssetId, currentThreadId] of Object.entries(assets)) {
+      if (currentThreadId === threadId) {
+        throw new AssetThreadsError(
+          `Discord thread ${threadId} is already bound to ${currentPackId}/${currentAssetId}`,
+        );
+      }
+    }
+  }
 
   const nextPacks: Record<
     string,

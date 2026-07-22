@@ -380,6 +380,30 @@ async function routeApi(
   const method = request.method ?? "GET";
   if (pathname === "/api/v1/status" && method === "GET") return ok(response, service.status());
   if (pathname === "/api/v1/channels" && method === "GET") return ok(response, { schemaVersion: 1, logicalChannels: service.logicalChannels() });
+  if (pathname === "/api/v1/thread-management") {
+    if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    return ok(response, await service.threadManagementState());
+  }
+  if (pathname === "/api/v1/thread-management/adopt") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Thread adoption body must be an object.");
+    exactFields(body, ["packId", "assetId", "threadId", "confirmation"], "Thread adoption body");
+    if (
+      typeof body.packId !== "string" ||
+      typeof body.assetId !== "string" ||
+      typeof body.threadId !== "string" ||
+      typeof body.confirmation !== "string"
+    ) {
+      throw new AdminError("invalid_request", "Thread adoption fields must be strings.");
+    }
+    return ok(response, await service.adoptExistingThread({
+      packId: body.packId,
+      assetId: body.assetId,
+      threadId: body.threadId,
+      confirmation: body.confirmation,
+    }));
+  }
   if (pathname === "/api/v1/standalone-render/options" && method === "GET") {
     return ok(response, service.standaloneRenderOptions());
   }

@@ -128,6 +128,9 @@ h1, h2 { margin: 0; font-size: .78rem; letter-spacing: .15em; font-weight: 850; 
 .renderer-preview figcaption { margin-top: .7rem; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .67rem; }
 .renderer-downloads { display: flex; justify-content: flex-end; gap: .65rem; padding: 0 1.1rem 1.1rem; }
 .workspace-overview-grid { display: grid; grid-template-columns: 1.35fr .65fr .65fr .65fr; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
+.thread-overview-grid { display: grid; grid-template-columns: 1.3fr .7fr .9fr .9fr; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
+.thread-adoption-fields { display: grid; grid-template-columns: 1.25fr 1.25fr auto; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
+.thread-adoption-fields .primary-action { min-width: 11.5rem; }
 .workspace-progress-track { height: .3rem; margin: 0 1.1rem .8rem; overflow: hidden; border-radius: 999px; background: rgba(231, 216, 168, .08); }
 .workspace-progress-track span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, #aa8530, var(--gold-strong)); transition: width .2s ease; }
 .workspace-remaining { margin: 0; padding: 0 1.1rem 1rem; color: var(--text-faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .6rem; letter-spacing: .06em; }
@@ -155,6 +158,8 @@ footer { padding: 1rem 2.2rem; color: var(--text-faint); font-size: .55rem; lett
   .compact-fields { grid-template-columns: 1fr 1fr; }
   .renderer-fields { grid-template-columns: 1fr 1fr; }
   .workspace-overview-grid { grid-template-columns: 1fr 1fr; }
+  .thread-overview-grid { grid-template-columns: 1fr 1fr; }
+  .thread-adoption-fields { grid-template-columns: 1fr 1fr; }
   .workspace-import-fields { grid-template-columns: 1fr 1fr; }
   .member-editor { grid-template-columns: 1fr 1fr; }
   .member-editor .wide { grid-column: span 1; }

@@ -15,6 +15,8 @@ const state = {
   packSourceFile: null,
   packPreview: null,
   packBusy: false,
+  threadManagement: null,
+  threadBusy: false,
 };
 
 const qs = (selector) => document.querySelector(selector);
@@ -634,6 +636,144 @@ async function loadChannels() {
   qs("#channel-status").textContent = selected ? `${selected.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";
 }
 
+function selectedThreadPack() {
+  return state.threadManagement?.packs.find((pack) => pack.id === qs("#thread-pack").value) ?? null;
+}
+
+function selectedThreadAsset() {
+  return selectedThreadPack()?.assets.find((asset) => asset.id === qs("#thread-asset").value) ?? null;
+}
+
+function updateThreadAdoptButton() {
+  const threadId = qs("#thread-id").value.trim();
+  const asset = selectedThreadAsset();
+  const pack = selectedThreadPack();
+  const available = state.threadManagement?.adoptionAvailable === true;
+  qs("#thread-pack").disabled = state.threadBusy;
+  qs("#thread-asset").disabled = state.threadBusy;
+  qs("#thread-id").disabled = state.threadBusy || !available;
+  qs("#thread-adopt-button").disabled = !(
+    !state.threadBusy &&
+    available &&
+    pack?.forumConfigured &&
+    asset?.bindingState === "unbound" &&
+    /^[0-9]{17,20}$/.test(threadId)
+  );
+}
+
+function renderThreadManagement() {
+  const dashboard = state.threadManagement;
+  const pack = selectedThreadPack();
+  if (dashboard === null || pack === null) {
+    qs("#thread-coverage").textContent = "0 / 0";
+    qs("#thread-forum").textContent = "NO PACK";
+    qs("#thread-gateway").textContent = "UNAVAILABLE";
+    qs("#thread-total-context").textContent = "NO THREAD BINDINGS AVAILABLE";
+    qs("#thread-asset").innerHTML = '<option value="">SELECT ASSET</option>';
+    qs("#thread-members-body").innerHTML = "";
+    qs("#thread-member-count").textContent = "0 ASSETS";
+    updateThreadAdoptButton();
+    return;
+  }
+
+  qs("#thread-coverage").textContent = `${pack.boundCount} / ${pack.totalCount}`;
+  qs("#thread-forum").textContent = pack.forumConfigured ? "CONFIGURED" : "NOT CONFIGURED";
+  qs("#thread-gateway").textContent = dashboard.adoptionAvailable ? "AVAILABLE" : "TOKEN REQUIRED";
+  qs("#thread-total-context").textContent = `${dashboard.boundCount} OF ${dashboard.totalCount} ASSETS BOUND · ${dashboard.missingCount} MISSING ACROSS ALL PACKS`;
+  qs("#thread-member-count").textContent = `${pack.totalCount} ASSET${pack.totalCount === 1 ? "" : "S"}`;
+
+  const priorAssetId = qs("#thread-asset").value;
+  const unbound = pack.assets.filter((asset) => asset.bindingState === "unbound");
+  qs("#thread-asset").innerHTML = '<option value="">SELECT UNBOUND ASSET</option>' + unbound
+    .map((asset) => `<option value="${escapeAttribute(asset.id)}">${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)}</option>`)
+    .join("");
+  qs("#thread-asset").value = unbound.some((asset) => asset.id === priorAssetId)
+    ? priorAssetId
+    : unbound[0]?.id ?? "";
+
+  qs("#thread-members-body").innerHTML = pack.assets.map((asset) => `<tr>
+    <td>${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)}</td>
+    <td><span class="workspace-status ${asset.bindingState === "bound" ? "valid" : "pending"}">${asset.bindingState === "bound" ? "BOUND" : "MISSING"}</span></td>
+    <td>${escapeHtml(asset.threadId ?? "—")}</td>
+  </tr>`).join("");
+
+  if (!dashboard.adoptionAvailable) {
+    qs("#thread-adoption-state").textContent = "START ADMIN WITH DISCORD_BOT_TOKEN TO ENABLE INSPECTION";
+  } else if (!pack.forumConfigured) {
+    qs("#thread-adoption-state").textContent = "PACK FORUM IS NOT CONFIGURED";
+  } else if (unbound.length === 0) {
+    qs("#thread-adoption-state").textContent = "PACK ROUTING COMPLETE";
+  } else if (!state.threadBusy) {
+    qs("#thread-adoption-state").textContent = "SELECT AN EXISTING THREAD ID";
+  }
+  updateThreadAdoptButton();
+}
+
+async function loadThreadManagement() {
+  const selectedPackId = qs("#thread-pack").value;
+  const dashboard = await api("/api/v1/thread-management");
+  state.threadManagement = dashboard;
+  qs("#thread-pack").innerHTML = dashboard.packs
+    .map((pack) => `<option value="${escapeAttribute(pack.id)}">${escapeHtml(pack.displayName.toUpperCase())} · ${pack.boundCount}/${pack.totalCount}</option>`)
+    .join("");
+  qs("#thread-pack").value = dashboard.packs.some((pack) => pack.id === selectedPackId)
+    ? selectedPackId
+    : dashboard.packs[0]?.id ?? "";
+  renderThreadManagement();
+}
+
+async function adoptExistingThread() {
+  const pack = selectedThreadPack();
+  const asset = selectedThreadAsset();
+  const threadId = qs("#thread-id").value.trim();
+  if (
+    pack === null ||
+    asset === null ||
+    asset.bindingState !== "unbound" ||
+    !/^[0-9]{17,20}$/.test(threadId) ||
+    state.threadBusy ||
+    state.threadManagement?.adoptionAvailable !== true
+  ) return;
+
+  const confirmed = window.confirm(
+    `Adopt Discord thread ${threadId} for ${asset.id.toUpperCase()} in ${pack.displayName}?\n\n` +
+    "VisionX will inspect the existing post and verify its parent forum. Discord content, tags, history, archive state, and lock state will not be changed. If verification passes, only the local persistent binding is written.",
+  );
+  if (!confirmed) return;
+
+  clearMessage();
+  state.threadBusy = true;
+  qs("#thread-adoption-state").textContent = "INSPECTING DISCORD PARENT FORUM";
+  updateThreadAdoptButton();
+  try {
+    const result = await api("/api/v1/thread-management/adopt", {
+      method: "POST",
+      body: JSON.stringify({
+        packId: pack.id,
+        assetId: asset.id,
+        threadId,
+        confirmation: "adopt_existing_thread",
+      }),
+    });
+    qs("#thread-id").value = "";
+    await loadThreadManagement();
+    qs("#thread-adoption-state").textContent = `${asset.id.toUpperCase()} · ${result.outcome === "adopted" ? "BOUND" : "ALREADY BOUND"}`;
+    showMessage(
+      result.sessionClosed
+        ? `${asset.id.toUpperCase()} now routes to existing thread ${threadId}. Discord content was not changed.`
+        : `${asset.id.toUpperCase()} was bound to thread ${threadId}, but the Discord session did not close cleanly. Restart the administration service before another Discord operation.`,
+      !result.sessionClosed,
+    );
+  } catch (error) {
+    qs("#thread-adoption-state").textContent = "ADOPTION NOT APPLIED";
+    showMessage(error.message);
+    await loadThreadManagement().catch(() => undefined);
+  } finally {
+    state.threadBusy = false;
+    updateThreadAdoptButton();
+  }
+}
+
 async function loadRegistry(query = "") {
   const result = await api(`/api/v1/assets?query=${encodeURIComponent(query)}&offset=0&limit=100`);
   const body = qs("#registry-body");
@@ -984,6 +1124,7 @@ qsa("[data-view]").forEach((button) => button.addEventListener("click", () => {
   button.setAttribute("aria-current", "page");
   qsa("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== button.dataset.view; });
   if (button.dataset.view === "workspace") void loadPackWorkspace().catch((error) => showMessage(error.message));
+  if (button.dataset.view === "threads") void loadThreadManagement().catch((error) => showMessage(error.message));
   if (button.dataset.view === "registry") void loadRegistry();
   if (button.dataset.view === "renderer") void loadStandaloneRenderOptions().catch((error) => showMessage(error.message));
 }));
@@ -1021,6 +1162,13 @@ qs("#workspace-preview-button").addEventListener("click", () => void runPackPrev
 qs("#workspace-accept").addEventListener("click", () => void acceptPackPreview());
 qs("#workspace-discard").addEventListener("click", () => void discardPackPreview());
 qs("#workspace-reset-pack").addEventListener("click", () => void resetWorkspacePack());
+qs("#thread-pack").addEventListener("change", () => {
+  qs("#thread-id").value = "";
+  renderThreadManagement();
+});
+qs("#thread-asset").addEventListener("change", updateThreadAdoptButton);
+qs("#thread-id").addEventListener("input", updateThreadAdoptButton);
+qs("#thread-adopt-button").addEventListener("click", () => void adoptExistingThread());
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";

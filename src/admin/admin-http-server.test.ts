@@ -453,11 +453,14 @@ describe("Admin HTTP server", () => {
     expect(response.headers.get("content-security-policy")).toBe(ADMIN_CSP);
   });
 
-  it("serves the Pack Workspace, Pack builder, standalone renderer, and read-only Registry without external resources", async () => {
+  it("serves the Pack Workspace, thread routing, Pack builder, standalone renderer, and read-only Registry without external resources", async () => {
     const { server } = await start();
     const html = await (await fetch(`${server.url}/`)).text();
     expect(html).toContain("PACK BUILDER");
     expect(html).toContain("PACK WORKSPACE");
+    expect(html).toContain("DISCORD THREAD ROUTING");
+    expect(html).toContain("ADOPTION ONLY");
+    expect(html).toContain("PROVISIONING UNAVAILABLE");
     expect(html).toContain("PUBLISH UNAVAILABLE");
     expect(html).toContain("/visionx-emblem.png");
     expect(html).toContain("/visionx-wordmark.png");

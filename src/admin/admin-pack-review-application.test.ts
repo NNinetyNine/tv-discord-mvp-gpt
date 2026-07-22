@@ -89,4 +89,21 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(js).not.toContain("/api/v1/releases");
     expect(js).not.toContain("/publish");
   });
+
+  it("limits the Threads room to confirmed adoption of existing posts", async () => {
+    const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
+    const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
+
+    expect(html).toContain("DISCORD THREAD ROUTING");
+    expect(html).toContain("ADOPTION ONLY");
+    expect(html).toContain("INSPECT &amp; ADOPT");
+    expect(html).toContain("PROVISIONING UNAVAILABLE");
+    expect(html).toContain("NO CONTENT EDIT · NO PUBLICATION");
+    expect(js).toContain('api("/api/v1/thread-management")');
+    expect(js).toContain('api("/api/v1/thread-management/adopt"');
+    expect(js).toContain('confirmation: "adopt_existing_thread"');
+    expect(js).toContain("window.confirm(");
+    expect(js).not.toContain("/api/v1/thread-management/provision");
+    expect(js).not.toContain("/api/v1/thread-management/publish");
+  });
 });
