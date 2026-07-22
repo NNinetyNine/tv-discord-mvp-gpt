@@ -80,6 +80,23 @@ h1, h2 { margin: 0; font-size: .78rem; letter-spacing: .15em; font-weight: 850; 
 .member-editor .wide { grid-column: span 2; }
 .derived-facts { grid-column: 1 / -1; display: flex; gap: 1rem; color: var(--text-faint); font-size: .62rem; letter-spacing: .07em; }
 .field-error { grid-column: 1 / -1; margin: 0; color: var(--danger); font-size: .72rem; }
+.member-logo { grid-column: span 2; }
+.member-logo input[type="file"] {
+  min-height: 2.35rem;
+  padding: .38rem .5rem;
+  font-size: .68rem;
+}
+.asset-logo-status {
+  display: block;
+  min-height: 1rem;
+  margin-top: .28rem;
+  color: var(--text-faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .61rem;
+  letter-spacing: .04em;
+}
+.asset-logo-status.valid { color: var(--success); }
+.asset-logo-status.error { color: var(--danger); }
 .empty-state { margin: 0; padding: 2.4rem; text-align: center; color: var(--text-faint); font-size: .64rem; letter-spacing: .18em; }
 .preview-content { padding: 1rem 1.1rem; color: var(--text-muted); }
 .preview-content h3 { margin: 0 0 .65rem; color: var(--text); font-size: .9rem; letter-spacing: .12em; }

@@ -55,6 +55,9 @@ function persistInput() {
       tradingView: member.tradingView,
       currency: member.currency,
       aliases: member.aliases,
+      logoStaged:
+        member.logoState === "uploaded",
+      logoFileName: member.logoFileName,
     })),
   }));
 }
@@ -77,6 +80,17 @@ function restoreInput() {
         existing: null,
         error: "",
         lookupGeneration: 0,
+        logoState:
+          member.logoStaged === true
+            ? "uploaded"
+            : "required",
+        logoFileName:
+          typeof member.logoFileName === "string"
+            ? member.logoFileName
+            : "",
+        logoEvidence: null,
+        logoError: "",
+        logoUploadGeneration: 0,
       }));
     }
   } catch { localStorage.removeItem(STORAGE_KEY); }
@@ -116,6 +130,128 @@ function memberSummary(member) {
   return `${id} · ${token} · ${currency}`;
 }
 
+function resetMemberLogo(member) {
+  member.logoState = "required";
+  member.logoFileName = "";
+  member.logoEvidence = null;
+  member.logoError = "";
+  member.logoUploadGeneration =
+    (member.logoUploadGeneration ?? 0) + 1;
+}
+
+function resetMissingAssetLogos() {
+  for (const member of state.members) {
+    if (!member.existing) resetMemberLogo(member);
+  }
+}
+
+function memberLogoStatus(member) {
+  if (member.logoState === "uploading") {
+    return "VALIDATING AND STAGING PNG";
+  }
+  if (member.logoState === "uploaded") {
+    const dimensions = member.logoEvidence
+      ? ` · ${member.logoEvidence.width}×${member.logoEvidence.height}`
+      : "";
+    return `STAGED · ${member.logoFileName || "PNG"}${dimensions}`;
+  }
+  if (member.logoState === "error") {
+    return member.logoError || "LOGO UPLOAD FAILED";
+  }
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(
+    qs("#pack-id").value,
+  )) {
+    return "ENTER A VALID PACK ID BEFORE SELECTING A LOGO";
+  }
+  if (member.lookupState !== "missing") {
+    return "CONFIRMING ASSET ID";
+  }
+  return "SELECT REQUIRED PNG";
+}
+
+async function uploadMemberLogo(index, file) {
+  const member = state.members[index];
+  if (!member || !file) return;
+
+  const packId = qs("#pack-id").value;
+  if (
+    !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(packId) ||
+    !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(member.id)
+  ) {
+    member.logoState = "error";
+    member.logoError =
+      "Enter valid Pack and Asset IDs before selecting a logo.";
+    renderMembers();
+    return;
+  }
+
+  if (
+    file.type &&
+    file.type.toLowerCase() !== "image/png"
+  ) {
+    member.logoState = "error";
+    member.logoError =
+      "Asset logos must be PNG files.";
+    renderMembers();
+    return;
+  }
+
+  const generation =
+    (member.logoUploadGeneration ?? 0) + 1;
+  member.logoUploadGeneration = generation;
+  member.logoState = "uploading";
+  member.logoFileName = file.name;
+  member.logoEvidence = null;
+  member.logoError = "";
+
+  persistInput();
+  renderMembers();
+  setPreviewUnavailable(
+    `Staging the required logo for ${member.id.toUpperCase()}.`,
+  );
+
+  try {
+    const staged = await api(
+      `/api/v1/packs/create/${encodeURIComponent(packId)}/asset-logos/${encodeURIComponent(member.id)}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "image/png",
+        },
+        body: file,
+      },
+    );
+
+    if (
+      !state.members.includes(member) ||
+      member.logoUploadGeneration !== generation ||
+      member.id !== staged.assetId
+    ) {
+      return;
+    }
+
+    member.logoState = "uploaded";
+    member.logoFileName = file.name;
+    member.logoEvidence = staged.evidence;
+    member.logoError = "";
+  } catch (error) {
+    if (
+      !state.members.includes(member) ||
+      member.logoUploadGeneration !== generation
+    ) {
+      return;
+    }
+
+    member.logoState = "error";
+    member.logoEvidence = null;
+    member.logoError = error.message;
+  }
+
+  persistInput();
+  renderMembers();
+  schedulePreview();
+}
+
 function updateMember(index, field, value) {
   const member = state.members[index];
   if (!member) return;
@@ -124,6 +260,7 @@ function updateMember(index, field, value) {
   if (field === "id") {
     member.lookupState = "pending";
     member.existing = null;
+    resetMemberLogo(member);
     void resolveMember(index);
   }
   persistInput();
@@ -170,6 +307,12 @@ async function resolveMember(index) {
     member.lookupState = "existing";
     member.existing = asset;
     member.error = asset.currency ? "" : "This registered Asset has no canonical currency. Complete its Asset metadata before creating the Pack.";
+    member.logoState = "not-required";
+    member.logoFileName = "";
+    member.logoEvidence = null;
+    member.logoError = "";
+    member.logoUploadGeneration =
+      (member.logoUploadGeneration ?? 0) + 1;
   } catch (error) {
     if (member.lookupGeneration !== generation || state.members[index] !== member || member.id !== id) return;
     if (error.code === "asset_not_found") {
@@ -195,6 +338,11 @@ function addMember(initial = {}) {
     existing: null,
     error: "",
     lookupGeneration: 0,
+    logoState: "required",
+    logoFileName: "",
+    logoEvidence: null,
+    logoError: "",
+    logoUploadGeneration: 0,
   });
   persistInput();
   renderMembers();
@@ -244,6 +392,20 @@ function renderMembers() {
     const derived = derivedToken(source.tradingView ?? "");
     const status = member.lookupState === "existing" ? "REGISTERED" : member.lookupState === "loading" ? "CHECKING" : "MISSING ASSET";
     const statusClass = member.lookupState === "existing" && !member.error ? "valid" : "missing";
+    const logoDisabled =
+      member.lookupState !== "missing" ||
+      !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(
+        qs("#pack-id").value,
+      ) ||
+      !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(
+        member.id,
+      );
+    const logoStatusClass =
+      member.logoState === "uploaded"
+        ? "valid"
+        : member.logoState === "error"
+          ? "error"
+          : "";
     li.innerHTML = `
       <div class="member-summary">
         <span class="member-index">${String(index + 1).padStart(2, "0")}</span>
@@ -267,6 +429,16 @@ function renderMembers() {
           <label><span>TRADINGVIEW TOKEN</span><input class="member-tradingview" value="${escapeAttribute(member.tradingView)}" maxlength="64" placeholder="TVC:DXY"></label>
           <label><span>CURRENCY</span><input class="member-currency" value="${escapeAttribute(member.currency)}" maxlength="8" placeholder="USD"></label>
           <label><span>ALIASES · OPTIONAL · ONE PER LINE</span><input class="member-aliases" value="${escapeAttribute(member.aliases)}" maxlength="512"></label>
+          <label class="member-logo">
+            <span>ASSET LOGO · PNG · REQUIRED</span>
+            <input
+              class="member-logo-input"
+              type="file"
+              accept="image/png"
+              ${logoDisabled ? "disabled" : ""}
+            >
+            <small class="asset-logo-status ${logoStatusClass}">${escapeHtml(memberLogoStatus(member))}</small>
+          </label>
           <div class="derived-facts"><span>MARKET ${escapeHtml(derived.market)}</span><span>SYMBOL ${escapeHtml(derived.symbol)}</span><span>ASSET CHANNEL ${escapeHtml(qs("#pack-channel").value || "—").toUpperCase()}</span></div>
         `}
         ${member.error ? `<p class="field-error" role="alert">${escapeHtml(member.error)}</p>` : ""}
@@ -281,6 +453,11 @@ function renderMembers() {
     bindDraftField(".member-tradingview", "tradingView");
     bindDraftField(".member-currency", "currency");
     bindDraftField(".member-aliases", "aliases");
+    li.querySelector(".member-logo-input")
+      ?.addEventListener("change", (event) => {
+        const file = event.target.files?.[0];
+        if (file) void uploadMemberLogo(index, file);
+      });
     li.querySelector('[data-action="up"]').addEventListener("click", () => moveMember(index, -1));
     li.querySelector('[data-action="down"]').addEventListener("click", () => moveMember(index, 1));
     li.querySelector('[data-action="remove"]').addEventListener("click", () => removeMember(index));
@@ -325,7 +502,12 @@ function inputReady() {
   return state.members.every((member) => {
     if (!member.id || member.lookupState === "loading" || member.lookupState === "pending" || member.error) return false;
     if (member.existing) return true;
-    return Boolean(member.display && member.tradingView && member.currency);
+    return Boolean(
+      member.display &&
+      member.tradingView &&
+      member.currency &&
+      member.logoState === "uploaded"
+    );
   });
 }
 
@@ -366,6 +548,33 @@ async function refreshPreview() {
       state.members[memberIndex].error = error.message;
       renderMembers();
     }
+
+    const assetId =
+      typeof error.details?.assetId === "string"
+        ? error.details.assetId
+        : null;
+    const logoMember = assetId === null
+      ? null
+      : state.members.find(
+          (member) => member.id === assetId,
+        );
+    if (
+      logoMember &&
+      (
+        error.code === "asset_logo_not_found" ||
+        error.code === "invalid_asset_logo"
+      )
+    ) {
+      logoMember.logoState =
+        error.code === "invalid_asset_logo"
+          ? "error"
+          : "required";
+      logoMember.logoEvidence = null;
+      logoMember.logoError = error.message;
+      persistInput();
+      renderMembers();
+    }
+
     setPreviewUnavailable(error.message);
   }
 }
@@ -437,6 +646,7 @@ qs("#registry-search").addEventListener("input", (event) => void loadRegistry(ev
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";
+    if (id === "#pack-id") resetMissingAssetLogos();
     persistInput();
     renderMembers();
     schedulePreview();

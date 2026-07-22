@@ -33,6 +33,41 @@ describe("Constitutional Pack-builder UI", () => {
     expect(js).not.toContain("publication currency");
   });
 
+  it("requires and stages one validated PNG logo for each missing Asset", async () => {
+    const js = await readFile(
+      resolve("src/admin-ui/app.js"),
+      "utf8",
+    );
+    const css = await readFile(
+      resolve("src/admin-ui/styles.css"),
+      "utf8",
+    );
+
+    expect(js).toContain('type="file"');
+    expect(js).toContain('accept="image/png"');
+    expect(js).toContain(
+      'ASSET LOGO · PNG · REQUIRED',
+    );
+    expect(js).toContain(
+      '/asset-logos/${encodeURIComponent(member.id)}',
+    );
+    expect(js).toContain(
+      '"Content-Type": "image/png"',
+    );
+    expect(js).toContain(
+      'member.logoState === "uploaded"',
+    );
+    expect(js).toContain(
+      "!state.members.includes(member)",
+    );
+    expect(js).toContain(
+      'error.code === "asset_logo_not_found"',
+    );
+    expect(css).toContain(".member-logo");
+    expect(css).toContain(".asset-logo-status.valid");
+    expect(css).toContain(".asset-logo-status.error");
+  });
+
   it("removes ordinary custody ceremony and keeps technical evidence read-only and collapsed", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
     for (const text of [
