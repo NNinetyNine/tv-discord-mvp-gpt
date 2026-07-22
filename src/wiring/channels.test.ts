@@ -40,7 +40,7 @@ describe("loadChannelResolver — real config", () => {
   it("loads config/channels.json and builds a working resolver", () => {
     const resolve = loadChannelResolver(resolvePath(process.cwd(), "config", "channels.json"));
     expect(typeof resolve).toBe("function");
-    expect(resolve("crypto")).toBe("1527846955668078663");
+    expect(resolve("crypto")).toBe("1529334738454839349");
     expect(resolve("forex")).toBe("1528609079822516305");
   });
 });

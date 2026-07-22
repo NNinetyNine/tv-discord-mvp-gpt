@@ -1,4 +1,8 @@
 {
   "schemaVersion": 1,
-  "packs": {}
+  "packs": {
+    "crypto": {
+      "btc": "1529335112293027860"
+    }
+  }
 }
