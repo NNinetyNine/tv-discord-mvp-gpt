@@ -20,14 +20,12 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function argv(): string[] {
+function common(): string[] {
   return [
-    "node",
-    "preview-chart-publication.ts",
+    "--asset",
+    "btc",
     "--input",
     join(root, "BTCUSD_2026-07-22_18-58-01.png"),
-    "--profile",
-    join(root, "btc-1h.profile.json"),
     "--output",
     join(root, "btc.preview.png"),
     "--receipt",
@@ -35,43 +33,96 @@ function argv(): string[] {
   ];
 }
 
+function standaloneArgv(): string[] {
+  return [
+    "node",
+    "preview-chart-publication.ts",
+    "--context",
+    "standalone",
+    "--timeframe",
+    "4H",
+    ...common(),
+  ];
+}
+
+function packArgv(): string[] {
+  return [
+    "node",
+    "preview-chart-publication.ts",
+    "--context",
+    "pack",
+    "--pack",
+    "crypto",
+    ...common(),
+  ];
+}
+
 describe("preview-chart-publication command", () => {
-  it("parses explicit artifact paths and governed default source paths", () => {
-    expect(parsePreviewChartPublicationArguments(argv())).toEqual({
+  it("parses standalone context with explicit timeframe and governed default source paths", () => {
+    expect(parsePreviewChartPublicationArguments(standaloneArgv())).toEqual({
       ok: true,
       options: {
         inputPath: resolve(join(root, "BTCUSD_2026-07-22_18-58-01.png")),
-        profilePath: resolve(join(root, "btc-1h.profile.json")),
+        request: { context: "standalone", assetId: "btc", timeframe: "4H" },
         outputPath: resolve(join(root, "btc.preview.png")),
         receiptPath: resolve(join(root, "btc.preview.receipt.json")),
         registryPath: resolve("definitions/registry.json"),
         channelsPath: resolve("config/channels.json"),
+        packsPath: resolve("definitions/packs.json"),
       },
     });
   });
 
-  it("accepts explicit Registry and channel source paths for isolated verification", () => {
+  it("parses Pack context without a caller-authored timeframe", () => {
+    expect(parsePreviewChartPublicationArguments(packArgv())).toMatchObject({
+      ok: true,
+      options: {
+        request: { context: "pack", assetId: "btc", packId: "crypto" },
+      },
+    });
+  });
+
+  it("accepts explicit Registry, channel, and Pack source paths for isolated verification", () => {
     expect(parsePreviewChartPublicationArguments([
-      ...argv(),
+      ...packArgv(),
       "--registry",
       join(root, "registry.json"),
       "--channels",
       join(root, "channels.json"),
+      "--packs",
+      join(root, "packs.json"),
     ])).toMatchObject({
       ok: true,
       options: {
         registryPath: resolve(join(root, "registry.json")),
         channelsPath: resolve(join(root, "channels.json")),
+        packsPath: resolve(join(root, "packs.json")),
       },
     });
   });
 
+  it("rejects context-specific misuse and unsupported timeframes", () => {
+    expect(parsePreviewChartPublicationArguments([
+      ...standaloneArgv(),
+      "--pack",
+      "crypto",
+    ])).toMatchObject({ ok: false });
+    expect(parsePreviewChartPublicationArguments([
+      ...packArgv(),
+      "--timeframe",
+      "1D",
+    ])).toMatchObject({ ok: false });
+    expect(parsePreviewChartPublicationArguments(
+      standaloneArgv().map((value) => value === "4H" ? "hourly" : value),
+    )).toMatchObject({ ok: false });
+  });
+
   it("rejects missing, duplicate, unknown, positional, and valueless arguments", async () => {
     expect(parsePreviewChartPublicationArguments(["node", "script", "--input", "a.png"])).toMatchObject({ ok: false });
-    expect(parsePreviewChartPublicationArguments([...argv(), "--input", "other.png"])).toMatchObject({ ok: false });
+    expect(parsePreviewChartPublicationArguments([...standaloneArgv(), "--input", "other.png"])).toMatchObject({ ok: false });
     expect(parsePreviewChartPublicationArguments(["node", "script", "--unknown", "x"])).toMatchObject({ ok: false });
     expect(parsePreviewChartPublicationArguments(["node", "script", "source.png"])).toMatchObject({ ok: false });
-    expect(parsePreviewChartPublicationArguments(["node", "script", "--input", "--profile", "x"])).toMatchObject({ ok: false });
+    expect(parsePreviewChartPublicationArguments(["node", "script", "--input", "--context", "standalone"])).toMatchObject({ ok: false });
 
     const stdout: string[] = [];
     const stderr: string[] = [];

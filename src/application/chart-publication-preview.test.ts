@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
 
+import { buildPacks } from "../packs/packs.ts";
 import { buildRegistry } from "../registry/registry.ts";
 import { createResolver } from "../resolver/index.ts";
 import {
   CHART_PUBLICATION_PREVIEW_ATTRIBUTION,
+  defaultChartPublicationTimeframeForPack,
   deriveTradingViewExportDate,
   prepareChartPublicationPreview,
-  validateChartPublicationPreviewProfile,
+  validateChartPublicationPreviewRequest,
+  validateChartPublicationTimeframe,
 } from "./chart-publication-preview.ts";
 
 function fixture() {
+  const channels = { crypto: "", etfs: "" };
   const registry = buildRegistry(
     {
       btc: {
@@ -18,34 +22,69 @@ function fixture() {
         currency: "USD",
         channel: "crypto",
       },
-      eth: {
-        tradingView: "ETH",
-        tradingViewAliases: ["ETHUSD"],
-        display: "Ethereum",
+      acwi: {
+        tradingView: "AMEX:ACWI",
+        display: "iShares MSCI ACWI ETF",
+        currency: "USD",
+        channel: "etfs",
+      },
+      orphan: {
+        tradingView: "NASDAQ:ORPHAN",
+        display: "Standalone Only",
+        currency: "USD",
         channel: "crypto",
       },
     },
-    { crypto: "" },
+    channels,
   );
-  return { registry, resolver: createResolver(registry) };
+  const packs = buildPacks(
+    [
+      { id: "crypto", display: "Crypto", channel: "crypto", assets: ["btc"] },
+      { id: "etfs", display: "ETFs", channel: "etfs", assets: ["acwi"] },
+    ],
+    new Set(registry.all().map((asset) => asset.id)),
+    new Set(Object.keys(channels)),
+  );
+  return { registry, resolver: createResolver(registry), packs };
 }
 
-describe("chart publication preview profile", () => {
-  it("accepts a strict controlled Asset/timeframe profile", () => {
-    expect(validateChartPublicationPreviewProfile({
-      schemaVersion: 1,
+describe("chart publication rendering request", () => {
+  it("accepts standalone and Pack contexts without a per-ticker profile file", () => {
+    expect(validateChartPublicationPreviewRequest({
+      context: "standalone",
       assetId: "btc",
-      timeframe: "1H",
+      timeframe: "4H",
     })).toEqual({
       ok: true,
-      profile: { schemaVersion: 1, assetId: "btc", timeframe: "1H" },
+      request: { context: "standalone", assetId: "btc", timeframe: "4H" },
+    });
+    expect(validateChartPublicationPreviewRequest({
+      context: "pack",
+      assetId: "btc",
+      packId: "crypto",
+    })).toEqual({
+      ok: true,
+      request: { context: "pack", assetId: "btc", packId: "crypto" },
     });
   });
 
-  it("rejects unsupported timeframes, foreign fields, and malformed Asset ids", () => {
-    expect(validateChartPublicationPreviewProfile({ schemaVersion: 1, assetId: "btc", timeframe: "hourly" })).toMatchObject({ ok: false });
-    expect(validateChartPublicationPreviewProfile({ schemaVersion: 1, assetId: "btc", timeframe: "1H", dataSource: "TRADINGVIEW" })).toMatchObject({ ok: false });
-    expect(validateChartPublicationPreviewProfile({ schemaVersion: 1, assetId: "BTC", timeframe: "1H" })).toMatchObject({ ok: false });
+  it("accepts 4D and other supported standalone timeframes", () => {
+    expect(validateChartPublicationTimeframe("4D")).toEqual({ ok: true, timeframe: "4D" });
+    expect(validateChartPublicationTimeframe("12H")).toEqual({ ok: true, timeframe: "12H" });
+  });
+
+  it("rejects malformed contexts, identifiers, foreign fields, and unsupported timeframes", () => {
+    expect(validateChartPublicationPreviewRequest({ context: "other", assetId: "btc", timeframe: "1D" })).toMatchObject({ ok: false });
+    expect(validateChartPublicationPreviewRequest({ context: "standalone", assetId: "BTC", timeframe: "1D" })).toMatchObject({ ok: false });
+    expect(validateChartPublicationPreviewRequest({ context: "standalone", assetId: "btc", timeframe: "hourly" })).toMatchObject({ ok: false });
+    expect(validateChartPublicationPreviewRequest({ context: "standalone", assetId: "btc", timeframe: "1D", packId: "crypto" })).toMatchObject({ ok: false });
+    expect(validateChartPublicationPreviewRequest({ context: "pack", assetId: "btc", packId: "crypto", timeframe: "1D" })).toMatchObject({ ok: false });
+  });
+
+  it("uses 1D for ordinary Packs and 4D for the ETF Pack", () => {
+    expect(defaultChartPublicationTimeframeForPack({ id: "crypto" })).toBe("1D");
+    expect(defaultChartPublicationTimeframeForPack({ id: "stocks" })).toBe("1D");
+    expect(defaultChartPublicationTimeframeForPack({ id: "etfs" })).toBe("4D");
   });
 });
 
@@ -64,42 +103,104 @@ describe("TradingView export date", () => {
   });
 });
 
-describe("Registry-backed chart publication preview preparation", () => {
-  it("uses canonical identity, derives date, and displays canonical market as source", () => {
+describe("Registry-backed chart publication preparation", () => {
+  it("renders a standalone Registry Asset with an operator-selected supported timeframe", () => {
     const { registry, resolver } = fixture();
     const result = prepareChartPublicationPreview(
       registry,
       resolver,
-      "/tmp/BTCUSD_2026-07-22_18-58-01.png",
-      { schemaVersion: 1, assetId: "btc", timeframe: "1H" },
+      "/tmp/ORPHAN_2026-07-22_18-58-01.png",
+      { context: "standalone", assetId: "orphan", timeframe: "3H" },
     );
 
     expect(result).toEqual({
       ok: true,
-      sourceBasename: "BTCUSD_2026-07-22_18-58-01.png",
-      assetId: "btc",
+      context: "standalone",
+      sourceBasename: "ORPHAN_2026-07-22_18-58-01.png",
+      assetId: "orphan",
+      timeframe: "3H",
       dataAsOf: "2026-07-22",
       metadata: {
-        title: "BITCOIN / U.S. DOLLAR",
-        symbol: "BTCUSD",
-        timeframe: "1H",
-        market: "CRYPTO",
+        title: "STANDALONE ONLY",
+        symbol: "ORPHAN",
+        timeframe: "3H",
+        market: "NASDAQ",
         currency: "USD",
-        dataSource: "CRYPTO",
+        dataSource: "NASDAQ",
         dataAsOf: "2026-07-22",
         chartAttribution: CHART_PUBLICATION_PREVIEW_ATTRIBUTION,
       },
     });
   });
 
-  it("fails when the controlled profile does not match the filename-resolved Asset", () => {
+  it("uses the ordinary Pack default after proving membership", () => {
+    const { registry, resolver, packs } = fixture();
+    expect(prepareChartPublicationPreview(
+      registry,
+      resolver,
+      "BTCUSD_2026-07-22_18-58-01.png",
+      { context: "pack", assetId: "btc", packId: "crypto" },
+      packs,
+    )).toMatchObject({
+      ok: true,
+      context: "pack",
+      assetId: "btc",
+      packId: "crypto",
+      timeframe: "1D",
+      metadata: { timeframe: "1D", market: "CRYPTO", dataSource: "CRYPTO" },
+    });
+  });
+
+  it("uses the ETF Pack 4D default after proving membership", () => {
+    const { registry, resolver, packs } = fixture();
+    expect(prepareChartPublicationPreview(
+      registry,
+      resolver,
+      "ACWI_2026-07-22_18-58-01.png",
+      { context: "pack", assetId: "acwi", packId: "etfs" },
+      packs,
+    )).toMatchObject({
+      ok: true,
+      context: "pack",
+      assetId: "acwi",
+      packId: "etfs",
+      timeframe: "4D",
+      metadata: { timeframe: "4D", market: "AMEX", dataSource: "AMEX" },
+    });
+  });
+
+  it("fails closed on missing Pack definitions, unknown Packs, and non-membership", () => {
+    const { registry, resolver, packs } = fixture();
+    expect(prepareChartPublicationPreview(
+      registry,
+      resolver,
+      "BTCUSD_2026-07-22_18-58-01.png",
+      { context: "pack", assetId: "btc", packId: "crypto" },
+    )).toMatchObject({ ok: false, reason: "pack_definitions_required" });
+    expect(prepareChartPublicationPreview(
+      registry,
+      resolver,
+      "BTCUSD_2026-07-22_18-58-01.png",
+      { context: "pack", assetId: "btc", packId: "missing" },
+      packs,
+    )).toMatchObject({ ok: false, reason: "unknown_pack" });
+    expect(prepareChartPublicationPreview(
+      registry,
+      resolver,
+      "ORPHAN_2026-07-22_18-58-01.png",
+      { context: "pack", assetId: "orphan", packId: "crypto" },
+      packs,
+    )).toMatchObject({ ok: false, reason: "asset_not_in_pack" });
+  });
+
+  it("fails when the selected Asset does not match the filename-resolved Asset", () => {
     const { registry, resolver } = fixture();
     expect(prepareChartPublicationPreview(
       registry,
       resolver,
       "BTCUSD_2026-07-22_18-58-01.png",
-      { schemaVersion: 1, assetId: "eth", timeframe: "1H" },
-    )).toMatchObject({ ok: false, reason: "profile_asset_mismatch" });
+      { context: "standalone", assetId: "orphan", timeframe: "1H" },
+    )).toMatchObject({ ok: false, reason: "request_asset_mismatch" });
   });
 
   it("fails before metadata construction when timestamp evidence is unavailable", () => {
@@ -108,7 +209,7 @@ describe("Registry-backed chart publication preview preparation", () => {
       registry,
       resolver,
       "BTCUSD.png",
-      { schemaVersion: 1, assetId: "btc", timeframe: "1H" },
+      { context: "standalone", assetId: "btc", timeframe: "1H" },
     )).toMatchObject({ ok: false, reason: "missing_export_timestamp" });
   });
 });

@@ -1,7 +1,8 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { loadPacks } from "../packs/packs.ts";
 import { loadRegistry } from "../registry/registry.ts";
 import { createResolver } from "../resolver/index.ts";
 import {
@@ -9,24 +10,30 @@ import {
   type RenderChartPublicationFileDependencies,
   type RenderChartPublicationFileResult,
 } from "../rendering/render-chart-publication-file.ts";
+import { loadChannels } from "../wiring/channels.ts";
 import {
   prepareChartPublicationPreview,
   type ChartPublicationPreviewPreparationResult,
+  type ChartPublicationPreviewRequest,
 } from "./chart-publication-preview.ts";
 
 export interface PreviewChartPublicationFileOptions {
   readonly inputPath: string;
-  readonly profilePath: string;
+  readonly request: ChartPublicationPreviewRequest;
   readonly outputPath: string;
   readonly receiptPath: string;
   readonly registryPath: string;
   readonly channelsPath: string;
+  readonly packsPath: string;
 }
 
 export interface PreviewChartPublicationFileSuccess {
   readonly ok: true;
+  readonly context: Exclude<ChartPublicationPreviewPreparationResult, { readonly ok: false }>["context"];
   readonly sourceBasename: string;
   readonly assetId: string;
+  readonly packId?: string;
+  readonly timeframe: Exclude<ChartPublicationPreviewPreparationResult, { readonly ok: false }>["timeframe"];
   readonly dataAsOf: string;
   readonly metadata: Exclude<ChartPublicationPreviewPreparationResult, { readonly ok: false }>["metadata"];
   readonly outputBasename: string;
@@ -41,7 +48,7 @@ export type PreviewChartPublicationFileResult =
   | Exclude<RenderChartPublicationFileResult, { readonly ok: true }>
   | {
       readonly ok: false;
-      readonly reason: "unreadable_profile" | "temporary_metadata_failed";
+      readonly reason: "temporary_metadata_failed";
       readonly detail: string;
     };
 
@@ -51,7 +58,7 @@ export interface PreviewChartPublicationFileDependencies {
 }
 
 function failure(
-  reason: "unreadable_profile" | "temporary_metadata_failed",
+  reason: "temporary_metadata_failed",
   detail: string,
 ): PreviewChartPublicationFileResult {
   return Object.freeze({ ok: false, reason, detail });
@@ -61,23 +68,23 @@ export async function previewChartPublicationFile(
   options: PreviewChartPublicationFileOptions,
   dependencies: PreviewChartPublicationFileDependencies = {},
 ): Promise<PreviewChartPublicationFileResult> {
-  let profileValue: unknown;
-  try {
-    profileValue = JSON.parse(await readFile(options.profilePath, "utf8"));
-  } catch (error) {
-    return failure(
-      "unreadable_profile",
-      `could not read/parse preview profile: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-
   const registry = loadRegistry(options.registryPath, options.channelsPath);
   const resolver = createResolver(registry);
+
+  const packs = options.request.context === "pack"
+    ? loadPacks(
+        options.packsPath,
+        new Set(registry.all().map((asset) => asset.id)),
+        new Set(Object.keys(loadChannels(options.channelsPath))),
+      )
+    : undefined;
+
   const prepared = prepareChartPublicationPreview(
     registry,
     resolver,
     options.inputPath,
-    profileValue,
+    options.request,
+    packs,
   );
   if (!prepared.ok) return prepared;
 
@@ -120,8 +127,11 @@ export async function previewChartPublicationFile(
 
     return Object.freeze({
       ok: true,
+      context: prepared.context,
       sourceBasename: prepared.sourceBasename,
       assetId: prepared.assetId,
+      ...(prepared.packId === undefined ? {} : { packId: prepared.packId }),
+      timeframe: prepared.timeframe,
       dataAsOf: prepared.dataAsOf,
       metadata: prepared.metadata,
       outputBasename: rendered.outputBasename,
