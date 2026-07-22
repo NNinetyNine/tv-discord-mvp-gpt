@@ -17,7 +17,8 @@
     "snapshot-spike": "tsx src/scripts/snapshot-spike.ts",
     "test": "vitest run",
     "admin": "tsx src/scripts/start-admin.ts",
-    "adopt-thread": "tsx src/scripts/adopt-discord-asset-thread.ts"
+    "adopt-thread": "tsx src/scripts/adopt-discord-asset-thread.ts",
+    "provision-thread": "tsx src/scripts/provision-discord-asset-thread.ts"
   },
   "dependencies": {
     "discord.js": "^14.26.4",
