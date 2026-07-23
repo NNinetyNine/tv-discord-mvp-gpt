@@ -17,7 +17,9 @@ import {
   AssetThreadsError,
   bindAssetThread,
   parseAssetThreadBindings,
+  replaceAssetThreadBinding,
   serializeAssetThreadBindings,
+  unbindAssetThread,
   type AssetThreadBindings,
 } from "./asset-threads.ts";
 
@@ -39,6 +41,8 @@ export interface BindAssetThreadFileResult {
 export interface BindAssetThreadFileHooks {
   readonly beforeReplace?: () => Promise<void>;
 }
+
+export type AssetThreadBindingFileHooks = BindAssetThreadFileHooks;
 
 function errorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -210,15 +214,22 @@ export async function bindAssetThreadFile(
   threadId: string,
   hooks: BindAssetThreadFileHooks = {},
 ): Promise<BindAssetThreadFileResult> {
+  return updateAssetThreadBindingsFile(
+    bindingsPath,
+    (current) => bindAssetThread(current, packId, assetId, threadId),
+    hooks,
+  );
+}
+
+async function updateAssetThreadBindingsFile(
+  bindingsPath: string,
+  update: (current: AssetThreadBindings) => AssetThreadBindings,
+  hooks: AssetThreadBindingFileHooks,
+): Promise<BindAssetThreadFileResult> {
   const path = resolve(bindingsPath);
   const source = await readRegularSnapshot(path);
   const current = parseSnapshot(path, source);
-  const next = bindAssetThread(
-    current,
-    packId,
-    assetId,
-    threadId,
-  );
+  const next = update(current);
 
   if (next === current) {
     return Object.freeze({
@@ -266,4 +277,46 @@ export async function bindAssetThreadFile(
   } finally {
     await rm(temporary, { force: true });
   }
+}
+
+/** Atomically replace one exact existing Pack/Asset thread binding. */
+export async function replaceAssetThreadBindingFile(
+  bindingsPath: string,
+  packId: string,
+  assetId: string,
+  expectedThreadId: string,
+  nextThreadId: string,
+  hooks: AssetThreadBindingFileHooks = {},
+): Promise<BindAssetThreadFileResult> {
+  return updateAssetThreadBindingsFile(
+    bindingsPath,
+    (current) => replaceAssetThreadBinding(
+      current,
+      packId,
+      assetId,
+      expectedThreadId,
+      nextThreadId,
+    ),
+    hooks,
+  );
+}
+
+/** Atomically remove one exact Pack/Asset thread binding. */
+export async function unbindAssetThreadFile(
+  bindingsPath: string,
+  packId: string,
+  assetId: string,
+  expectedThreadId: string,
+  hooks: AssetThreadBindingFileHooks = {},
+): Promise<BindAssetThreadFileResult> {
+  return updateAssetThreadBindingsFile(
+    bindingsPath,
+    (current) => unbindAssetThread(
+      current,
+      packId,
+      assetId,
+      expectedThreadId,
+    ),
+    hooks,
+  );
 }

@@ -126,7 +126,11 @@ import type {
   DiscordForumAdministrationSession,
   DiscordForumSession,
 } from "../publish/discord-forum-session.ts";
-import { bindAssetThreadFile } from "../wiring/asset-thread-bindings-file.ts";
+import {
+  bindAssetThreadFile,
+  replaceAssetThreadBindingFile,
+  unbindAssetThreadFile,
+} from "../wiring/asset-thread-bindings-file.ts";
 import {
   AssetThreadsError,
   parseAssetThreadBindings,
@@ -1078,6 +1082,65 @@ export class AdminService {
     }
   }
 
+  async #inspectThreadCandidate(
+    packId: string,
+    assetId: string,
+    threadId: string,
+    bindThread: (
+      verifiedPackId: string,
+      verifiedAssetId: string,
+      verifiedThreadId: string,
+    ) => Promise<{ readonly changed: boolean }>,
+  ): Promise<{
+    readonly result: Extract<AdoptDiscordAssetThreadResult, { readonly ok: true }>;
+    readonly sessionClosed: boolean;
+  }> {
+    let session: DiscordForumSession | null = null;
+    let result: AdoptDiscordAssetThreadResult | undefined;
+    let operationError: unknown;
+    try {
+      result = await adoptDiscordAssetThread({
+        packs: this.#state.packs,
+        resolveChannel: buildChannelResolver(this.#state.rawChannels as Record<string, unknown>),
+        inspectThread: async (requestedThreadId) => {
+          session ??= await this.#openDiscordForumSession!();
+          return session.inspectThread(requestedThreadId);
+        },
+        bindThread,
+      }, packId, assetId, threadId);
+    } catch (error) {
+      operationError = error;
+    }
+
+    let sessionClosed = true;
+    const openedSession = session as DiscordForumSession | null;
+    if (openedSession !== null) {
+      try { await openedSession.close(); }
+      catch { sessionClosed = false; }
+    }
+    if (operationError !== undefined) {
+      if (operationError instanceof AssetThreadsError) {
+        throw new AdminError(
+          "thread_binding_write_failed",
+          "The thread was verified, but its persistent binding could not be changed safely.",
+          409,
+          { sessionClosed },
+        );
+      }
+      throw new AdminError(
+        "thread_adoption_failed",
+        "Discord thread inspection failed. No automatic retry was attempted.",
+        502,
+        { sessionClosed },
+      );
+    }
+    if (result === undefined) {
+      throw new AdminError("internal_error", "Discord thread inspection produced no result.", 500);
+    }
+    if (!result.ok) return this.#threadAdoptionFailure(result);
+    return Object.freeze({ result, sessionClosed });
+  }
+
   #threadProvisioningFailure(
     result: Exclude<ProvisionDiscordAssetThreadResult, { readonly ok: true }>,
     sessionClosed: boolean,
@@ -1321,6 +1384,232 @@ export class AdminService {
           discordInspected: true,
           discordContentChanged: false,
           bindingChanged: result.outcome === "adopted",
+          published: false,
+          released: false,
+        }),
+      });
+    });
+  }
+
+  async inspectExistingThreadBinding(input: {
+    readonly packId: string;
+    readonly assetId: string;
+    readonly threadId: string;
+    readonly confirmation: unknown;
+  }): Promise<Readonly<Record<string, unknown>>> {
+    if (input.confirmation !== "inspect_bound_thread") {
+      throw new AdminError(
+        "thread_binding_inspection_confirmation_invalid",
+        "Bound-thread inspection requires an explicit current confirmation.",
+      );
+    }
+    if (this.#openDiscordForumSession === undefined) {
+      throw new AdminError(
+        "discord_operations_unavailable",
+        "Discord thread inspection is unavailable until the administration process has an explicit bot token.",
+        503,
+      );
+    }
+
+    return this.#withThreadMutationLock(async () => {
+      await this.refresh();
+      const before = await this.#readThreadBindings();
+      const currentThreadId = before.bindings.packs[input.packId]?.[input.assetId];
+      if (currentThreadId !== input.threadId) {
+        throw new AdminError(
+          "thread_binding_state_changed",
+          "The persistent binding changed after it was loaded. Refresh before inspecting it.",
+          409,
+        );
+      }
+      const inspected = await this.#inspectThreadCandidate(
+        input.packId,
+        input.assetId,
+        input.threadId,
+        async () => Object.freeze({ changed: false }),
+      );
+      const after = await this.#readThreadBindings();
+      if (
+        after.file.sha256 !== before.file.sha256 ||
+        after.bindings.packs[input.packId]?.[input.assetId] !== input.threadId
+      ) {
+        throw new AdminError(
+          "thread_binding_state_changed",
+          "The persistent binding changed during Discord inspection. The result was discarded.",
+          409,
+          { sessionClosed: inspected.sessionClosed },
+        );
+      }
+      return Object.freeze({
+        schemaVersion: 1,
+        outcome: "inspected",
+        packId: input.packId,
+        assetId: input.assetId,
+        bindingSourceSha256: before.file.sha256,
+        thread: Object.freeze({
+          threadId: inspected.result.thread.threadId,
+          name: inspected.result.thread.name,
+          archived: inspected.result.thread.archived,
+          locked: inspected.result.thread.locked,
+          appliedTagCount: inspected.result.thread.appliedTagIds.length,
+        }),
+        sessionClosed: inspected.sessionClosed,
+        warnings: Object.freeze(inspected.sessionClosed ? [] : ["discord_session_close_failed"] as const),
+        effects: Object.freeze({
+          discordInspected: true,
+          discordContentChanged: false,
+          bindingChanged: false,
+          published: false,
+          released: false,
+        }),
+      });
+    });
+  }
+
+  async replaceExistingThreadBinding(input: {
+    readonly packId: string;
+    readonly assetId: string;
+    readonly currentThreadId: string;
+    readonly nextThreadId: string;
+    readonly confirmation: unknown;
+  }): Promise<Readonly<Record<string, unknown>>> {
+    if (input.confirmation !== "replace_thread_binding") {
+      throw new AdminError(
+        "thread_binding_replace_confirmation_invalid",
+        "Thread-binding replacement requires an explicit current confirmation.",
+      );
+    }
+    if (this.#openDiscordForumSession === undefined) {
+      throw new AdminError(
+        "discord_operations_unavailable",
+        "Discord thread inspection is unavailable until the administration process has an explicit bot token.",
+        503,
+      );
+    }
+    if (input.currentThreadId === input.nextThreadId) {
+      throw new AdminError(
+        "thread_binding_conflict",
+        "The replacement thread must differ from the current persistent binding.",
+        409,
+      );
+    }
+
+    return this.#withThreadMutationLock(async () => {
+      await this.refresh();
+      const before = await this.#readThreadBindings();
+      if (before.bindings.packs[input.packId]?.[input.assetId] !== input.currentThreadId) {
+        throw new AdminError(
+          "thread_binding_state_changed",
+          "The persistent binding changed after it was loaded. Refresh before replacing it.",
+          409,
+        );
+      }
+      for (const [boundPackId, assets] of Object.entries(before.bindings.packs)) {
+        for (const [boundAssetId, boundThreadId] of Object.entries(assets)) {
+          if (
+            boundThreadId === input.nextThreadId &&
+            (boundPackId !== input.packId || boundAssetId !== input.assetId)
+          ) {
+            throw new AdminError(
+              "thread_binding_conflict",
+              "The replacement Discord thread is already bound to another Pack Asset.",
+              409,
+            );
+          }
+        }
+      }
+      const inspected = await this.#inspectThreadCandidate(
+        input.packId,
+        input.assetId,
+        input.nextThreadId,
+        async (packId, assetId, threadId) => {
+          const written = await replaceAssetThreadBindingFile(
+            join(this.repositoryRoot, THREAD_BINDINGS_RELATIVE_PATH),
+            packId,
+            assetId,
+            input.currentThreadId,
+            threadId,
+          );
+          return Object.freeze({ changed: written.changed });
+        },
+      );
+      return Object.freeze({
+        schemaVersion: 1,
+        outcome: "rebound",
+        packId: input.packId,
+        assetId: input.assetId,
+        previousThreadId: input.currentThreadId,
+        thread: Object.freeze({
+          threadId: inspected.result.thread.threadId,
+          name: inspected.result.thread.name,
+          archived: inspected.result.thread.archived,
+          locked: inspected.result.thread.locked,
+          appliedTagCount: inspected.result.thread.appliedTagIds.length,
+        }),
+        sessionClosed: inspected.sessionClosed,
+        warnings: Object.freeze(inspected.sessionClosed ? [] : ["discord_session_close_failed"] as const),
+        effects: Object.freeze({
+          discordInspected: true,
+          discordContentChanged: false,
+          bindingChanged: true,
+          published: false,
+          released: false,
+        }),
+      });
+    });
+  }
+
+  async removeExistingThreadBinding(input: {
+    readonly packId: string;
+    readonly assetId: string;
+    readonly currentThreadId: string;
+    readonly confirmation: unknown;
+  }): Promise<Readonly<Record<string, unknown>>> {
+    if (input.confirmation !== "remove_thread_binding") {
+      throw new AdminError(
+        "thread_binding_remove_confirmation_invalid",
+        "Thread-binding removal requires an explicit current confirmation.",
+      );
+    }
+    return this.#withThreadMutationLock(async () => {
+      await this.refresh();
+      const before = await this.#readThreadBindings();
+      if (before.bindings.packs[input.packId]?.[input.assetId] !== input.currentThreadId) {
+        throw new AdminError(
+          "thread_binding_state_changed",
+          "The persistent binding changed after it was loaded. Refresh before removing it.",
+          409,
+        );
+      }
+      let written;
+      try {
+        written = await unbindAssetThreadFile(
+          join(this.repositoryRoot, THREAD_BINDINGS_RELATIVE_PATH),
+          input.packId,
+          input.assetId,
+          input.currentThreadId,
+        );
+      } catch (error) {
+        if (error instanceof AssetThreadsError) {
+          throw new AdminError(
+            "thread_binding_write_failed",
+            "The persistent binding could not be removed safely.",
+            409,
+          );
+        }
+        throw error;
+      }
+      return Object.freeze({
+        schemaVersion: 1,
+        outcome: "unbound",
+        packId: input.packId,
+        assetId: input.assetId,
+        removedThreadId: input.currentThreadId,
+        bindingSourceSha256: sha256(written.bytes),
+        effects: Object.freeze({
+          discordContacted: false,
+          discordContentChanged: false,
+          bindingChanged: true,
           published: false,
           released: false,
         }),

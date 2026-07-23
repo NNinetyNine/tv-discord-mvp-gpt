@@ -138,28 +138,32 @@
 
       <section class="window thread-adoption" aria-labelledby="thread-adoption-heading">
         <header class="window-header">
-          <div><p class="micro-label">EXISTING FORUM POST</p><h2 id="thread-adoption-heading">INSPECT &amp; ADOPT</h2></div>
+          <div><p class="micro-label">EXISTING FORUM POST</p><h2 id="thread-adoption-heading">BINDING MANAGEMENT</h2></div>
           <span class="context-fact">NO DISCORD CONTENT CHANGE</span>
         </header>
+        <p class="window-help">Select any Pack Asset to inspect its current destination, adopt an existing post, replace a stale Thread ID, or remove only the local binding. Replacing first verifies that the new post belongs to this Pack forum. Removing a binding never deletes the Discord post.</p>
         <div class="thread-adoption-fields">
-          <label><span>UNBOUND PACK ASSET</span><select id="thread-asset"><option value="">SELECT ASSET</option></select></label>
-          <label><span>DISCORD THREAD ID</span><input id="thread-id" inputmode="numeric" autocomplete="off" maxlength="20" pattern="[0-9]{17,20}" placeholder="123456789012345678"></label>
+          <label><span>PACK ASSET</span><select id="thread-asset"><option value="">SELECT ASSET</option></select></label>
+          <div class="derived-channel"><span>CURRENT BINDING</span><strong id="thread-current-id">UNBOUND</strong></div>
+          <label><span>EXISTING OR REPLACEMENT THREAD ID</span><input id="thread-id" inputmode="numeric" autocomplete="off" maxlength="20" pattern="[0-9]{17,20}" placeholder="123456789012345678"></label>
+          <button id="thread-inspect-binding" class="outline-action" type="button" disabled>INSPECT CURRENT</button>
           <button id="thread-adopt-button" class="primary-action" type="button" disabled>INSPECT &amp; ADOPT</button>
+          <button id="thread-remove-binding" class="danger-action" type="button" disabled>REMOVE BINDING</button>
         </div>
         <div class="renderer-guidance">
-          <span id="thread-adoption-state">SELECT AN UNBOUND ASSET AND EXISTING THREAD</span>
-          <span>READ-ONLY DISCORD INSPECTION · NO CONTENT EDIT · NO PUBLICATION</span>
+          <span id="thread-adoption-state">SELECT A PACK ASSET</span>
+          <span>INSPECTION IS READ-ONLY · REMOVAL CHANGES LOCAL ROUTING ONLY · NO PUBLICATION</span>
         </div>
       </section>
 
       <section class="window thread-provisioning" aria-labelledby="thread-provisioning-heading">
         <header class="window-header">
-          <div><p class="micro-label">NEW FORUM POST</p><h2 id="thread-provisioning-heading">INSPECT &amp; PROVISION</h2></div>
+          <div><p class="micro-label">NEW FORUM POST</p><h2 id="thread-provisioning-heading">CREATE NEW FORUM POST</h2></div>
           <span class="context-fact">EXPLICIT CONFIRMATION REQUIRED</span>
         </header>
-        <p class="window-help">Inspect the selected Pack forum for current tags, enter the exact post title, and stage a validated single-frame PNG starter logo. Transparent and rectangular PNGs are supported. Provisioning creates one Discord post and then records its persistent binding.</p>
+        <p class="window-help">Use this only when the Asset has no existing forum post. VisionX loads the forum first so optional tags are current, then creates one post from the exact title and starter logo and records its Thread ID. A forum with no tags is valid. Transparent and rectangular PNGs are supported.</p>
         <div class="thread-provisioning-fields">
-          <button id="thread-inspect-forum" class="outline-action" type="button" disabled>INSPECT FORUM TAGS</button>
+          <button id="thread-inspect-forum" class="outline-action" type="button" disabled>LOAD FORUM &amp; OPTIONAL TAGS</button>
           <label><span>EXACT POST TITLE</span><input id="thread-title" autocomplete="off" maxlength="100" placeholder="Akash Network // $AKT"></label>
           <label class="renderer-file"><span>STARTER LOGO · PNG</span><input id="thread-logo" type="file" accept="image/png"></label>
           <button id="thread-provision-button" class="primary-action" type="button" disabled>PROVISION POST</button>
@@ -199,7 +203,7 @@
         </header>
         <div class="table-wrap workspace-table-wrap">
           <table>
-            <thead><tr><th>ASSET</th><th>STATUS</th><th>PERSISTENT THREAD ID</th><th>LIVE READINESS</th></tr></thead>
+            <thead><tr><th>ASSET</th><th>STATUS</th><th>PERSISTENT THREAD ID</th><th>LIVE READINESS</th><th>ACTION</th></tr></thead>
             <tbody id="thread-members-body"></tbody>
           </table>
         </div>

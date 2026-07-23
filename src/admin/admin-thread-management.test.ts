@@ -24,6 +24,8 @@ import {
 
 const CRYPTO_FORUM_ID = "1529334738454839349";
 const ADOPTED_THREAD_ID = "1529999999999999999";
+const BTC_THREAD_ID = "1529335112293027860";
+const REPLACEMENT_THREAD_ID = "1529999999999999998";
 const OTHER_FORUM_ID = "1528888888888888888";
 const CRYPTO_ASSET_IDS = Object.freeze([
   "akt", "zec", "pepe", "doge", "fet", "xlm", "xrp", "sui",
@@ -353,6 +355,139 @@ describe("Administration Discord thread routing", () => {
       effects: { bindingChanged: true, discordContentChanged: false },
     });
     expect((await service.threadManagementState()).boundCount).toBe(2);
+  });
+
+  it("inspects an existing binding without changing Discord content or local custody", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const bindingsPath = join(repositoryRoot, "config/asset-threads.json");
+    const before = await readFile(bindingsPath);
+    const mock = sessionFactory();
+    const service = await createService(repositoryRoot, mock.factory);
+
+    const result = await service.inspectExistingThreadBinding({
+      packId: "crypto",
+      assetId: "btc",
+      threadId: BTC_THREAD_ID,
+      confirmation: "inspect_bound_thread",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "inspected",
+      packId: "crypto",
+      assetId: "btc",
+      thread: {
+        threadId: BTC_THREAD_ID,
+        archived: false,
+        locked: false,
+        appliedTagCount: 1,
+      },
+      sessionClosed: true,
+      effects: {
+        discordInspected: true,
+        discordContentChanged: false,
+        bindingChanged: false,
+        published: false,
+        released: false,
+      },
+    });
+    expect(mock.inspected).toEqual([BTC_THREAD_ID]);
+    expect(mock.closed).toEqual(["session"]);
+    expect(await readFile(bindingsPath)).toEqual(before);
+  });
+
+  it("verifies a replacement thread before atomically changing only the local binding", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const bindingsPath = join(repositoryRoot, "config/asset-threads.json");
+    const mock = sessionFactory();
+    const service = await createService(repositoryRoot, mock.factory);
+
+    const result = await service.replaceExistingThreadBinding({
+      packId: "crypto",
+      assetId: "btc",
+      currentThreadId: BTC_THREAD_ID,
+      nextThreadId: REPLACEMENT_THREAD_ID,
+      confirmation: "replace_thread_binding",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "rebound",
+      previousThreadId: BTC_THREAD_ID,
+      thread: { threadId: REPLACEMENT_THREAD_ID },
+      effects: {
+        discordInspected: true,
+        discordContentChanged: false,
+        bindingChanged: true,
+        published: false,
+        released: false,
+      },
+    });
+    expect(mock.inspected).toEqual([REPLACEMENT_THREAD_ID]);
+    const bindings = parseAssetThreadBindings(JSON.parse(await readFile(bindingsPath, "utf8")));
+    expect(bindings.packs.crypto?.btc).toBe(REPLACEMENT_THREAD_ID);
+    expect(JSON.stringify(bindings)).not.toContain(BTC_THREAD_ID);
+  });
+
+  it("removes only the local binding without requiring or contacting Discord", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const service = await createService(repositoryRoot);
+
+    const result = await service.removeExistingThreadBinding({
+      packId: "crypto",
+      assetId: "btc",
+      currentThreadId: BTC_THREAD_ID,
+      confirmation: "remove_thread_binding",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "unbound",
+      removedThreadId: BTC_THREAD_ID,
+      effects: {
+        discordContacted: false,
+        discordContentChanged: false,
+        bindingChanged: true,
+        published: false,
+        released: false,
+      },
+    });
+    const dashboard = await service.threadManagementState();
+    expect(dashboard).toMatchObject({ boundCount: 0, missingCount: 131 });
+    expect(dashboard.packs.find((pack) => pack.id === "crypto")?.assets.find((asset) => asset.id === "btc"))
+      .toMatchObject({ bindingState: "unbound", threadId: null });
+  });
+
+  it("rejects stale, duplicate, and unconfirmed binding maintenance before Discord contact", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const mock = sessionFactory();
+    const service = await createService(repositoryRoot, mock.factory);
+
+    await expect(service.inspectExistingThreadBinding({
+      packId: "crypto",
+      assetId: "btc",
+      threadId: REPLACEMENT_THREAD_ID,
+      confirmation: "inspect_bound_thread",
+    })).rejects.toMatchObject({ code: "thread_binding_state_changed", status: 409 });
+    await expect(service.replaceExistingThreadBinding({
+      packId: "crypto",
+      assetId: "btc",
+      currentThreadId: BTC_THREAD_ID,
+      nextThreadId: BTC_THREAD_ID,
+      confirmation: "replace_thread_binding",
+    })).rejects.toMatchObject({ code: "thread_binding_conflict", status: 409 });
+    await expect(service.replaceExistingThreadBinding({
+      packId: "crypto",
+      assetId: "btc",
+      currentThreadId: BTC_THREAD_ID,
+      nextThreadId: BTC_THREAD_ID,
+      confirmation: "yes",
+    })).rejects.toMatchObject({ code: "thread_binding_replace_confirmation_invalid" });
+    await expect(service.removeExistingThreadBinding({
+      packId: "crypto",
+      assetId: "btc",
+      currentThreadId: BTC_THREAD_ID,
+      confirmation: "yes",
+    })).rejects.toMatchObject({ code: "thread_binding_remove_confirmation_invalid" });
+    expect(mock.opened).toEqual([]);
+    expect(mock.inspected).toEqual([]);
   });
 
   it("inspects current forum tags, stages exact logo evidence, and provisions one persistent post", async () => {
@@ -820,6 +955,80 @@ describe("Administration Discord thread routing", () => {
     expect(malformed.status).toBe(400);
     expect((await malformed.json() as any).error.code).toBe("invalid_request");
     expect(mock.createCalls).toHaveLength(1);
+  });
+
+  it("serves strict inspect, replace, and local-only binding-removal routes", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const mock = sessionFactory();
+    const service = await createService(repositoryRoot, mock.factory);
+    const server = await startAdminHttpServer({ service, host: "127.0.0.1", port: 0 });
+    servers.push(server);
+
+    const inspection = await fetch(`${server.url}/api/v1/thread-management/binding/inspect`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        packId: "crypto",
+        assetId: "btc",
+        threadId: BTC_THREAD_ID,
+        confirmation: "inspect_bound_thread",
+      }),
+    });
+    expect(inspection.status).toBe(200);
+    expect((await inspection.json() as any).data).toMatchObject({
+      outcome: "inspected",
+      effects: { discordContentChanged: false, bindingChanged: false, published: false, released: false },
+    });
+
+    const replacement = await fetch(`${server.url}/api/v1/thread-management/binding/replace`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        packId: "crypto",
+        assetId: "btc",
+        currentThreadId: BTC_THREAD_ID,
+        nextThreadId: REPLACEMENT_THREAD_ID,
+        confirmation: "replace_thread_binding",
+      }),
+    });
+    expect(replacement.status).toBe(200);
+    expect((await replacement.json() as any).data).toMatchObject({
+      outcome: "rebound",
+      previousThreadId: BTC_THREAD_ID,
+      thread: { threadId: REPLACEMENT_THREAD_ID },
+      effects: { discordContentChanged: false, bindingChanged: true, published: false, released: false },
+    });
+
+    const removal = await fetch(`${server.url}/api/v1/thread-management/binding`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        packId: "crypto",
+        assetId: "btc",
+        currentThreadId: REPLACEMENT_THREAD_ID,
+        confirmation: "remove_thread_binding",
+      }),
+    });
+    expect(removal.status).toBe(200);
+    expect((await removal.json() as any).data).toMatchObject({
+      outcome: "unbound",
+      effects: { discordContacted: false, discordContentChanged: false, bindingChanged: true },
+    });
+    expect(mock.inspected).toEqual([BTC_THREAD_ID, REPLACEMENT_THREAD_ID]);
+
+    const extraField = await fetch(`${server.url}/api/v1/thread-management/binding`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        packId: "crypto",
+        assetId: "btc",
+        currentThreadId: REPLACEMENT_THREAD_ID,
+        confirmation: "remove_thread_binding",
+        deleteDiscordPost: true,
+      }),
+    });
+    expect(extraField.status).toBe(400);
+    expect((await extraField.json() as any).error.code).toBe("invalid_request");
   });
 
   it("serves one strict read-only Pack routing verification route without publication authority", async () => {

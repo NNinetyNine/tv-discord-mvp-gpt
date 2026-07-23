@@ -129,7 +129,7 @@ h1, h2 { margin: 0; font-size: .78rem; letter-spacing: .15em; font-weight: 850; 
 .renderer-downloads { display: flex; justify-content: flex-end; gap: .65rem; padding: 0 1.1rem 1.1rem; }
 .workspace-overview-grid { display: grid; grid-template-columns: 1.35fr .65fr .65fr .65fr; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
 .thread-overview-grid { display: grid; grid-template-columns: 1.3fr .7fr .9fr .9fr; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
-.thread-adoption-fields { display: grid; grid-template-columns: 1.25fr 1.25fr auto; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
+.thread-adoption-fields { display: grid; grid-template-columns: 1.1fr 1fr 1.3fr auto auto auto; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
 .thread-adoption-fields .primary-action { min-width: 11.5rem; }
 .thread-provisioning-fields { display: grid; grid-template-columns: auto 1.3fr 1.25fr auto; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
 .thread-provisioning-fields button { min-width: 11.5rem; }

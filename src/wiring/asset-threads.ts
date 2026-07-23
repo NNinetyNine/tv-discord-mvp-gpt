@@ -199,6 +199,117 @@ export function bindAssetThread(
 }
 
 /**
+ * Return a new validated binding document that deliberately redirects one
+ * already-bound Pack/Asset pair.
+ *
+ * The caller must repeat the exact current thread identity. This prevents a
+ * stale administration view from replacing a binding that changed after it
+ * was loaded. The replacement thread must remain globally unique.
+ */
+export function replaceAssetThreadBinding(
+  bindings: AssetThreadBindings,
+  packId: string,
+  assetId: string,
+  expectedThreadId: string,
+  nextThreadId: string,
+): AssetThreadBindings {
+  validateDomainId("pack", packId);
+  validateDomainId("asset", assetId);
+  if (!DISCORD_SNOWFLAKE.test(expectedThreadId)) {
+    throw new AssetThreadsError(
+      `expected packs.${packId}.${assetId} binding must be a Discord snowflake`,
+    );
+  }
+  if (!DISCORD_SNOWFLAKE.test(nextThreadId)) {
+    throw new AssetThreadsError(
+      `packs.${packId}.${assetId} must be a Discord snowflake`,
+    );
+  }
+
+  const current = bindings.packs[packId]?.[assetId];
+  if (current === undefined) {
+    throw new AssetThreadsError(
+      `packs.${packId}.${assetId} is not currently bound`,
+    );
+  }
+  if (current !== expectedThreadId) {
+    throw new AssetThreadsError(
+      `packs.${packId}.${assetId} changed from expected thread ${expectedThreadId}`,
+    );
+  }
+  if (current === nextThreadId) return bindings;
+
+  for (const [currentPackId, assets] of Object.entries(bindings.packs)) {
+    for (const [currentAssetId, currentThreadId] of Object.entries(assets)) {
+      if (
+        currentThreadId === nextThreadId &&
+        (currentPackId !== packId || currentAssetId !== assetId)
+      ) {
+        throw new AssetThreadsError(
+          `Discord thread ${nextThreadId} is already bound to ${currentPackId}/${currentAssetId}`,
+        );
+      }
+    }
+  }
+
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    packs: Object.freeze({
+      ...bindings.packs,
+      [packId]: Object.freeze({
+        ...(bindings.packs[packId] ?? {}),
+        [assetId]: nextThreadId,
+      }),
+    }),
+  });
+}
+
+/**
+ * Return a new validated binding document without one Pack/Asset binding.
+ *
+ * Removing a binding never deletes or edits the Discord post. The exact
+ * expected thread identity is required so stale UI state fails closed.
+ */
+export function unbindAssetThread(
+  bindings: AssetThreadBindings,
+  packId: string,
+  assetId: string,
+  expectedThreadId: string,
+): AssetThreadBindings {
+  validateDomainId("pack", packId);
+  validateDomainId("asset", assetId);
+  if (!DISCORD_SNOWFLAKE.test(expectedThreadId)) {
+    throw new AssetThreadsError(
+      `expected packs.${packId}.${assetId} binding must be a Discord snowflake`,
+    );
+  }
+
+  const currentAssets = bindings.packs[packId];
+  const current = currentAssets?.[assetId];
+  if (current === undefined) {
+    throw new AssetThreadsError(
+      `packs.${packId}.${assetId} is not currently bound`,
+    );
+  }
+  if (current !== expectedThreadId) {
+    throw new AssetThreadsError(
+      `packs.${packId}.${assetId} changed from expected thread ${expectedThreadId}`,
+    );
+  }
+
+  const nextAssets = { ...(currentAssets ?? {}) };
+  delete nextAssets[assetId];
+  const nextPacks = { ...bindings.packs };
+  if (Object.keys(nextAssets).length === 0) delete nextPacks[packId];
+  else nextPacks[packId] = Object.freeze(nextAssets);
+
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    packs: Object.freeze(nextPacks),
+  });
+}
+
+/**
  * Serialize installation bindings canonically.
  *
  * Pack and Asset keys are lexical so equivalent documents produce identical

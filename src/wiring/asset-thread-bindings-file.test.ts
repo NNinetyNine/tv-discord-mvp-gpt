@@ -19,6 +19,8 @@ import { join } from "node:path";
 
 import {
   bindAssetThreadFile,
+  replaceAssetThreadBindingFile,
+  unbindAssetThreadFile,
 } from "./asset-thread-bindings-file.ts";
 import {
   loadAssetThreadBindings,
@@ -27,6 +29,7 @@ import {
 
 const BTC_THREAD = "123456789012345678";
 const ETH_THREAD = "223456789012345678";
+const OTHER_BTC_THREAD = "323456789012345678";
 
 const temporaryDirectories: string[] = [];
 
@@ -242,5 +245,62 @@ describe("Asset-thread binding file updates", () => {
       loadAssetThreadBindings(target.path)
         .packs,
     ).toEqual({});
+  });
+
+  it("atomically replaces and removes one exact binding", async () => {
+    const target = await fixture({
+      schemaVersion: 1,
+      packs: {
+        crypto: {
+          btc: BTC_THREAD,
+          eth: ETH_THREAD,
+        },
+      },
+    });
+    const replaced = await replaceAssetThreadBindingFile(
+      target.path,
+      "crypto",
+      "btc",
+      BTC_THREAD,
+      OTHER_BTC_THREAD,
+    );
+    expect(replaced.changed).toBe(true);
+    expect(loadAssetThreadBindings(target.path).packs.crypto).toEqual({
+      btc: OTHER_BTC_THREAD,
+      eth: ETH_THREAD,
+    });
+
+    const removed = await unbindAssetThreadFile(
+      target.path,
+      "crypto",
+      "btc",
+      OTHER_BTC_THREAD,
+    );
+    expect(removed.changed).toBe(true);
+    expect(loadAssetThreadBindings(target.path).packs.crypto).toEqual({
+      eth: ETH_THREAD,
+    });
+  });
+
+  it("rejects stale replacement and removal without changing source bytes", async () => {
+    const target = await fixture({
+      schemaVersion: 1,
+      packs: { crypto: { btc: BTC_THREAD } },
+    });
+    const before = await readFile(target.path);
+    await expect(replaceAssetThreadBindingFile(
+      target.path,
+      "crypto",
+      "btc",
+      OTHER_BTC_THREAD,
+      ETH_THREAD,
+    )).rejects.toThrow(/changed from expected thread/);
+    await expect(unbindAssetThreadFile(
+      target.path,
+      "crypto",
+      "btc",
+      OTHER_BTC_THREAD,
+    )).rejects.toThrow(/changed from expected thread/);
+    expect(await readFile(target.path)).toEqual(before);
   });
 });

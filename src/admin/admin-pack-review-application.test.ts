@@ -126,13 +126,18 @@ describe("Administration Pack review/application UI boundary", () => {
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
 
     expect(html).toContain("DISCORD THREAD ROUTING");
+    expect(html).toContain("BINDING MANAGEMENT");
     expect(html).toContain("INSPECT &amp; ADOPT");
-    expect(html).toContain("INSPECT &amp; PROVISION");
+    expect(html).toContain("REMOVE BINDING");
+    expect(html).toContain("CREATE NEW FORUM POST");
     expect(html).toContain("EXPLICIT CONFIRMATION REQUIRED");
-    expect(html).toContain("NO CONTENT EDIT · NO PUBLICATION");
+    expect(html).toContain("NO DISCORD CONTENT CHANGE");
     expect(js).toContain('api("/api/v1/thread-management")');
-    expect(js).toContain('api("/api/v1/thread-management/adopt"');
+    expect(js).toContain('"/api/v1/thread-management/adopt"');
     expect(js).toContain('confirmation: "adopt_existing_thread"');
+    expect(js).toContain('"/api/v1/thread-management/binding/inspect"');
+    expect(js).toContain('"/api/v1/thread-management/binding/replace"');
+    expect(js).toContain('confirmation: "remove_thread_binding"');
     expect(js).toContain("/api/v1/thread-management/provision");
     expect(js).toContain('confirmation: "inspect_forum_tags"');
     expect(js).toContain('confirmation: "provision_new_thread"');

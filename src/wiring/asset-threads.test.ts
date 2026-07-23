@@ -19,7 +19,9 @@ import {
   loadAssetThreadBindings,
   loadAssetThreadResolver,
   parseAssetThreadBindings,
+  replaceAssetThreadBinding,
   serializeAssetThreadBindings,
+  unbindAssetThread,
 } from "./asset-threads.ts";
 
 const BTC_THREAD = "123456789012345678";
@@ -367,5 +369,57 @@ describe("Asset-thread binding validation", () => {
     expect(() => loadAssetThreadBindings(path)).toThrow(
       AssetThreadsError,
     );
+  });
+
+  it("replaces only an exact current binding and preserves global uniqueness", () => {
+    const bindings = parseAssetThreadBindings({
+      schemaVersion: 1,
+      packs: { crypto: { btc: BTC_THREAD, eth: ETH_THREAD } },
+    });
+    const replaced = replaceAssetThreadBinding(
+      bindings,
+      "crypto",
+      "btc",
+      BTC_THREAD,
+      OTHER_BTC_THREAD,
+    );
+    expect(replaced.packs.crypto).toEqual({
+      btc: OTHER_BTC_THREAD,
+      eth: ETH_THREAD,
+    });
+    expect(() => replaceAssetThreadBinding(
+      bindings,
+      "crypto",
+      "btc",
+      OTHER_BTC_THREAD,
+      "423456789012345678",
+    )).toThrow(/changed from expected thread/);
+    expect(() => replaceAssetThreadBinding(
+      bindings,
+      "crypto",
+      "btc",
+      BTC_THREAD,
+      ETH_THREAD,
+    )).toThrow(/already bound to crypto\/eth/);
+  });
+
+  it("unbinds only the exact current identity without touching other Assets", () => {
+    const bindings = parseAssetThreadBindings({
+      schemaVersion: 1,
+      packs: { crypto: { btc: BTC_THREAD, eth: ETH_THREAD } },
+    });
+    const unbound = unbindAssetThread(
+      bindings,
+      "crypto",
+      "btc",
+      BTC_THREAD,
+    );
+    expect(unbound.packs.crypto).toEqual({ eth: ETH_THREAD });
+    expect(() => unbindAssetThread(
+      bindings,
+      "crypto",
+      "btc",
+      OTHER_BTC_THREAD,
+    )).toThrow(/changed from expected thread/);
   });
 });

@@ -688,15 +688,22 @@ function updateThreadAdoptButton() {
   const asset = selectedThreadAsset();
   const pack = selectedThreadPack();
   const available = state.threadManagement?.adoptionAvailable === true;
+  const bound = asset?.bindingState === "bound";
+  const currentThreadId = bound ? asset.threadId : null;
   qs("#thread-pack").disabled = state.threadBusy;
   qs("#thread-asset").disabled = state.threadBusy;
   qs("#thread-id").disabled = state.threadBusy || !available;
+  qs("#thread-current-id").textContent = currentThreadId ?? "UNBOUND";
+  qs("#thread-inspect-binding").disabled = state.threadBusy || !available || !pack?.forumConfigured || !bound;
+  qs("#thread-remove-binding").disabled = state.threadBusy || !bound;
+  qs("#thread-adopt-button").textContent = bound ? "INSPECT & REPLACE" : "INSPECT & ADOPT";
   qs("#thread-adopt-button").disabled = !(
     !state.threadBusy &&
     available &&
     pack?.forumConfigured &&
-    asset?.bindingState === "unbound" &&
-    /^[0-9]{17,20}$/.test(threadId)
+    asset !== null &&
+    /^[0-9]{17,20}$/.test(threadId) &&
+    (!bound || threadId !== currentThreadId)
   );
 
   const provisioningAvailable = state.threadManagement?.provisioningAvailable === true;
@@ -750,6 +757,7 @@ function renderThreadManagement() {
     qs("#thread-gateway").textContent = "UNAVAILABLE";
     qs("#thread-total-context").textContent = "NO THREAD BINDINGS AVAILABLE";
     qs("#thread-asset").innerHTML = '<option value="">SELECT ASSET</option>';
+    qs("#thread-current-id").textContent = "UNBOUND";
     qs("#thread-members-body").innerHTML = "";
     qs("#thread-member-count").textContent = "0 ASSETS";
     qs("#thread-provisioning-state").textContent = "SELECT A PACK";
@@ -803,12 +811,12 @@ function renderThreadManagement() {
 
   const priorAssetId = qs("#thread-asset").value;
   const unbound = pack.assets.filter((asset) => asset.bindingState === "unbound");
-  qs("#thread-asset").innerHTML = '<option value="">SELECT UNBOUND ASSET</option>' + unbound
-    .map((asset) => `<option value="${escapeAttribute(asset.id)}">${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)}</option>`)
+  qs("#thread-asset").innerHTML = '<option value="">SELECT ASSET</option>' + pack.assets
+    .map((asset) => `<option value="${escapeAttribute(asset.id)}">${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)} · ${asset.bindingState === "bound" ? "BOUND" : "UNBOUND"}</option>`)
     .join("");
-  qs("#thread-asset").value = unbound.some((asset) => asset.id === priorAssetId)
+  qs("#thread-asset").value = pack.assets.some((asset) => asset.id === priorAssetId)
     ? priorAssetId
-    : unbound[0]?.id ?? "";
+    : unbound[0]?.id ?? pack.assets[0]?.id ?? "";
 
   qs("#thread-members-body").innerHTML = pack.assets.map((asset) => {
     const live = verification?.assets.find((candidate) => candidate.assetId === asset.id) ?? null;
@@ -829,17 +837,29 @@ function renderThreadManagement() {
     <td><span class="workspace-status ${asset.bindingState === "bound" ? "valid" : "pending"}">${asset.bindingState === "bound" ? "BOUND" : "MISSING"}</span></td>
     <td>${escapeHtml(asset.threadId ?? "—")}</td>
     <td><span class="workspace-status ${liveClass}">${escapeHtml(liveLabel)}</span></td>
+    <td><button class="outline-action compact-action" type="button" data-manage-thread-asset="${escapeAttribute(asset.id)}">MANAGE</button></td>
   </tr>`;
   }).join("");
+  qsa("[data-manage-thread-asset]").forEach((button) => {
+    button.addEventListener("click", () => {
+      qs("#thread-asset").value = button.dataset.manageThreadAsset;
+      const selected = selectedThreadAsset();
+      qs("#thread-id").value = selected?.threadId ?? "";
+      resetThreadProvisioning({ keepForum: true });
+      renderThreadManagement();
+      qs("#thread-adoption-heading").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
 
   if (!dashboard.adoptionAvailable) {
     qs("#thread-adoption-state").textContent = "START ADMIN WITH DISCORD_BOT_TOKEN TO ENABLE INSPECTION";
   } else if (!pack.forumConfigured) {
     qs("#thread-adoption-state").textContent = "PACK FORUM IS NOT CONFIGURED";
-  } else if (unbound.length === 0) {
-    qs("#thread-adoption-state").textContent = "PACK ROUTING COMPLETE";
   } else if (!state.threadBusy) {
-    qs("#thread-adoption-state").textContent = "SELECT AN EXISTING THREAD ID";
+    const selected = selectedThreadAsset();
+    qs("#thread-adoption-state").textContent = selected?.bindingState === "bound"
+      ? `${selected.id.toUpperCase()} CURRENTLY ROUTES TO ${selected.threadId}`
+      : "SELECT AN EXISTING THREAD ID TO ADOPT";
   }
   if (!dashboard.provisioningAvailable) {
     qs("#thread-provisioning-state").textContent = "START ADMIN WITH DISCORD_BOT_TOKEN TO ENABLE PROVISIONING";
@@ -925,47 +945,157 @@ async function adoptExistingThread() {
   const pack = selectedThreadPack();
   const asset = selectedThreadAsset();
   const threadId = qs("#thread-id").value.trim();
+  const replacing = asset?.bindingState === "bound";
+  const currentThreadId = replacing ? asset.threadId : null;
   if (
     pack === null ||
     asset === null ||
-    asset.bindingState !== "unbound" ||
     !/^[0-9]{17,20}$/.test(threadId) ||
+    (replacing && threadId === currentThreadId) ||
     state.threadBusy ||
     state.threadManagement?.adoptionAvailable !== true
   ) return;
 
   const confirmed = window.confirm(
-    `Adopt Discord thread ${threadId} for ${asset.id.toUpperCase()} in ${pack.displayName}?\n\n` +
-    "VisionX will inspect the existing post and verify its parent forum. Discord content, tags, history, archive state, and lock state will not be changed. If verification passes, only the local persistent binding is written.",
+    replacing
+      ? `Replace ${asset.id.toUpperCase()} binding ${currentThreadId} with Discord thread ${threadId}?\n\n` +
+        "VisionX will first verify the replacement post belongs to this Pack forum. Only the local persistent Thread ID will change. Neither Discord post will be edited or deleted."
+      : `Adopt Discord thread ${threadId} for ${asset.id.toUpperCase()} in ${pack.displayName}?\n\n` +
+        "VisionX will inspect the existing post and verify its parent forum. Discord content, tags, history, archive state, and lock state will not be changed. If verification passes, only the local persistent binding is written.",
   );
   if (!confirmed) return;
 
   clearMessage();
   state.threadBusy = true;
-  qs("#thread-adoption-state").textContent = "INSPECTING DISCORD PARENT FORUM";
+  qs("#thread-adoption-state").textContent = replacing
+    ? "VERIFYING REPLACEMENT DISCORD THREAD"
+    : "INSPECTING DISCORD PARENT FORUM";
   updateThreadAdoptButton();
   try {
-    const result = await api("/api/v1/thread-management/adopt", {
+    const result = await api(replacing
+      ? "/api/v1/thread-management/binding/replace"
+      : "/api/v1/thread-management/adopt", {
+      method: "POST",
+      body: JSON.stringify(replacing
+        ? {
+            packId: pack.id,
+            assetId: asset.id,
+            currentThreadId,
+            nextThreadId: threadId,
+            confirmation: "replace_thread_binding",
+          }
+        : {
+            packId: pack.id,
+            assetId: asset.id,
+            threadId,
+            confirmation: "adopt_existing_thread",
+          }),
+    });
+    qs("#thread-id").value = threadId;
+    resetThreadProvisioning({ keepForum: true });
+    await loadThreadManagement();
+    qs("#thread-asset").value = asset.id;
+    qs("#thread-id").value = threadId;
+    renderThreadManagement();
+    qs("#thread-adoption-state").textContent = `${asset.id.toUpperCase()} · ${replacing ? "BINDING REPLACED" : result.outcome === "adopted" ? "BOUND" : "ALREADY BOUND"}`;
+    showMessage(
+      result.sessionClosed
+        ? `${asset.id.toUpperCase()} now routes to existing thread ${threadId}. Discord content was not changed.`
+        : `${asset.id.toUpperCase()} now routes to thread ${threadId}, but the Discord session did not close cleanly. Restart the administration service before another Discord operation.`,
+      !result.sessionClosed,
+    );
+  } catch (error) {
+    qs("#thread-adoption-state").textContent = replacing ? "REPLACEMENT NOT APPLIED" : "ADOPTION NOT APPLIED";
+    showMessage(error.message);
+    await loadThreadManagement().catch(() => undefined);
+  } finally {
+    state.threadBusy = false;
+    updateThreadAdoptButton();
+  }
+}
+
+async function inspectCurrentThreadBinding() {
+  const pack = selectedThreadPack();
+  const asset = selectedThreadAsset();
+  if (
+    pack === null ||
+    asset?.bindingState !== "bound" ||
+    state.threadBusy ||
+    state.threadManagement?.adoptionAvailable !== true
+  ) return;
+  const confirmed = window.confirm(
+    `Inspect the current ${asset.id.toUpperCase()} destination ${asset.threadId}?\n\n` +
+    "VisionX will verify that the post still belongs to this Pack forum. This is read-only and changes neither Discord nor the local binding.",
+  );
+  if (!confirmed) return;
+
+  clearMessage();
+  state.threadBusy = true;
+  qs("#thread-adoption-state").textContent = "INSPECTING CURRENT DISCORD DESTINATION";
+  updateThreadAdoptButton();
+  try {
+    const result = await api("/api/v1/thread-management/binding/inspect", {
       method: "POST",
       body: JSON.stringify({
         packId: pack.id,
         assetId: asset.id,
-        threadId,
-        confirmation: "adopt_existing_thread",
+        threadId: asset.threadId,
+        confirmation: "inspect_bound_thread",
       }),
     });
-    qs("#thread-id").value = "";
-    resetThreadProvisioning();
-    await loadThreadManagement();
-    qs("#thread-adoption-state").textContent = `${asset.id.toUpperCase()} · ${result.outcome === "adopted" ? "BOUND" : "ALREADY BOUND"}`;
+    qs("#thread-adoption-state").textContent = `${asset.id.toUpperCase()} · CURRENT BINDING VERIFIED`;
     showMessage(
-      result.sessionClosed
-        ? `${asset.id.toUpperCase()} now routes to existing thread ${threadId}. Discord content was not changed.`
-        : `${asset.id.toUpperCase()} was bound to thread ${threadId}, but the Discord session did not close cleanly. Restart the administration service before another Discord operation.`,
+      `${asset.id.toUpperCase()} routes to “${result.thread.name}” (${result.thread.threadId}). ` +
+      `Archived: ${result.thread.archived ? "yes" : "no"} · Locked: ${result.thread.locked ? "yes" : "no"} · Tags: ${result.thread.appliedTagCount}. ` +
+      "Discord content and the local binding were unchanged.",
       !result.sessionClosed,
     );
   } catch (error) {
-    qs("#thread-adoption-state").textContent = "ADOPTION NOT APPLIED";
+    qs("#thread-adoption-state").textContent = "CURRENT BINDING INSPECTION FAILED";
+    showMessage(error.message);
+    await loadThreadManagement().catch(() => undefined);
+  } finally {
+    state.threadBusy = false;
+    updateThreadAdoptButton();
+  }
+}
+
+async function removeCurrentThreadBinding() {
+  const pack = selectedThreadPack();
+  const asset = selectedThreadAsset();
+  if (pack === null || asset?.bindingState !== "bound" || state.threadBusy) return;
+  const confirmed = window.confirm(
+    `Remove the local ${asset.id.toUpperCase()} binding to thread ${asset.threadId}?\n\n` +
+    "The Discord post, its messages, title, tags, archive state, and lock state will remain exactly as they are. The Asset will become unbound and Pack routing readiness will be incomplete.",
+  );
+  if (!confirmed) return;
+
+  clearMessage();
+  state.threadBusy = true;
+  qs("#thread-adoption-state").textContent = "REMOVING LOCAL PERSISTENT BINDING";
+  updateThreadAdoptButton();
+  try {
+    const removedThreadId = asset.threadId;
+    await api("/api/v1/thread-management/binding", {
+      method: "DELETE",
+      body: JSON.stringify({
+        packId: pack.id,
+        assetId: asset.id,
+        currentThreadId: removedThreadId,
+        confirmation: "remove_thread_binding",
+      }),
+    });
+    await loadThreadManagement();
+    qs("#thread-asset").value = asset.id;
+    qs("#thread-id").value = "";
+    renderThreadManagement();
+    qs("#thread-adoption-state").textContent = `${asset.id.toUpperCase()} · UNBOUND`;
+    showMessage(
+      `${asset.id.toUpperCase()} no longer has a local persistent route. Discord thread ${removedThreadId} was not contacted, edited, or deleted.`,
+      false,
+    );
+  } catch (error) {
+    qs("#thread-adoption-state").textContent = "BINDING REMOVAL NOT APPLIED";
     showMessage(error.message);
     await loadThreadManagement().catch(() => undefined);
   } finally {
@@ -1745,11 +1875,14 @@ qs("#thread-pack").addEventListener("change", () => {
   renderThreadManagement();
 });
 qs("#thread-asset").addEventListener("change", () => {
+  qs("#thread-id").value = selectedThreadAsset()?.threadId ?? "";
   resetThreadProvisioning({ keepForum: true });
-  updateThreadAdoptButton();
+  renderThreadManagement();
 });
 qs("#thread-id").addEventListener("input", updateThreadAdoptButton);
+qs("#thread-inspect-binding").addEventListener("click", () => void inspectCurrentThreadBinding());
 qs("#thread-adopt-button").addEventListener("click", () => void adoptExistingThread());
+qs("#thread-remove-binding").addEventListener("click", () => void removeCurrentThreadBinding());
 qs("#thread-inspect-forum").addEventListener("click", () => void inspectThreadForum());
 qs("#thread-title").addEventListener("input", updateThreadAdoptButton);
 qs("#thread-logo").addEventListener("change", (event) => void stageThreadLogo(event.target.files?.[0] ?? null));

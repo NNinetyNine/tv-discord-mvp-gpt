@@ -99,11 +99,26 @@ deletion fails, the API reports the retained thread ID and blocks silent retry.
 
 ## Deliberate exclusions
 
+The Threads room also supports governed maintenance of an existing persistent
+binding:
+
+1. **Inspect Current** rereads the binding under the thread mutation lock and
+   verifies the live post still belongs to the configured Pack forum. It is
+   read-only.
+2. **Inspect & Replace** verifies a different existing post before atomically
+   replacing the local Thread ID. The previous and replacement Discord posts
+   are not edited or deleted.
+3. **Remove Binding** requires the exact currently loaded Thread ID, changes
+   only `config/asset-threads.json`, and immediately returns the Asset to
+   unbound routing state. It does not require or contact Discord.
+
+Every operation fails closed if the loaded binding has changed, and a Discord
+thread ID cannot be owned by two Pack Assets.
+
 The Threads room has no controls or API route for:
 
 - deleting an existing or previously bound Discord post;
 - editing an existing post's title, tags, messages, archive state, or lock state;
-- changing or removing an existing binding;
 - staging or publishing charts;
 - creating or changing Releases.
 

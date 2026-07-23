@@ -469,6 +469,65 @@ async function routeApi(
       confirmation: body.confirmation,
     }));
   }
+  if (pathname === "/api/v1/thread-management/binding/inspect") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Thread-binding inspection request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Thread-binding inspection body must be an object.");
+    exactFields(body, ["packId", "assetId", "threadId", "confirmation"], "Thread-binding inspection body");
+    if (
+      typeof body.packId !== "string" ||
+      typeof body.assetId !== "string" ||
+      typeof body.threadId !== "string" ||
+      typeof body.confirmation !== "string"
+    ) throw new AdminError("invalid_request", "Thread-binding inspection fields must be strings.");
+    return ok(response, await service.inspectExistingThreadBinding({
+      packId: body.packId,
+      assetId: body.assetId,
+      threadId: body.threadId,
+      confirmation: body.confirmation,
+    }));
+  }
+  if (pathname === "/api/v1/thread-management/binding/replace") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Thread-binding replacement request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Thread-binding replacement body must be an object.");
+    exactFields(body, ["packId", "assetId", "currentThreadId", "nextThreadId", "confirmation"], "Thread-binding replacement body");
+    if (
+      typeof body.packId !== "string" ||
+      typeof body.assetId !== "string" ||
+      typeof body.currentThreadId !== "string" ||
+      typeof body.nextThreadId !== "string" ||
+      typeof body.confirmation !== "string"
+    ) throw new AdminError("invalid_request", "Thread-binding replacement fields must be strings.");
+    return ok(response, await service.replaceExistingThreadBinding({
+      packId: body.packId,
+      assetId: body.assetId,
+      currentThreadId: body.currentThreadId,
+      nextThreadId: body.nextThreadId,
+      confirmation: body.confirmation,
+    }));
+  }
+  if (pathname === "/api/v1/thread-management/binding") {
+    if (method !== "DELETE") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Thread-binding removal request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Thread-binding removal body must be an object.");
+    exactFields(body, ["packId", "assetId", "currentThreadId", "confirmation"], "Thread-binding removal body");
+    if (
+      typeof body.packId !== "string" ||
+      typeof body.assetId !== "string" ||
+      typeof body.currentThreadId !== "string" ||
+      typeof body.confirmation !== "string"
+    ) throw new AdminError("invalid_request", "Thread-binding removal fields must be strings.");
+    return ok(response, await service.removeExistingThreadBinding({
+      packId: body.packId,
+      assetId: body.assetId,
+      currentThreadId: body.currentThreadId,
+      confirmation: body.confirmation,
+    }));
+  }
   if (pathname === "/api/v1/standalone-render/options" && method === "GET") {
     return ok(response, service.standaloneRenderOptions());
   }
