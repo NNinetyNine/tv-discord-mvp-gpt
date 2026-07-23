@@ -4,8 +4,9 @@ The Threads room exposes the persistent route for every Pack Asset, including
 already-bound Assets such as BTC. A row-level **Manage** action selects the
 Asset and opens its current Thread ID in **Binding Management**.
 
-## Inspect Current
+## Verify Current Binding
 
+This control exists to distinguish local configuration from live destination truth.
 VisionX requires the exact current binding, opens a short-lived Discord
 session, and verifies that the thread exists beneath the configured Pack forum.
 The response reports its name, archive state, lock state, and applied tag
@@ -34,4 +35,5 @@ The Asset becomes unbound and Pack routing readiness becomes incomplete.
 - replacement requires live parent-forum verification;
 - inspection and replacement require an explicit Discord bot token;
 - local removal does not require a token;
+- a forum can expose up to 20 available tags, but one post can apply at most five;
 - no operation publishes a chart or creates or changes a Release.

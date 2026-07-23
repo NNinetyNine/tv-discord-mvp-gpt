@@ -319,6 +319,16 @@ function exactSearchParameters(url: URL, allowed: readonly string[], label: stri
   }
 }
 
+function optionalSearchParameters(url: URL, allowed: readonly string[], label: string): void {
+  const permitted = new Set(allowed);
+  const seen = new Set<string>();
+  for (const key of url.searchParams.keys()) {
+    if (!permitted.has(key)) throw new AdminError("invalid_request", `${label} contains an unknown parameter: ${key}.`);
+    if (seen.has(key)) throw new AdminError("invalid_request", `${label} contains duplicate parameter: ${key}.`);
+    seen.add(key);
+  }
+}
+
 function binaryArtifact(
   request: IncomingMessage,
   response: ServerResponse,
@@ -335,6 +345,20 @@ function binaryArtifact(
     "Content-Disposition",
     `${artifact === "publication.png" ? "inline" : "attachment"}; filename="visionx-${artifact}"`,
   );
+  response.setHeader("Content-Length", String(bytes.length));
+  response.end(request.method === "HEAD" ? undefined : bytes);
+}
+
+function inlinePng(
+  request: IncomingMessage,
+  response: ServerResponse,
+  bytes: Buffer,
+  filename: string,
+): void {
+  securityHeaders(response, true);
+  response.statusCode = 200;
+  response.setHeader("Content-Type", "image/png");
+  response.setHeader("Content-Disposition", `inline; filename="${filename.replace(/[^A-Za-z0-9._-]/gu, "-")}"`);
   response.setHeader("Content-Length", String(bytes.length));
   response.end(request.method === "HEAD" ? undefined : bytes);
 }
@@ -411,6 +435,18 @@ async function routeApi(
       packId: forumInspection[1] ?? "",
       confirmation: body.confirmation,
     }));
+  }
+  const canonicalProvisioningLogo = /^\/api\/v1\/thread-management\/packs\/([^/]+)\/assets\/([^/]+)\/provisioning-logo\/canonical$/u.exec(pathname);
+  if (canonicalProvisioningLogo !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Canonical provisioning logo request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Canonical provisioning logo body must be an object.");
+    exactFields(body, [], "Canonical provisioning logo body");
+    return ok(response, await service.stageThreadProvisioningCanonicalLogo({
+      packId: canonicalProvisioningLogo[1] ?? "",
+      assetId: canonicalProvisioningLogo[2] ?? "",
+    }), 201);
   }
   const provisioningLogo = /^\/api\/v1\/thread-management\/packs\/([^/]+)\/assets\/([^/]+)\/provisioning-logo$/u.exec(pathname);
   if (provisioningLogo !== null) {
@@ -665,6 +701,7 @@ async function routeApi(
   }
   if (pathname === "/api/v1/refresh" && method === "POST") return ok(response, await service.refresh());
   if (pathname === "/api/v1/assets" && method === "GET") {
+    optionalSearchParameters(url, ["q", "offset", "limit"], "Asset search request");
     return ok(response, service.searchAssets({
       query: url.searchParams.get("q") ?? "",
       offset: parseInteger(url.searchParams.get("offset"), 0),
@@ -673,6 +710,75 @@ async function routeApi(
   }
   const assetMatch = /^\/api\/v1\/assets\/([^/]+)$/u.exec(pathname);
   if (assetMatch !== null && method === "GET") return ok(response, service.getAsset(assetMatch[1] ?? ""));
+  if (pathname === "/api/v1/registry/options" && method === "GET") {
+    exactSearchParameters(url, [], "Registry options request");
+    return ok(response, service.registryOptions());
+  }
+  if (pathname === "/api/v1/registry/asset-changes/preview") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Registry change preview body must be an object.");
+    exactFields(body, ["change"], "Registry change preview body");
+    return ok(response, await service.prepareRegistryAssetChange(body.change), 201);
+  }
+  const registryChangeApply = /^\/api\/v1\/registry\/asset-changes\/([^/]+)\/apply$/u.exec(pathname);
+  if (registryChangeApply !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Registry change application body must be an object.");
+    exactFields(body, ["confirmation"], "Registry change application body");
+    return ok(response, await service.applyPreparedRegistryAssetChange(registryChangeApply[1] ?? "", body.confirmation));
+  }
+  const registryLogoStatus = /^\/api\/v1\/assets\/([^/]+)\/logo\/status$/u.exec(pathname);
+  if (registryLogoStatus !== null) {
+    if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Registry logo status request");
+    return ok(response, await service.inspectRegistryAssetLogo(registryLogoStatus[1] ?? ""));
+  }
+  const registryLogo = /^\/api\/v1\/assets\/([^/]+)\/logo$/u.exec(pathname);
+  if (registryLogo !== null) {
+    const assetId = registryLogo[1] ?? "";
+    if (method === "GET" || method === "HEAD") {
+      optionalSearchParameters(url, ["v"], "Registry logo request");
+      return inlinePng(request, response, await service.readRegistryAssetLogo(assetId), `${assetId}.png`);
+    }
+    if (method === "PUT") {
+      exactSearchParameters(url, ["expectedSha256", "confirmation"], "Registry logo upload request");
+      const expected = url.searchParams.get("expectedSha256") ?? "";
+      const bytes = await readAssetLogoBody(request);
+      return ok(response, await service.storeRegistryAssetLogo(
+        assetId,
+        bytes,
+        expected === "" ? null : expected,
+        url.searchParams.get("confirmation"),
+      ), 201);
+    }
+    if (method === "DELETE") {
+      exactSearchParameters(url, [], "Registry logo removal request");
+      const body = await readJsonBody(request);
+      if (!isRecord(body)) throw new AdminError("invalid_request", "Registry logo removal body must be an object.");
+      exactFields(body, ["expectedSha256", "confirmation"], "Registry logo removal body");
+      if (typeof body.expectedSha256 !== "string") throw new AdminError("invalid_request", "expectedSha256 must be a string.");
+      return ok(response, await service.removeRegistryAssetLogo(assetId, body.expectedSha256, body.confirmation));
+    }
+    throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+  }
+  const retirementPreview = /^\/api\/v1\/assets\/([^/]+)\/retirement-preview$/u.exec(pathname);
+  if (retirementPreview !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Retirement preview body must be an object.");
+    exactFields(body, [], "Retirement preview body");
+    return ok(response, await service.previewRegistryAssetRetirement(retirementPreview[1] ?? ""));
+  }
+  const retirementApply = /^\/api\/v1\/assets\/([^/]+)\/retire$/u.exec(pathname);
+  if (retirementApply !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Retirement body must be an object.");
+    exactFields(body, ["previewId", "confirmation"], "Retirement body");
+    return ok(response, await service.retireRegistryAsset(retirementApply[1] ?? "", body.previewId, body.confirmation));
+  }
   const packAssetLogoRoute =
     /^\/api\/v1\/packs\/create\/([^/]+)\/asset-logos\/([^/]+)$/u.exec(
       pathname,
@@ -702,7 +808,7 @@ async function routeApi(
     const body = await readJsonBody(request);
     if (!isRecord(body)) throw new AdminError("invalid_request", "Create Pack preview body must be an object.");
     exactFields(body, ["input"], "Create Pack preview body");
-    return ok(response, await service.previewPackCreation(body.input));
+    return ok(response, await service.previewRegistryPackCreation(body.input));
   }
   if (pathname === "/api/v1/packs/create") {
     if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);

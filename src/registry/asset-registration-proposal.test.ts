@@ -112,7 +112,7 @@ describe("Asset registration proposals schemaVersion 2", () => {
     expect(proposeAssetRegistration(ADD_V2, ASSETS, PACKS, { ...CHANNELS, stocks: "bad" })).toMatchObject({ ok: false, reason: "unresolved_channel" });
   });
 
-  it("builds update_identity only with exact current channel and prohibits migration", () => {
+  it("builds update_identity from exact current state and permits an explicit configured channel change", () => {
     const input = {
       ...ADD_V2,
       operation: "update_identity",
@@ -121,7 +121,10 @@ describe("Asset registration proposals schemaVersion 2", () => {
     };
     expect(proposeAssetRegistration(input, ASSETS, PACKS, CHANNELS)).toMatchObject({ ok: true });
     expect(proposeAssetRegistration({ ...input, expectedCurrent: { ...input.expectedCurrent, channel: "crypto" } }, ASSETS, PACKS, CHANNELS)).toMatchObject({ ok: false, reason: "stale_asset_state" });
-    expect(proposeAssetRegistration({ ...input, asset: { ...input.asset, channel: "crypto" } }, ASSETS, PACKS, CHANNELS)).toMatchObject({ ok: false, reason: "channel_change_not_authorized" });
+    expect(proposeAssetRegistration({ ...input, asset: { ...input.asset, channel: "crypto" } }, ASSETS, PACKS, CHANNELS)).toMatchObject({
+      ok: true,
+      proposal: { asset: { id: "aem", channel: "crypto" } },
+    });
   });
 
   it("requires expectedCurrent.channel for v2 update_identity", () => {

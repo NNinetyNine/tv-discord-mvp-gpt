@@ -22,7 +22,10 @@ import sharp from "sharp";
 import {
   AssetLogoFileError,
   canonicalAssetLogoPath,
+  deleteCanonicalAssetLogo,
+  inspectCanonicalAssetLogo,
   readCanonicalAssetLogo,
+  writeCanonicalAssetLogo,
 } from "./asset-logo-file.ts";
 
 const roots: string[] = [];
@@ -238,5 +241,51 @@ describe("canonical Asset-logo file reads", () => {
     expect(error.code).toBe(
       "logo_not_found",
     );
+  });
+});
+
+describe("canonical Asset-logo governed writes", () => {
+  it("allows a repository path reached through a platform path alias while rejecting symlinked custody directories", async () => {
+    const container = await mkdtemp(join(tmpdir(), "visionx-logo-alias-"));
+    roots.push(container);
+    const actualRoot = join(container, "actual");
+    await mkdir(join(actualRoot, "assets", "asset-logos"), { recursive: true });
+    const alias = join(container, "alias");
+    await symlink(container, alias, "dir");
+
+    const created = await writeCanonicalAssetLogo(join(alias, "actual"), "btc", await squarePng(), null);
+    expect(created.evidence.sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect((await inspectCanonicalAssetLogo(actualRoot, "btc")).evidence?.sha256).toBe(created.evidence.sha256);
+  });
+
+  it("creates, replaces, inspects, and removes one logo with exact-state confirmation", async () => {
+    const root = await fixture();
+    const first = await squarePng(96);
+    const second = await squarePng(128);
+
+    const created = await writeCanonicalAssetLogo(root, "btc", first, null);
+    expect(created.evidence).toMatchObject({ width: 96, height: 96 });
+    expect(await inspectCanonicalAssetLogo(root, "btc")).toMatchObject({
+      exists: true,
+      evidence: { sha256: created.evidence.sha256 },
+    });
+
+    const replaced = await writeCanonicalAssetLogo(root, "btc", second, created.evidence.sha256);
+    expect(replaced.evidence).toMatchObject({ width: 128, height: 128 });
+    await expect(writeCanonicalAssetLogo(root, "btc", first, created.evidence.sha256)).rejects.toEqual(
+      expect.objectContaining({ code: "logo_state_conflict" }),
+    );
+
+    await deleteCanonicalAssetLogo(root, "btc", replaced.evidence.sha256);
+    expect(await inspectCanonicalAssetLogo(root, "btc")).toMatchObject({ exists: false, evidence: null });
+  });
+
+  it("rejects removal when the expected logo identity is stale", async () => {
+    const root = await fixture();
+    const created = await writeCanonicalAssetLogo(root, "btc", await squarePng(), null);
+    await expect(deleteCanonicalAssetLogo(root, "btc", "0".repeat(64))).rejects.toEqual(
+      expect.objectContaining({ code: "logo_state_conflict" }),
+    );
+    expect((await readCanonicalAssetLogo(root, "btc")).evidence.sha256).toBe(created.evidence.sha256);
   });
 });

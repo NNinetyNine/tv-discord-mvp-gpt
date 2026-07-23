@@ -81,16 +81,18 @@ The operator workflow is:
 
 1. select an unbound Pack Asset;
 2. explicitly inspect the Pack's current forum name and available tags;
-3. enter the exact post title and select at most five inspected tags;
-4. upload a single-frame PNG starter logo; transparent and rectangular PNGs
-   are supported;
-5. review the logo SHA-256 and confirm the complete request;
+3. verify and stage the Asset's canonical Registry logo into the local
+   provisioning workspace;
+4. enter the exact post title and select at most five inspected tags;
+5. review the canonical logo SHA-256 and confirm the complete request;
 6. create one forum post and atomically write its persistent binding;
 7. close the short-lived Discord session.
 
-The logo is stored only in the administration workspace, not canonical
-repository custody. The confirmed request repeats its SHA-256, so replacement
-between review and execution fails before Discord contact.
+The canonical logo remains owned by the Registry. Provisioning copies its exact
+bytes into the administration workspace only after Asset and Pack membership
+validation. The confirmed request repeats its SHA-256, so replacement between
+review and execution fails before Discord contact. Operators replace logos in
+Registry rather than uploading a separate thread-only image.
 
 All Registry, Pack, channel, and binding checks run again under the thread
 mutation lock. If Discord creates the post but durable binding fails, VisionX
@@ -102,7 +104,7 @@ deletion fails, the API reports the retained thread ID and blocks silent retry.
 The Threads room also supports governed maintenance of an existing persistent
 binding:
 
-1. **Inspect Current** rereads the binding under the thread mutation lock and
+1. **Verify Current Binding** rereads the binding under the thread mutation lock and
    verifies the live post still belongs to the configured Pack forum. It is
    read-only.
 2. **Inspect & Replace** verifies a different existing post before atomically

@@ -190,38 +190,36 @@ dissolution belongs in Constitution §9–§10, not here.*
 
 ## 9. Task-oriented definition editing
 
-The administration front door now expresses one operator use case: **Create Pack**.
-It resolves existing Registry Assets, reconciles missing Assets inline, previews the
-complete business change, then applies the future Registry and Packs sources as one
-transaction. Legacy Asset-registration and Pack-promotion custody APIs remain readable
-and testable during transition, but their proposal, planning, review, authorization,
-and confirmation controls are no longer primary product navigation. Deterministic
-hashes, diffs, and receipts remain internal evidence exposed only through read-only
-technical details.
+The administration front door separates two operator-owned definitions. **Registry**
+creates, edits, retires, and supplies canonical Asset identity and logo custody.
+**Create Pack** defines Pack identity and ordered membership by selecting only current
+Registry Asset IDs. Legacy registration and Pack-promotion custody components remain
+the deterministic application machinery, but their individual proposal, planning,
+review, authorization, and confirmation screens are no longer primary navigation.
+Hashes, diffs, and receipts remain reviewable technical evidence.
 
 ### Canonical Asset currency
 
 `definitions/registry.json` is the authority for Asset-owned chart currency. The loaded
 `Asset` model accepts optional `currency` so historical entries remain compatible,
-while every missing Asset created by the Pack builder requires strict uppercase
-alphanumeric currency. The Registry fingerprint includes currency when present and
+while every Asset created through Registry requires strict canonical currency. The
+Registry fingerprint includes currency when present and
 omits the property when absent, preserving the historical baseline representation.
 The first-party chart-metadata constructor derives market and symbol from the qualified
 canonical TradingView token and combines them with canonical display and currency;
 render callers cannot override those Asset-owned facts. No second metadata store is
 authoritative.
 
-### Combined Registry and Packs transaction
+### Registry and Pack transactions
 
-Preview constructs and reloads both complete future definitions without mutation. On
-Create, the application re-reads Registry, Packs, and channels, verifies exact preview-
-bound state, prepares both future files and both rollback backups, then replaces
-Registry and Packs under one business transaction. A failure after either replacement
-or during receipt finalization restores and verifies both immediately preceding source
-files. A successful no-overwrite receipt, advanced source state, occupied Asset IDs,
-and occupied Pack ID jointly reject replay. Channel configuration is verified but never
-written. Rendering, publication, release, Discord, and external network paths are not
-reachable from this use case.
+Registry create/edit review generates the existing registration proposal, plan, patch,
+review, and authorization chain without mutation; application rechecks exact source
+state before replacing Registry source. Retirement uses an exact preview over Registry,
+Packs, and thread bindings and refuses to orphan either kind of reference. Pack creation
+continues to use its preview-bound transaction, but the administration UI supplies only
+current Registry Asset IDs, so Pack creation no longer owns Asset identity entry.
+Channel configuration is verified but not written by either use case. Rendering,
+publication, release, and Discord paths are unreachable from these definition writes.
 
 ### Administration presentation
 
@@ -230,4 +228,9 @@ near-black canvas with a restrained root-level gold atmosphere, translucent char
 windows, compact tracked headings, dense controls, one filled-gold Create action, and
 semantic green/red feedback. Operator input is preserved in confined workspace state
 and browser local storage after validation, stale-state, or safely restored transaction
-failures. The Registry remains a read-only inspection view.
+failures. Registry search and exact-ID inspection lead to a governed sliding editor,
+canonical logo custody, retirement preview, or routing into Pack creation, local
+rendering, and thread management. The most prominent columns are display name,
+TradingView identity, currency, and logical channel; the immutable ID remains visible
+as the cross-system reference used by Packs, revisions, Archive files, logos, and
+thread bindings.

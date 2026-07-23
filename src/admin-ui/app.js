@@ -22,6 +22,23 @@ const state = {
   threadBusy: false,
   threadForumInspection: null,
   threadLogo: null,
+  registryQuery: "",
+  registryOffset: 0,
+  registryLimit: 25,
+  registryTotal: 0,
+  registryAssets: [],
+  registrySelectedAsset: null,
+  registrySearchGeneration: 0,
+  registrySelectionGeneration: 0,
+  registrySearchTimer: null,
+  registryBusy: false,
+  registryLogo: null,
+  registryEditorMode: "add",
+  registryChangePreview: null,
+  registryChangeBusy: false,
+  packAssetSearchGeneration: 0,
+  packAssetSearchTimer: null,
+  rendererAssetSearchGeneration: 0,
 };
 
 const qs = (selector) => document.querySelector(selector);
@@ -63,16 +80,7 @@ function packFormValue() {
 function persistInput() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     pack: packFormValue(),
-    members: state.members.map((member) => ({
-      id: member.id,
-      display: member.display,
-      tradingView: member.tradingView,
-      currency: member.currency,
-      aliases: member.aliases,
-      logoStaged:
-        member.logoState === "uploaded",
-      logoFileName: member.logoFileName,
-    })),
+    members: state.members.map((member) => ({ id: member.id })),
   }));
 }
 
@@ -84,50 +92,24 @@ function restoreInput() {
     qs("#pack-display").value = typeof stored.pack?.display === "string" ? stored.pack.display : "";
     qs("#pack-channel").value = typeof stored.pack?.channel === "string" ? stored.pack.channel : "";
     if (Array.isArray(stored.members)) {
-      state.members = stored.members.map((member) => ({
-        id: typeof member.id === "string" ? member.id : "",
-        display: typeof member.display === "string" ? member.display : "",
-        tradingView: typeof member.tradingView === "string" ? member.tradingView : "",
-        currency: typeof member.currency === "string" ? member.currency : "",
-        aliases: typeof member.aliases === "string" ? member.aliases : "",
-        lookupState: "pending",
-        existing: null,
-        error: "",
-        lookupGeneration: 0,
-        logoState:
-          member.logoStaged === true
-            ? "uploaded"
-            : "required",
-        logoFileName:
-          typeof member.logoFileName === "string"
-            ? member.logoFileName
-            : "",
-        logoEvidence: null,
-        logoError: "",
-        logoUploadGeneration: 0,
-      }));
+      state.members = stored.members
+        .filter((member) => typeof member?.id === "string" && member.id.length > 0)
+        .map((member) => ({
+          id: member.id,
+          lookupState: "pending",
+          existing: null,
+          error: "",
+          lookupGeneration: 0,
+        }));
     }
   } catch { localStorage.removeItem(STORAGE_KEY); }
-}
-
-function parseAliases(value) {
-  if (value.trim() === "") return undefined;
-  return value.split("\n").filter((entry) => entry.length > 0);
 }
 
 function currentInput() {
   return {
     schemaVersion: 1,
     pack: packFormValue(),
-    members: state.members.map((member) => member.existing
-      ? { id: member.id }
-      : {
-          id: member.id,
-          display: member.display,
-          tradingView: member.tradingView,
-          currency: member.currency,
-          ...(parseAliases(member.aliases) === undefined ? {} : { tradingViewAliases: parseAliases(member.aliases) }),
-        }),
+    members: state.members.map((member) => ({ id: member.id })),
   };
 }
 
@@ -137,167 +119,9 @@ function derivedToken(token) {
 }
 
 function memberSummary(member) {
-  const source = member.existing ?? member;
-  const token = source.tradingView || "TRADINGVIEW REQUIRED";
-  const currency = source.currency || "CURRENCY REQUIRED";
-  const id = (member.id || "NEW ASSET").toUpperCase();
-  return `${id} · ${token} · ${currency}`;
-}
-
-function resetMemberLogo(member) {
-  member.logoState = "required";
-  member.logoFileName = "";
-  member.logoEvidence = null;
-  member.logoError = "";
-  member.logoUploadGeneration =
-    (member.logoUploadGeneration ?? 0) + 1;
-}
-
-function resetMissingAssetLogos() {
-  for (const member of state.members) {
-    if (!member.existing) resetMemberLogo(member);
-  }
-}
-
-function memberLogoStatus(member) {
-  if (member.logoState === "uploading") {
-    return "VALIDATING AND STAGING PNG";
-  }
-  if (member.logoState === "uploaded") {
-    const dimensions = member.logoEvidence
-      ? ` · ${member.logoEvidence.width}×${member.logoEvidence.height}`
-      : "";
-    return `STAGED · ${member.logoFileName || "PNG"}${dimensions}`;
-  }
-  if (member.logoState === "error") {
-    return member.logoError || "LOGO UPLOAD FAILED";
-  }
-  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(
-    qs("#pack-id").value,
-  )) {
-    return "ENTER A VALID PACK ID BEFORE SELECTING A LOGO";
-  }
-  if (member.lookupState !== "missing") {
-    return "CONFIRMING ASSET ID";
-  }
-  return "SELECT REQUIRED PNG";
-}
-
-async function uploadMemberLogo(index, file) {
-  const member = state.members[index];
-  if (!member || !file) return;
-
-  const packId = qs("#pack-id").value;
-  if (
-    !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(packId) ||
-    !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(member.id)
-  ) {
-    member.logoState = "error";
-    member.logoError =
-      "Enter valid Pack and Asset IDs before selecting a logo.";
-    renderMembers();
-    return;
-  }
-
-  if (
-    file.type &&
-    file.type.toLowerCase() !== "image/png"
-  ) {
-    member.logoState = "error";
-    member.logoError =
-      "Asset logos must be PNG files.";
-    renderMembers();
-    return;
-  }
-
-  const generation =
-    (member.logoUploadGeneration ?? 0) + 1;
-  member.logoUploadGeneration = generation;
-  member.logoState = "uploading";
-  member.logoFileName = file.name;
-  member.logoEvidence = null;
-  member.logoError = "";
-
-  persistInput();
-  renderMembers();
-  setPreviewUnavailable(
-    `Staging the required logo for ${member.id.toUpperCase()}.`,
-  );
-
-  try {
-    const staged = await api(
-      `/api/v1/packs/create/${encodeURIComponent(packId)}/asset-logos/${encodeURIComponent(member.id)}`,
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "image/png",
-        },
-        body: file,
-      },
-    );
-
-    if (
-      !state.members.includes(member) ||
-      member.logoUploadGeneration !== generation ||
-      member.id !== staged.assetId
-    ) {
-      return;
-    }
-
-    member.logoState = "uploaded";
-    member.logoFileName = file.name;
-    member.logoEvidence = staged.evidence;
-    member.logoError = "";
-  } catch (error) {
-    if (
-      !state.members.includes(member) ||
-      member.logoUploadGeneration !== generation
-    ) {
-      return;
-    }
-
-    member.logoState = "error";
-    member.logoEvidence = null;
-    member.logoError = error.message;
-  }
-
-  persistInput();
-  renderMembers();
-  schedulePreview();
-}
-
-function updateMember(index, field, value) {
-  const member = state.members[index];
-  if (!member) return;
-  member[field] = value;
-  member.error = "";
-  if (field === "id") {
-    member.lookupState = "pending";
-    member.existing = null;
-    resetMemberLogo(member);
-    void resolveMember(index);
-  }
-  persistInput();
-  renderMembers();
-  schedulePreview();
-}
-
-function updateMemberDraft(index, field, value) {
-  const member = state.members[index];
-  if (!member) return;
-  member[field] = value;
-  member.error = "";
-  persistInput();
-  clearTimeout(state.previewTimer);
-  setPreviewUnavailable();
-  qs(`[data-member-index="${index}"] .field-error`)?.remove();
-}
-
-function commitMemberDraft() {
-  setTimeout(() => {
-    renderMembers();
-    schedulePreview();
-  }, 0);
+  const asset = member.existing;
+  if (asset === null) return `${member.id.toUpperCase()} · VERIFYING REGISTRY`;
+  return `${asset.displayName} · ${asset.tradingViewSymbol} · ${asset.currency ?? "CURRENCY MISSING"}`;
 }
 
 async function resolveMember(index) {
@@ -307,57 +131,39 @@ async function resolveMember(index) {
   member.lookupGeneration = generation;
   const id = member.id;
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)) {
-    member.lookupState = "missing";
+    member.lookupState = "error";
     member.existing = null;
+    member.error = "Select a current Registry Asset.";
     renderMembers();
     schedulePreview();
     return;
   }
   member.lookupState = "loading";
+  member.error = "";
   renderMembers();
   try {
     const asset = await api(`/api/v1/assets/${encodeURIComponent(id)}`);
     if (member.lookupGeneration !== generation || state.members[index] !== member || member.id !== id) return;
     member.lookupState = "existing";
     member.existing = asset;
-    member.error = asset.currency ? "" : "This registered Asset has no canonical currency. Complete its Asset metadata before creating the Pack.";
-    member.logoState = "not-required";
-    member.logoFileName = "";
-    member.logoEvidence = null;
-    member.logoError = "";
-    member.logoUploadGeneration =
-      (member.logoUploadGeneration ?? 0) + 1;
+    member.error = asset.currency ? "" : "This Registry Asset has no canonical currency and cannot be used for rendering.";
   } catch (error) {
     if (member.lookupGeneration !== generation || state.members[index] !== member || member.id !== id) return;
-    if (error.code === "asset_not_found") {
-      member.lookupState = "missing";
-      member.existing = null;
-    } else {
-      member.lookupState = "error";
-      member.error = error.message;
-    }
+    member.lookupState = "error";
+    member.existing = null;
+    member.error = error.code === "asset_not_found" ? "This Asset is no longer in the Registry." : error.message;
   }
   renderMembers();
   schedulePreview();
 }
 
 function addMember(initial = {}) {
-  state.members.push({
-    id: initial.id ?? "",
-    display: initial.display ?? "",
-    tradingView: initial.tradingView ?? "",
-    currency: initial.currency ?? "",
-    aliases: initial.aliases ?? "",
-    lookupState: "pending",
-    existing: null,
-    error: "",
-    lookupGeneration: 0,
-    logoState: "required",
-    logoFileName: "",
-    logoEvidence: null,
-    logoError: "",
-    logoUploadGeneration: 0,
-  });
+  const id = initial.id ?? "";
+  if (!id || state.members.some((member) => member.id === id)) {
+    if (id) showMessage(`${id.toUpperCase()} is already in this Pack draft.`);
+    return;
+  }
+  state.members.push({ id, lookupState: "pending", existing: null, error: "", lookupGeneration: 0 });
   persistInput();
   renderMembers();
   void resolveMember(state.members.length - 1);
@@ -372,7 +178,6 @@ function moveMember(index, delta) {
   persistInput();
   renderMembers();
   schedulePreview();
-  requestAnimationFrame(() => qs(`[data-member-index="${target}"] .member-id`)?.focus());
 }
 
 function removeMember(index) {
@@ -384,111 +189,63 @@ function removeMember(index) {
 
 function renderMembers() {
   const list = qs("#member-list");
-  const activeElement = document.activeElement;
-  const activeRow = activeElement?.closest?.("[data-member-index]");
-  const activeMemberIndex = activeRow?.dataset.memberIndex ?? null;
-  const activeFieldClass = activeElement instanceof HTMLInputElement
-    ? [...activeElement.classList].find((className) => className.startsWith("member-")) ?? null
-    : null;
-  const activeSelection = activeElement instanceof HTMLInputElement
-    ? { start: activeElement.selectionStart, end: activeElement.selectionEnd }
-    : null;
-
   list.textContent = "";
   qs("#empty-members").hidden = state.members.length > 0;
   qs("#member-count").textContent = `${state.members.length} MEMBER${state.members.length === 1 ? "" : "S"}`;
-
   state.members.forEach((member, index) => {
     const li = document.createElement("li");
-    li.className = "member-row";
+    li.className = "member-row registry-member-row";
     li.dataset.memberIndex = String(index);
-    const source = member.existing ?? member;
-    const derived = derivedToken(source.tradingView ?? "");
-    const status = member.lookupState === "existing" ? "REGISTERED" : member.lookupState === "loading" ? "CHECKING" : "MISSING ASSET";
+    const asset = member.existing;
+    const status = member.lookupState === "existing" && !member.error ? "REGISTERED" : member.lookupState === "loading" ? "VERIFYING" : "ACTION REQUIRED";
     const statusClass = member.lookupState === "existing" && !member.error ? "valid" : "missing";
-    const logoDisabled =
-      member.lookupState !== "missing" ||
-      !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(
-        qs("#pack-id").value,
-      ) ||
-      !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(
-        member.id,
-      );
-    const logoStatusClass =
-      member.logoState === "uploaded"
-        ? "valid"
-        : member.logoState === "error"
-          ? "error"
-          : "";
     li.innerHTML = `
       <div class="member-summary">
         <span class="member-index">${String(index + 1).padStart(2, "0")}</span>
         <div>
           <strong class="member-primary">${escapeHtml(memberSummary(member))}<span class="member-status ${statusClass}">${status}</span></strong>
-          <span class="member-secondary">${escapeHtml(source.display || "Complete the missing Asset definition below")}</span>
+          <span class="member-secondary">${escapeHtml(asset ? `ID ${asset.id} · CHANNEL ${asset.logicalChannel.toUpperCase()}` : member.error || "Rechecking exact Registry ID")}</span>
         </div>
-        <div class="member-actions" aria-label="Reorder and remove ${escapeHtml(member.id || `member ${index + 1}`)}">
+        <div class="member-actions" aria-label="Reorder and remove ${escapeHtml(member.id)}">
           <button type="button" data-action="up" aria-label="Move up" ${index === 0 ? "disabled" : ""}>↑</button>
           <button type="button" data-action="down" aria-label="Move down" ${index === state.members.length - 1 ? "disabled" : ""}>↓</button>
           <button type="button" data-action="remove" aria-label="Remove">×</button>
         </div>
       </div>
-      <div class="member-editor">
-        <label><span>ASSET ID</span><input class="member-id" value="${escapeAttribute(member.id)}" autocomplete="off" maxlength="64"></label>
-        ${member.existing ? `
-          <div class="derived-channel wide"><span>CANONICAL ASSET</span><strong>${escapeHtml(member.existing.display)} · ${escapeHtml(member.existing.tradingView)} · ${escapeHtml(member.existing.currency ?? "CURRENCY MISSING")}</strong></div>
-          <div class="derived-facts"><span>MARKET ${escapeHtml(derived.market)}</span><span>SYMBOL ${escapeHtml(derived.symbol)}</span><span>ASSET CHANNEL ${escapeHtml(member.existing.logicalChannel ?? member.existing.channel ?? "—").toUpperCase()}</span></div>
-        ` : `
-          <label><span>DISPLAY NAME</span><input class="member-display" value="${escapeAttribute(member.display)}" maxlength="96"></label>
-          <label><span>TRADINGVIEW TOKEN</span><input class="member-tradingview" value="${escapeAttribute(member.tradingView)}" maxlength="64" placeholder="TVC:DXY"></label>
-          <label><span>CURRENCY</span><input class="member-currency" value="${escapeAttribute(member.currency)}" maxlength="8" placeholder="USD"></label>
-          <label><span>ALIASES · OPTIONAL · ONE PER LINE</span><input class="member-aliases" value="${escapeAttribute(member.aliases)}" maxlength="512"></label>
-          <label class="member-logo">
-            <span>ASSET LOGO · PNG · REQUIRED</span>
-            <input
-              class="member-logo-input"
-              type="file"
-              accept="image/png"
-              ${logoDisabled ? "disabled" : ""}
-            >
-            <small class="asset-logo-status ${logoStatusClass}">${escapeHtml(memberLogoStatus(member))}</small>
-          </label>
-          <div class="derived-facts"><span>MARKET ${escapeHtml(derived.market)}</span><span>SYMBOL ${escapeHtml(derived.symbol)}</span><span>ASSET CHANNEL ${escapeHtml(qs("#pack-channel").value || "—").toUpperCase()}</span></div>
-        `}
-        ${member.error ? `<p class="field-error" role="alert">${escapeHtml(member.error)}</p>` : ""}
-      </div>`;
-    li.querySelector(".member-id").addEventListener("input", (event) => updateMember(index, "id", event.target.value));
-    const bindDraftField = (selector, field) => {
-      const input = li.querySelector(selector);
-      input?.addEventListener("input", (event) => updateMemberDraft(index, field, event.target.value));
-      input?.addEventListener("blur", commitMemberDraft);
-    };
-    bindDraftField(".member-display", "display");
-    bindDraftField(".member-tradingview", "tradingView");
-    bindDraftField(".member-currency", "currency");
-    bindDraftField(".member-aliases", "aliases");
-    li.querySelector(".member-logo-input")
-      ?.addEventListener("change", (event) => {
-        const file = event.target.files?.[0];
-        if (file) void uploadMemberLogo(index, file);
-      });
+      ${member.error ? `<p class="field-error" role="alert">${escapeHtml(member.error)}</p>` : ""}`;
     li.querySelector('[data-action="up"]').addEventListener("click", () => moveMember(index, -1));
     li.querySelector('[data-action="down"]').addEventListener("click", () => moveMember(index, 1));
     li.querySelector('[data-action="remove"]').addEventListener("click", () => removeMember(index));
     list.append(li);
   });
+}
 
-  if (activeMemberIndex !== null && activeFieldClass !== null) {
-    const restored = list.querySelector(
-      `[data-member-index="${activeMemberIndex}"] .${activeFieldClass}`,
-    );
-    if (restored instanceof HTMLInputElement) {
-      restored.focus();
-      if (activeSelection?.start !== null && activeSelection?.end !== null) {
-        restored.setSelectionRange(activeSelection.start, activeSelection.end);
-      }
-    }
+async function loadPackAssetSearch(query) {
+  const generation = ++state.packAssetSearchGeneration;
+  const panel = qs("#pack-asset-results");
+  if (query.trim().length === 0) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
   }
+  const result = await api(`/api/v1/assets?q=${encodeURIComponent(query)}&offset=0&limit=12`);
+  if (generation !== state.packAssetSearchGeneration) return;
+  const available = result.assets.filter((asset) => !state.members.some((member) => member.id === asset.id));
+  panel.hidden = false;
+  panel.innerHTML = available.length === 0
+    ? '<p class="asset-search-empty">NO AVAILABLE REGISTRY ASSETS MATCH.</p>'
+    : available.map((asset) => `<button type="button" data-add-pack-asset="${escapeAttribute(asset.id)}"><strong>${escapeHtml(asset.displayName)}</strong><span>${escapeHtml(asset.tradingViewSymbol)} · ${escapeHtml(asset.currency ?? "—")} · ${escapeHtml(asset.logicalChannel.toUpperCase())}</span></button>`).join("");
+  qsa("[data-add-pack-asset]").forEach((button) => button.addEventListener("click", () => {
+    addMember({ id: button.dataset.addPackAsset });
+    qs("#pack-asset-search").value = "";
+    panel.hidden = true;
+  }));
+}
+
+function schedulePackAssetSearch(query) {
+  clearTimeout(state.packAssetSearchTimer);
+  state.packAssetSearchGeneration += 1;
+  state.packAssetSearchTimer = setTimeout(() => void loadPackAssetSearch(query).catch((error) => showMessage(error.message)), 160);
 }
 
 function escapeHtml(value) {
@@ -513,16 +270,8 @@ function schedulePreview() {
 function inputReady() {
   const pack = packFormValue();
   if (!pack.id || !pack.display || !pack.channel || state.members.length === 0) return false;
-  return state.members.every((member) => {
-    if (!member.id || member.lookupState === "loading" || member.lookupState === "pending" || member.error) return false;
-    if (member.existing) return true;
-    return Boolean(
-      member.display &&
-      member.tradingView &&
-      member.currency &&
-      member.logoState === "uploaded"
-    );
-  });
+  return state.members.every((member) =>
+    Boolean(member.id && member.lookupState === "existing" && member.existing && !member.error));
 }
 
 async function refreshPreview() {
@@ -534,19 +283,15 @@ async function refreshPreview() {
     const preview = await api("/api/v1/packs/create/preview", { method: "POST", body: JSON.stringify({ input: currentInput() }) });
     state.preview = preview;
     qs("#preview-state").textContent = "CURRENT PREVIEW";
-    const missing = preview.members.filter((member) => !member.existing);
-    const existing = preview.members.filter((member) => member.existing);
     qs("#preview-content").innerHTML = `
       <h3>CREATE ${escapeHtml(preview.pack.display.toUpperCase())}</h3>
-      ${missing.length ? `<p>Add ${missing.length} Asset${missing.length === 1 ? "" : "s"}:</p><ul class="preview-assets">${missing.map((asset) => `<li>${escapeHtml(asset.symbol)} · ${escapeHtml(asset.tradingView)} · ${escapeHtml(asset.currency)}</li>`).join("")}</ul>` : ""}
-      ${existing.length ? `<p>Reuse ${existing.length} registered Asset${existing.length === 1 ? "" : "s"}.</p>` : ""}
-      <p>Create the ${escapeHtml(preview.pack.display)} Pack in this exact order: ${preview.members.map((member) => escapeHtml(member.symbol)).join(", ")}.</p>
+      <p>Reuse ${preview.members.length} current Registry Asset${preview.members.length === 1 ? "" : "s"} in this exact order: ${preview.members.map((member) => escapeHtml(member.symbol)).join(", ")}.</p>
       <div class="preview-counts">
         <span>REGISTRY ASSETS <strong>${preview.counts.registryAssetsBefore} → ${preview.counts.registryAssetsAfter}</strong></span>
         <span>PACKS <strong>${preview.counts.packsBefore} → ${preview.counts.packsAfter}</strong></span>
         <span>MEMBERSHIPS <strong>${preview.counts.packMembershipsBefore} → ${preview.counts.packMembershipsAfter}</strong></span>
       </div>
-      <p>Nothing will be rendered, published, released, or sent to Discord.</p>`;
+      <p>Pack creation will not create or modify Asset identity, logos, rendered charts, Releases, or Discord content.</p>`;
     qs("#technical-content").textContent = JSON.stringify({
       previewId: preview.previewId,
       changedPaths: preview.changedPaths,
@@ -560,32 +305,6 @@ async function refreshPreview() {
     const memberIndex = Number.isInteger(error.details?.memberIndex) ? error.details.memberIndex : null;
     if (memberIndex !== null && state.members[memberIndex]) {
       state.members[memberIndex].error = error.message;
-      renderMembers();
-    }
-
-    const assetId =
-      typeof error.details?.assetId === "string"
-        ? error.details.assetId
-        : null;
-    const logoMember = assetId === null
-      ? null
-      : state.members.find(
-          (member) => member.id === assetId,
-        );
-    if (
-      logoMember &&
-      (
-        error.code === "asset_logo_not_found" ||
-        error.code === "invalid_asset_logo"
-      )
-    ) {
-      logoMember.logoState =
-        error.code === "invalid_asset_logo"
-          ? "error"
-          : "required";
-      logoMember.logoEvidence = null;
-      logoMember.logoError = error.message;
-      persistInput();
       renderMembers();
     }
 
@@ -606,7 +325,7 @@ async function createPack() {
     localStorage.removeItem(STORAGE_KEY);
     qs("#result-window").hidden = false;
     qs("#result-heading").textContent = `${result.receipt.pack.display.toUpperCase()} CREATED`;
-    qs("#result-content").innerHTML = `<p>${result.receipt.members.filter((member) => !member.existing).length} Assets were added and the ${escapeHtml(result.receipt.pack.display)} Pack was created with ${result.receipt.pack.assetIds.length} ordered members.</p><p>Nothing was published or sent to Discord.</p>`;
+    qs("#result-content").innerHTML = `<p>The ${escapeHtml(result.receipt.pack.display)} Pack was created with ${result.receipt.pack.assetIds.length} existing Registry Assets in canonical order.</p><p>No Asset identity, logo, render, Release, or Discord content was changed.</p>`;
     qs("#preview-state").textContent = "APPLIED";
     qs("#source-state").textContent = "CANONICAL STATE · VERIFIED";
     qs("#inventory-context").textContent = `${result.status.registryAssetCount} ASSETS · ${result.status.packCount} PACKS`;
@@ -656,8 +375,7 @@ function selectedThreadTagIds() {
 function resetThreadProvisioning({ keepForum = false } = {}) {
   if (!keepForum) state.threadForumInspection = null;
   state.threadLogo = null;
-  qs("#thread-logo").value = "";
-  qs("#thread-logo-state").textContent = "NO STARTER LOGO STAGED";
+  qs("#thread-logo-state").textContent = "LOAD FORUM TO VERIFY REGISTRY LOGO";
   qs("#thread-title").value = "";
   renderThreadTags();
 }
@@ -666,11 +384,11 @@ function renderThreadTags() {
   const fieldset = qs("#thread-tags");
   const inspection = state.threadForumInspection;
   if (inspection === null) {
-    fieldset.innerHTML = '<legend>AVAILABLE FORUM TAGS · SELECT UP TO 5</legend><p id="thread-tags-empty">INSPECT THE FORUM TO LOAD CURRENT TAGS</p>';
+    fieldset.innerHTML = '<legend>UP TO 20 AVAILABLE TAGS · APPLY UP TO 5</legend><p id="thread-tags-empty">INSPECT THE FORUM TO LOAD CURRENT TAGS</p>';
     return;
   }
   const tags = inspection.forum.availableTags;
-  fieldset.innerHTML = '<legend>AVAILABLE FORUM TAGS · SELECT UP TO 5</legend>' + (tags.length === 0
+  fieldset.innerHTML = '<legend>UP TO 20 AVAILABLE TAGS · APPLY UP TO 5</legend>' + (tags.length === 0
     ? '<p id="thread-tags-empty">THIS FORUM HAS NO AVAILABLE TAGS</p>'
     : `<div class="thread-tag-options">${tags.map((tag) => `<label class="thread-tag-option"><input type="checkbox" value="${escapeAttribute(tag.id)}"><span>${escapeHtml(tag.name)}${tag.moderated ? " · MODERATED" : ""}</span></label>`).join("")}</div>`);
   qsa('#thread-tags input[type="checkbox"]').forEach((input) => input.addEventListener("change", () => {
@@ -711,9 +429,8 @@ function updateThreadAdoptButton() {
   const logoReady = state.threadLogo?.packId === pack?.id && state.threadLogo?.assetId === asset?.id;
   const title = qs("#thread-title").value;
   const tagIds = selectedThreadTagIds();
-  qs("#thread-inspect-forum").disabled = state.threadBusy || !provisioningAvailable || !pack?.forumConfigured;
+  qs("#thread-inspect-forum").disabled = state.threadBusy || !provisioningAvailable || !pack?.forumConfigured || asset?.bindingState !== "unbound";
   qs("#thread-title").disabled = state.threadBusy || !provisioningAvailable || !inspectionReady || asset?.bindingState !== "unbound";
-  qs("#thread-logo").disabled = state.threadBusy || !provisioningAvailable || !inspectionReady || asset?.bindingState !== "unbound";
   qs("#thread-tags").disabled = state.threadBusy || !provisioningAvailable || !inspectionReady;
   qs("#thread-provision-button").disabled = !(
     !state.threadBusy &&
@@ -1106,10 +823,14 @@ async function removeCurrentThreadBinding() {
 
 async function inspectThreadForum() {
   const pack = selectedThreadPack();
-  if (pack === null || !pack.forumConfigured || state.threadBusy || state.threadManagement?.provisioningAvailable !== true) return;
+  const asset = selectedThreadAsset();
+  if (
+    pack === null || asset === null || asset.bindingState !== "unbound" ||
+    !pack.forumConfigured || state.threadBusy || state.threadManagement?.provisioningAvailable !== true
+  ) return;
   const confirmed = window.confirm(
-    `Inspect the current Discord forum and available tags for ${pack.displayName}?\n\n` +
-    "This is a read-only Discord operation. It will not create or edit a post, change a binding, publish a chart, or create a Release.",
+    `Inspect the current Discord forum and verify the canonical Registry logo for ${asset.displayName}?\n\n` +
+    "The Discord inspection is read-only. The canonical logo is copied only into the local provisioning workspace. No post, binding, chart publication, or Release will be created.",
   );
   if (!confirmed) return;
 
@@ -1117,8 +838,7 @@ async function inspectThreadForum() {
   state.threadBusy = true;
   state.threadForumInspection = null;
   state.threadLogo = null;
-  qs("#thread-logo").value = "";
-  qs("#thread-logo-state").textContent = "NO STARTER LOGO STAGED";
+  qs("#thread-logo-state").textContent = "VERIFYING CANONICAL REGISTRY LOGO";
   renderThreadTags();
   qs("#thread-provisioning-state").textContent = "INSPECTING CURRENT FORUM TAGS";
   updateThreadAdoptButton();
@@ -1129,53 +849,44 @@ async function inspectThreadForum() {
     });
     state.threadForumInspection = result;
     renderThreadTags();
-    qs("#thread-provisioning-state").textContent = result.sessionClosed
-      ? `${result.forum.name.toUpperCase()} · ${result.forum.availableTags.length} TAGS INSPECTED`
-      : "FORUM INSPECTED · SESSION CLOSE FAILED";
-    showMessage(
-      result.sessionClosed
-        ? `Current tags were loaded from ${result.forum.name}. Discord content and local bindings were unchanged.`
-        : "The forum was inspected, but the Discord session did not close cleanly. Restart the administration service before provisioning.",
-      !result.sessionClosed,
-    );
+    if (!result.sessionClosed) {
+      qs("#thread-logo-state").textContent = "REGISTRY LOGO NOT STAGED";
+      qs("#thread-provisioning-state").textContent = "FORUM INSPECTED · SESSION CLOSE FAILED";
+      showMessage(
+        "The forum was inspected, but the Discord session did not close cleanly. Restart the administration service before provisioning.",
+        true,
+      );
+      return;
+    }
+
+    try {
+      const logo = await api(
+        `/api/v1/thread-management/packs/${encodeURIComponent(pack.id)}/assets/${encodeURIComponent(asset.id)}/provisioning-logo/canonical`,
+        { method: "POST", body: "{}" },
+      );
+      state.threadLogo = logo;
+      qs("#thread-logo-state").textContent = `${logo.evidence.width}×${logo.evidence.height} · REGISTRY LOGO VERIFIED`;
+      qs("#thread-provisioning-state").textContent = `${result.forum.name.toUpperCase()} · ${result.forum.availableTags.length} TAGS INSPECTED`;
+      showMessage(
+        `Current tags were loaded from ${result.forum.name}, and ${asset.displayName}'s canonical Registry logo was verified for provisioning. Discord content and local bindings were unchanged.`,
+        false,
+      );
+    } catch (logoError) {
+      state.threadLogo = null;
+      qs("#thread-logo-state").textContent = logoError.code === "asset_logo_not_found"
+        ? "ADD CANONICAL LOGO IN REGISTRY"
+        : "REGISTRY LOGO COULD NOT BE VERIFIED";
+      qs("#thread-provisioning-state").textContent = `${result.forum.name.toUpperCase()} · TAGS LOADED · LOGO REQUIRED`;
+      showMessage(
+        logoError.code === "asset_logo_not_found"
+          ? `Current tags were loaded from ${result.forum.name}, but ${asset.displayName} has no canonical Registry logo. Add one in Registry before provisioning.`
+          : `Current tags were loaded from ${result.forum.name}, but the canonical Registry logo could not be staged: ${logoError.message}`,
+        true,
+      );
+    }
   } catch (error) {
+    qs("#thread-logo-state").textContent = "REGISTRY LOGO NOT STAGED";
     qs("#thread-provisioning-state").textContent = "FORUM INSPECTION FAILED";
-    showMessage(error.message);
-  } finally {
-    state.threadBusy = false;
-    updateThreadAdoptButton();
-  }
-}
-
-async function stageThreadLogo(file) {
-  const pack = selectedThreadPack();
-  const asset = selectedThreadAsset();
-  if (
-    file === null ||
-    pack === null ||
-    asset === null ||
-    asset.bindingState !== "unbound" ||
-    state.threadForumInspection?.packId !== pack.id ||
-    state.threadForumInspection?.sessionClosed !== true ||
-    state.threadBusy
-  ) return;
-
-  clearMessage();
-  state.threadBusy = true;
-  state.threadLogo = null;
-  qs("#thread-logo-state").textContent = `VALIDATING ${file.name.toUpperCase()}`;
-  updateThreadAdoptButton();
-  try {
-    const result = await api(
-      `/api/v1/thread-management/packs/${encodeURIComponent(pack.id)}/assets/${encodeURIComponent(asset.id)}/provisioning-logo`,
-      { method: "PUT", headers: { "Content-Type": "image/png" }, body: file },
-    );
-    state.threadLogo = result;
-    qs("#thread-logo-state").textContent = `${result.evidence.width}×${result.evidence.height} · SHA-256 ${result.evidence.sha256.slice(0, 12).toUpperCase()}…`;
-    showMessage(`${asset.id.toUpperCase()} starter logo validated and staged locally. Discord was not contacted.`, false);
-  } catch (error) {
-    qs("#thread-logo").value = "";
-    qs("#thread-logo-state").textContent = "STARTER LOGO REJECTED";
     showMessage(error.message);
   } finally {
     state.threadBusy = false;
@@ -1201,7 +912,7 @@ async function provisionNewThread() {
   const confirmed = window.confirm(
     `Create one new Discord forum post for ${asset.id.toUpperCase()} in ${pack.displayName}?\n\n` +
     `Title: ${title}\nTags: ${selectedTagNames.length === 0 ? "none" : selectedTagNames.join(", ")}\nLogo SHA-256: ${logo.evidence.sha256}\n\n` +
-    "VisionX will create the post with this logo as its starter message, then atomically record its persistent binding. This does not publish a chart or create a Release.",
+    "VisionX will create the post with this canonical Registry logo as its starter message, then atomically record its persistent binding. This does not publish a chart or create a Release.",
   );
   if (!confirmed) return;
 
@@ -1242,10 +953,425 @@ async function provisionNewThread() {
   }
 }
 
-async function loadRegistry(query = "") {
-  const result = await api(`/api/v1/assets?query=${encodeURIComponent(query)}&offset=0&limit=100`);
+function renderRegistryLogo() {
+  const card = qs("#registry-logo-card");
+  const image = qs("#registry-logo-image");
+  const status = state.registryLogo;
+  card.hidden = state.registrySelectedAsset === null;
+  if (status?.exists) {
+    image.hidden = false;
+    image.src = `${status.url}?v=${encodeURIComponent(status.evidence.sha256)}`;
+    image.alt = `${state.registrySelectedAsset.displayName} canonical logo`;
+    qs("#registry-logo-state").textContent = "CANONICAL LOGO VERIFIED";
+    qs("#registry-logo-evidence").textContent = `${status.evidence.width}×${status.evidence.height} · SHA-256 ${status.evidence.sha256.slice(0, 12).toUpperCase()}…`;
+    qs("#registry-remove-logo").hidden = false;
+  } else {
+    image.hidden = true;
+    image.removeAttribute("src");
+    image.alt = "";
+    qs("#registry-logo-state").textContent = "NO CANONICAL LOGO";
+    qs("#registry-logo-evidence").textContent = "Upload one PNG here; Packs and downstream thread creation reuse it by stable Asset ID.";
+    qs("#registry-remove-logo").hidden = true;
+  }
+}
+
+function renderRegistryInspector() {
+  const asset = state.registrySelectedAsset;
+  const facts = qs("#registry-asset-facts");
+  const controls = qs("#registry-primary-controls");
+  const workflows = qs("#registry-workflow-actions");
+  const packChoiceLabel = qs("#registry-pack-choice-label");
+  const packChoice = qs("#registry-pack-choice");
+
+  if (asset === null) {
+    qs("#registry-inspector-heading").textContent = "SELECT AN ASSET";
+    qs("#registry-inspector-state").textContent = "NO SELECTION";
+    qs("#registry-inspector-state").className = "workspace-status pending";
+    qs("#registry-inspector-guidance").textContent = "Choose MANAGE beside a current result to verify its exact Asset ID and inspect canonical metadata.";
+    facts.hidden = true;
+    facts.innerHTML = "";
+    controls.hidden = true;
+    workflows.hidden = true;
+    qs("#registry-logo-card").hidden = true;
+    return;
+  }
+
+  const aliases = asset.tradingViewAliases?.length ? asset.tradingViewAliases.join(", ") : "NONE";
+  const packs = asset.packIds.length ? asset.packIds.join(", ") : "NONE";
+  const renderReady = Boolean(asset.currency && /^[^:]+:[^:]+$/u.test(asset.tradingViewSymbol));
+  qs("#registry-inspector-heading").textContent = asset.displayName;
+  qs("#registry-inspector-state").textContent = "CURRENT REGISTRY ASSET";
+  qs("#registry-inspector-state").className = "workspace-status valid";
+  qs("#registry-inspector-guidance").textContent = "This exact current Asset ID was revalidated before editing controls were enabled.";
+  facts.hidden = false;
+  facts.innerHTML = `
+    <dt>DISPLAY NAME</dt><dd>${escapeHtml(asset.displayName)}</dd>
+    <dt>TRADINGVIEW</dt><dd>${escapeHtml(asset.tradingViewSymbol)}</dd>
+    <dt>CURRENCY</dt><dd>${escapeHtml(asset.currency ?? "MISSING")}</dd>
+    <dt>ASSIGNED CHANNEL</dt><dd>${escapeHtml(asset.logicalChannel)}</dd>
+    <dt>PACK MEMBERSHIPS</dt><dd>${escapeHtml(packs)}</dd>
+    <dt>ALIASES</dt><dd>${escapeHtml(aliases)}</dd>
+    <dt>INTERNAL ID</dt><dd>${escapeHtml(asset.id)}</dd>`;
+  controls.hidden = false;
+  workflows.hidden = false;
+  packChoice.innerHTML = asset.packIds.map((packId) => `<option value="${escapeAttribute(packId)}">${escapeHtml(packId.toUpperCase())}</option>`).join("");
+  packChoiceLabel.hidden = asset.packIds.length === 0;
+  qs("#registry-open-render").disabled = !renderReady;
+  qs("#registry-open-threads").disabled = asset.packIds.length === 0;
+  qs("#registry-retire-asset").disabled = asset.packIds.length > 0;
+  renderRegistryLogo();
+}
+
+async function loadRegistryLogo(assetId) {
+  const selectedId = state.registrySelectedAsset?.id;
+  state.registryLogo = null;
+  renderRegistryLogo();
+  const status = await api(`/api/v1/assets/${encodeURIComponent(assetId)}/logo/status`);
+  if (state.registrySelectedAsset?.id !== selectedId || selectedId !== assetId) return;
+  state.registryLogo = status;
+  renderRegistryLogo();
+}
+
+async function selectRegistryAsset(assetId) {
+  const generation = ++state.registrySelectionGeneration;
+  state.registrySelectedAsset = null;
+  state.registryLogo = null;
+  qs("#registry-inspector-heading").textContent = assetId.toUpperCase();
+  qs("#registry-inspector-state").textContent = "VERIFYING CURRENT ID";
+  qs("#registry-inspector-state").className = "workspace-status pending";
+  qs("#registry-inspector-guidance").textContent = "Rechecking the exact Asset ID against current canonical Registry state.";
+  qs("#registry-asset-facts").hidden = true;
+  qs("#registry-primary-controls").hidden = true;
+  qs("#registry-workflow-actions").hidden = true;
+  try {
+    const asset = await api(`/api/v1/assets/${encodeURIComponent(assetId)}`);
+    if (generation !== state.registrySelectionGeneration) return;
+    state.registrySelectedAsset = asset;
+    renderRegistryInspector();
+    await loadRegistryLogo(asset.id);
+  } catch (error) {
+    if (generation !== state.registrySelectionGeneration) return;
+    state.registrySelectedAsset = null;
+    renderRegistryInspector();
+    showMessage(error.message);
+  }
+}
+
+function renderRegistryResults() {
   const body = qs("#registry-body");
-  body.innerHTML = result.assets.map((asset) => `<tr><td>${escapeHtml(asset.id)}</td><td>${escapeHtml(asset.displayName)}</td><td>${escapeHtml(asset.tradingViewSymbol)}</td><td>${escapeHtml(asset.currency ?? "—")}</td><td>${escapeHtml(asset.logicalChannel)}</td></tr>`).join("");
+  if (state.registryAssets.length === 0) {
+    body.innerHTML = '<tr><td colspan="7">NO CURRENT REGISTRY ASSETS MATCH THIS SEARCH.</td></tr>';
+  } else {
+    body.innerHTML = state.registryAssets.map((asset) => `<tr>
+      <td><strong>${escapeHtml(asset.displayName)}</strong></td>
+      <td>${escapeHtml(asset.tradingViewSymbol)}</td>
+      <td>${escapeHtml(asset.currency ?? "—")}</td>
+      <td>${escapeHtml(asset.logicalChannel)}</td>
+      <td>${escapeHtml(asset.packIds.length ? asset.packIds.join(", ") : "—")}</td>
+      <td class="secondary-id">${escapeHtml(asset.id)}</td>
+      <td><button class="outline-action compact-action" type="button" data-manage-registry-asset="${escapeAttribute(asset.id)}">MANAGE</button></td>
+    </tr>`).join("");
+  }
+  qsa("[data-manage-registry-asset]").forEach((button) => {
+    button.addEventListener("click", () => void selectRegistryAsset(button.dataset.manageRegistryAsset));
+  });
+
+  const first = state.registryTotal === 0 ? 0 : state.registryOffset + 1;
+  const last = Math.min(state.registryOffset + state.registryAssets.length, state.registryTotal);
+  qs("#registry-context").textContent = `${state.registryTotal} MATCH${state.registryTotal === 1 ? "" : "ES"}`;
+  qs("#registry-page-state").textContent = state.registryTotal === 0 ? "0 RESULTS" : `${first}–${last} OF ${state.registryTotal}`;
+  qs("#registry-previous").disabled = state.registryBusy || state.registryOffset === 0;
+  qs("#registry-next").disabled = state.registryBusy || state.registryOffset + state.registryAssets.length >= state.registryTotal;
+}
+
+async function loadRegistry(options = {}) {
+  const query = options.query ?? state.registryQuery;
+  const offset = options.offset ?? state.registryOffset;
+  const generation = ++state.registrySearchGeneration;
+  state.registryQuery = query;
+  state.registryOffset = offset;
+  state.registryBusy = true;
+  qs("#registry-context").textContent = "SEARCHING CURRENT REGISTRY";
+  qs("#registry-previous").disabled = true;
+  qs("#registry-next").disabled = true;
+  try {
+    const result = await api(`/api/v1/assets?q=${encodeURIComponent(query)}&offset=${offset}&limit=${state.registryLimit}`);
+    if (generation !== state.registrySearchGeneration) return;
+    if (result.total > 0 && result.assets.length === 0 && offset >= result.total) {
+      const lastOffset = Math.floor((result.total - 1) / state.registryLimit) * state.registryLimit;
+      await loadRegistry({ query, offset: lastOffset });
+      return;
+    }
+    state.registryOffset = result.offset;
+    state.registryTotal = result.total;
+    state.registryAssets = result.assets;
+    renderRegistryResults();
+  } catch (error) {
+    if (generation !== state.registrySearchGeneration) return;
+    throw error;
+  } finally {
+    if (generation === state.registrySearchGeneration) {
+      state.registryBusy = false;
+      renderRegistryResults();
+    }
+  }
+}
+
+function scheduleRegistrySearch(query) {
+  clearTimeout(state.registrySearchTimer);
+  state.registryQuery = query;
+  state.registryOffset = 0;
+  state.registrySearchGeneration += 1;
+  qs("#registry-context").textContent = "SEARCH PENDING";
+  qs("#registry-previous").disabled = true;
+  qs("#registry-next").disabled = true;
+  state.registrySearchTimer = setTimeout(() => void loadRegistry({ query, offset: 0 }).catch((error) => showMessage(error.message)), 180);
+}
+
+async function refreshRegistryState() {
+  if (state.registryBusy) return;
+  state.registryBusy = true;
+  qs("#registry-context").textContent = "REFRESHING CANONICAL STATE";
+  const selectedId = state.registrySelectedAsset?.id ?? null;
+  try {
+    await api("/api/v1/refresh", { method: "POST" });
+    state.renderOptions = null;
+    await refreshStatus();
+    await loadRegistry({ query: qs("#registry-search").value, offset: 0 });
+    if (selectedId !== null) await selectRegistryAsset(selectedId);
+    showMessage("Canonical Registry, Pack, and channel state refreshed. No source file was changed.", false);
+  } finally {
+    state.registryBusy = false;
+  }
+}
+
+function suggestedAssetId(tradingView) {
+  const token = tradingView.split(":").at(-1) ?? "";
+  return token.toLocaleLowerCase("en-US").replace(/[^a-z0-9_-]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 64);
+}
+
+function resetRegistryChangePreview() {
+  state.registryChangePreview = null;
+  qs("#registry-change-preview").hidden = true;
+  qs("#registry-change-summary").innerHTML = "";
+  qs("#registry-change-technical").textContent = "";
+  qs("#registry-apply-change").disabled = true;
+}
+
+async function populateRegistryChannelOptions() {
+  if (state.channels.length === 0) await loadChannels();
+  const select = qs("#registry-field-channel");
+  const selected = select.value;
+  select.innerHTML = '<option value="">SELECT CHANNEL</option>' + state.channels.map((channel) => `<option value="${escapeAttribute(channel)}">${escapeHtml(channel.toUpperCase())}</option>`).join("");
+  select.value = selected;
+}
+
+async function openRegistryEditor(mode) {
+  state.registryEditorMode = mode;
+  state.registryChangeBusy = false;
+  resetRegistryChangePreview();
+  await populateRegistryChannelOptions();
+  const asset = mode === "edit" ? state.registrySelectedAsset : null;
+  qs("#registry-editor-heading").textContent = mode === "edit" ? `EDIT ${asset.displayName.toUpperCase()}` : "ADD ASSET";
+  qs("#registry-editor-guidance").textContent = mode === "edit"
+    ? "The stable Asset ID cannot change. Review the exact metadata source change before applying it."
+    : "Create one canonical Asset. Pack membership and logos are managed separately after creation.";
+  qs("#registry-field-id").value = asset?.id ?? "";
+  qs("#registry-field-id").dataset.suggestedId = asset?.id ?? "";
+  qs("#registry-field-id").disabled = mode === "edit";
+  qs("#registry-field-display").value = asset?.displayName ?? "";
+  qs("#registry-field-tradingview").value = asset?.tradingViewSymbol ?? "";
+  qs("#registry-field-currency").value = asset?.currency ?? "";
+  qs("#registry-field-channel").value = asset?.logicalChannel ?? "";
+  qs("#registry-editor").hidden = false;
+  document.body.classList.add("registry-editor-open");
+  qs("#registry-field-display").focus();
+}
+
+function closeRegistryEditor() {
+  qs("#registry-editor").hidden = true;
+  document.body.classList.remove("registry-editor-open");
+  resetRegistryChangePreview();
+}
+
+function registryChangeValue() {
+  return {
+    operation: state.registryEditorMode === "edit" ? "update" : "add",
+    asset: {
+      id: qs("#registry-field-id").value,
+      displayName: qs("#registry-field-display").value,
+      tradingViewSymbol: qs("#registry-field-tradingview").value,
+      currency: qs("#registry-field-currency").value.toUpperCase(),
+      channel: qs("#registry-field-channel").value,
+    },
+  };
+}
+
+async function reviewRegistryChange() {
+  if (state.registryChangeBusy) return;
+  state.registryChangeBusy = true;
+  resetRegistryChangePreview();
+  qs("#registry-review-change").disabled = true;
+  try {
+    const preview = await api("/api/v1/registry/asset-changes/preview", {
+      method: "POST",
+      body: JSON.stringify({ change: registryChangeValue() }),
+    });
+    state.registryChangePreview = preview;
+    qs("#registry-change-preview").hidden = false;
+    qs("#registry-change-title").textContent = preview.operation === "add" ? "ADD REGISTRY ASSET" : "UPDATE REGISTRY ASSET";
+    qs("#registry-change-summary").innerHTML = `
+      <p><strong>${escapeHtml(preview.asset.displayName)}</strong></p>
+      <dl class="registry-asset-facts">
+        ${preview.previous ? `<dt>DISPLAY</dt><dd>${escapeHtml(preview.previous.displayName)} → ${escapeHtml(preview.asset.displayName)}</dd>` : `<dt>DISPLAY</dt><dd>${escapeHtml(preview.asset.displayName)}</dd>`}
+        ${preview.previous ? `<dt>TRADINGVIEW</dt><dd>${escapeHtml(preview.previous.tradingViewSymbol)} → ${escapeHtml(preview.asset.tradingViewSymbol)}</dd>` : `<dt>TRADINGVIEW</dt><dd>${escapeHtml(preview.asset.tradingViewSymbol)}</dd>`}
+        ${preview.previous ? `<dt>CURRENCY</dt><dd>${escapeHtml(preview.previous.currency ?? "—")} → ${escapeHtml(preview.asset.currency ?? "—")}</dd>` : `<dt>CURRENCY</dt><dd>${escapeHtml(preview.asset.currency ?? "—")}</dd>`}
+        ${preview.previous ? `<dt>CHANNEL</dt><dd>${escapeHtml(preview.previous.logicalChannel)} → ${escapeHtml(preview.asset.logicalChannel)}</dd>` : `<dt>CHANNEL</dt><dd>${escapeHtml(preview.asset.logicalChannel)}</dd>`}
+        <dt>INTERNAL ID</dt><dd>${escapeHtml(preview.asset.id)} · IMMUTABLE</dd>
+      </dl>
+      <p>No Pack membership, logo, chart, Release, or Discord content changes in this operation.</p>`;
+    qs("#registry-change-technical").textContent = JSON.stringify({ changeId: preview.changeId, sourceState: preview.sourceState, effects: preview.effects }, null, 2);
+    qs("#registry-apply-change").disabled = false;
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    state.registryChangeBusy = false;
+    qs("#registry-review-change").disabled = false;
+  }
+}
+
+async function applyRegistryChange() {
+  const preview = state.registryChangePreview;
+  if (!preview || state.registryChangeBusy) return;
+  if (!window.confirm(`Apply this ${preview.operation} change for ${preview.asset.displayName}?\n\nThis writes canonical Registry source only.`)) return;
+  state.registryChangeBusy = true;
+  qs("#registry-apply-change").disabled = true;
+  try {
+    await api(`/api/v1/registry/asset-changes/${encodeURIComponent(preview.changeId)}/apply`, {
+      method: "POST",
+      body: JSON.stringify({ confirmation: "APPLY REGISTRY ASSET CHANGE" }),
+    });
+    await refreshStatus();
+    await loadRegistry({ query: "", offset: 0 });
+    closeRegistryEditor();
+    await selectRegistryAsset(preview.asset.id);
+    showMessage(`${preview.asset.displayName} is now current in Registry. No Pack, render, Release, or Discord operation occurred.`, false);
+  } catch (error) {
+    showMessage(error.message);
+    await refreshRegistryState().catch(() => undefined);
+  } finally {
+    state.registryChangeBusy = false;
+  }
+}
+
+async function storeRegistryLogo(file) {
+  const asset = state.registrySelectedAsset;
+  if (!asset || !file) return;
+  if (!window.confirm(`Store ${file.name} as the canonical logo for ${asset.displayName}?`)) {
+    qs("#registry-logo-input").value = "";
+    return;
+  }
+  const expected = state.registryLogo?.evidence?.sha256 ?? "";
+  try {
+    const query = new URLSearchParams({ expectedSha256: expected, confirmation: "STORE REGISTRY ASSET LOGO" });
+    state.registryLogo = await api(`/api/v1/assets/${encodeURIComponent(asset.id)}/logo?${query.toString()}`, {
+      method: "PUT",
+      headers: { "Content-Type": "image/png" },
+      body: file,
+    });
+    renderRegistryLogo();
+    showMessage(`${asset.displayName} canonical logo was stored and verified.`, false);
+  } catch (error) {
+    showMessage(error.message);
+    await loadRegistryLogo(asset.id).catch(() => undefined);
+  } finally {
+    qs("#registry-logo-input").value = "";
+  }
+}
+
+async function removeRegistryLogo() {
+  const asset = state.registrySelectedAsset;
+  const sha256 = state.registryLogo?.evidence?.sha256;
+  if (!asset || !sha256) return;
+  if (!window.confirm(`Remove the canonical logo for ${asset.displayName}?\n\nThis does not alter Registry metadata or any Discord post.`)) return;
+  try {
+    await api(`/api/v1/assets/${encodeURIComponent(asset.id)}/logo`, {
+      method: "DELETE",
+      body: JSON.stringify({ expectedSha256: sha256, confirmation: "REMOVE REGISTRY ASSET LOGO" }),
+    });
+    state.registryLogo = { exists: false, evidence: null, url: null };
+    renderRegistryLogo();
+    showMessage(`${asset.displayName} canonical logo was removed.`, false);
+  } catch (error) {
+    showMessage(error.message);
+    await loadRegistryLogo(asset.id).catch(() => undefined);
+  }
+}
+
+async function retireRegistryAssetFromUi() {
+  const asset = state.registrySelectedAsset;
+  if (!asset) return;
+  try {
+    const preview = await api(`/api/v1/assets/${encodeURIComponent(asset.id)}/retirement-preview`, { method: "POST", body: "{}" });
+    if (preview.blockingPackIds.length || preview.blockingThreadRoutes.length) {
+      showMessage(`Retirement is blocked. Remove ${asset.id.toUpperCase()} from Packs (${preview.blockingPackIds.join(", ") || "none"}) and Thread routes (${preview.blockingThreadRoutes.join(", ") || "none"}) first.`);
+      return;
+    }
+    const phrase = `RETIRE ${asset.id.toUpperCase()}`;
+    const typed = window.prompt(`Type ${phrase} to retire ${asset.displayName}.\n\nThe canonical logo is retained for recovery.`);
+    if (typed !== phrase) return;
+    await api(`/api/v1/assets/${encodeURIComponent(asset.id)}/retire`, {
+      method: "POST",
+      body: JSON.stringify({ previewId: preview.previewId, confirmation: typed }),
+    });
+    state.registrySelectedAsset = null;
+    state.registryLogo = null;
+    renderRegistryInspector();
+    await refreshStatus();
+    await loadRegistry({ query: qs("#registry-search").value, offset: 0 });
+    showMessage(`${asset.displayName} was retired from Registry. Its canonical logo was retained for recovery.`, false);
+  } catch (error) {
+    showMessage(error.message);
+  }
+}
+
+function useRegistryAssetInPack() {
+  const asset = state.registrySelectedAsset;
+  if (asset === null) return;
+  addMember({ id: asset.id });
+  void activateView("packs").then(() => qs("#membership-heading").scrollIntoView({ behavior: "smooth", block: "start" }));
+}
+
+async function openRegistryAssetInRender() {
+  const asset = state.registrySelectedAsset;
+  if (asset === null) return;
+  await activateView("renderer");
+  const renderAsset = state.renderOptions?.assets.find((entry) => entry.id === asset.id);
+  if (!renderAsset) {
+    showMessage(`${asset.id.toUpperCase()} requires canonical TradingView and currency metadata before rendering.`);
+    return;
+  }
+  selectRendererAsset(renderAsset);
+  qs("#renderer-heading").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function openRegistryAssetThreads() {
+  const asset = state.registrySelectedAsset;
+  const packId = qs("#registry-pack-choice").value;
+  if (asset === null || !packId) return;
+  await activateView("threads");
+  qs("#thread-pack").value = packId;
+  resetThreadProvisioning();
+  renderThreadManagement();
+  if (![...qs("#thread-asset").options].some((option) => option.value === asset.id)) {
+    showMessage(`${asset.id.toUpperCase()} is no longer a member of Pack ${packId.toUpperCase()}. Refresh the Registry selection.`);
+    return;
+  }
+  qs("#thread-asset").value = asset.id;
+  qs("#thread-id").value = selectedThreadAsset()?.threadId ?? "";
+  resetThreadProvisioning({ keepForum: true });
+  renderThreadManagement();
+  qs("#thread-adoption-heading").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function updateRenderButton() {
@@ -1258,17 +1384,44 @@ function updateRenderButton() {
   qs("#render-chart").disabled = !ready;
 }
 
+function selectRendererAsset(asset) {
+  qs("#renderer-asset").value = asset.id;
+  qs("#renderer-asset-search").value = asset.displayName;
+  qs("#renderer-selected-asset").textContent = `${asset.displayName} · ${asset.tradingViewSymbol} · ${asset.currency}`;
+  qs("#renderer-asset-results").hidden = true;
+  resetStandaloneResult();
+}
+
+function renderRendererAssetSearch(query) {
+  const panel = qs("#renderer-asset-results");
+  const terms = query.trim().toLocaleLowerCase("en-US").split(/\s+/u).filter(Boolean);
+  if (terms.length === 0) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  const matches = (state.renderOptions?.assets ?? []).filter((asset) => {
+    const haystack = [asset.id, asset.displayName, asset.tradingViewSymbol, asset.currency].join(" ").toLocaleLowerCase("en-US");
+    return terms.every((term) => haystack.includes(term));
+  }).slice(0, 16);
+  panel.hidden = false;
+  panel.innerHTML = matches.length === 0
+    ? '<p class="asset-search-empty">NO RENDERABLE REGISTRY ASSETS MATCH.</p>'
+    : matches.map((asset) => `<button type="button" data-renderer-asset="${escapeAttribute(asset.id)}"><strong>${escapeHtml(asset.displayName)}</strong><span>${escapeHtml(asset.tradingViewSymbol)} · ${escapeHtml(asset.currency)} · ID ${escapeHtml(asset.id)}</span></button>`).join("");
+  qsa("[data-renderer-asset]").forEach((button) => button.addEventListener("click", () => {
+    const asset = state.renderOptions.assets.find((entry) => entry.id === button.dataset.rendererAsset);
+    if (asset) selectRendererAsset(asset);
+  }));
+}
+
 async function loadStandaloneRenderOptions() {
   if (state.renderOptions !== null) return;
   const result = await api("/api/v1/standalone-render/options");
   state.renderOptions = result;
-  qs("#renderer-asset").innerHTML = '<option value="">SELECT TICKER</option>' + result.assets
-    .map((asset) => `<option value="${escapeAttribute(asset.id)}">${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)} · ${escapeHtml(asset.tradingViewSymbol)}</option>`)
-    .join("");
   qs("#renderer-timeframe").innerHTML = '<option value="">SELECT TIMEFRAME</option>' + result.timeframes
     .map((timeframe) => `<option value="${escapeAttribute(timeframe)}">${escapeHtml(timeframe)}</option>`)
     .join("");
-  qs("#renderer-availability").textContent = `${result.assets.length} RENDERABLE · ${result.unavailableAssetCount} REQUIRE METADATA RECONCILIATION`;
+  qs("#renderer-availability").textContent = `${result.assets.length} RENDERABLE REGISTRY ASSETS · ${result.unavailableAssetCount} REQUIRE METADATA RECONCILIATION`;
   updateRenderButton();
 }
 
@@ -1821,20 +1974,58 @@ async function resetWorkspacePack() {
   }
 }
 
+async function activateView(view) {
+  qsa("[data-view]").forEach((item) => {
+    if (item.dataset.view === view) item.setAttribute("aria-current", "page");
+    else item.removeAttribute("aria-current");
+  });
+  qsa("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== view; });
+  if (view === "workspace") await loadPackWorkspace();
+  if (view === "threads") await loadThreadManagement();
+  if (view === "registry") await loadRegistry({ query: qs("#registry-search").value, offset: state.registryOffset });
+  if (view === "renderer") await loadStandaloneRenderOptions();
+}
+
 qsa("[data-view]").forEach((button) => button.addEventListener("click", () => {
-  qsa("[data-view]").forEach((item) => item.removeAttribute("aria-current"));
-  button.setAttribute("aria-current", "page");
-  qsa("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== button.dataset.view; });
-  if (button.dataset.view === "workspace") void loadPackWorkspace().catch((error) => showMessage(error.message));
-  if (button.dataset.view === "threads") void loadThreadManagement().catch((error) => showMessage(error.message));
-  if (button.dataset.view === "registry") void loadRegistry();
-  if (button.dataset.view === "renderer") void loadStandaloneRenderOptions().catch((error) => showMessage(error.message));
+  void activateView(button.dataset.view).catch((error) => showMessage(error.message));
 }));
 
-qs("#add-member").addEventListener("click", () => addMember());
 qs("#create-pack").addEventListener("click", () => void createPack());
-qs("#registry-search").addEventListener("input", (event) => void loadRegistry(event.target.value));
-qs("#renderer-asset").addEventListener("change", resetStandaloneResult);
+qs("#pack-asset-search").addEventListener("input", (event) => schedulePackAssetSearch(event.target.value));
+qs("#registry-search").addEventListener("input", (event) => scheduleRegistrySearch(event.target.value));
+qs("#registry-refresh").addEventListener("click", () => void refreshRegistryState().catch((error) => showMessage(error.message)));
+qs("#registry-previous").addEventListener("click", () => void loadRegistry({ offset: Math.max(0, state.registryOffset - state.registryLimit) }).catch((error) => showMessage(error.message)));
+qs("#registry-next").addEventListener("click", () => void loadRegistry({ offset: state.registryOffset + state.registryLimit }).catch((error) => showMessage(error.message)));
+qs("#registry-add-asset").addEventListener("click", () => void openRegistryEditor("add").catch((error) => showMessage(error.message)));
+qs("#registry-edit-asset").addEventListener("click", () => void openRegistryEditor("edit").catch((error) => showMessage(error.message)));
+qs("#registry-editor-close").addEventListener("click", closeRegistryEditor);
+qs("#registry-review-change").addEventListener("click", () => void reviewRegistryChange());
+qs("#registry-apply-change").addEventListener("click", () => void applyRegistryChange());
+qs("#registry-logo-input").addEventListener("change", (event) => void storeRegistryLogo(event.target.files?.[0] ?? null));
+qs("#registry-remove-logo").addEventListener("click", () => void removeRegistryLogo());
+qs("#registry-retire-asset").addEventListener("click", () => void retireRegistryAssetFromUi());
+for (const id of ["#registry-field-display", "#registry-field-tradingview", "#registry-field-currency", "#registry-field-channel", "#registry-field-id"]) {
+  qs(id).addEventListener("input", () => {
+    if (id === "#registry-field-tradingview" && state.registryEditorMode === "add") {
+      const currentId = qs("#registry-field-id").value.trim();
+      if (!currentId || currentId === qs("#registry-field-id").dataset.suggestedId) {
+        const nextId = suggestedAssetId(qs(id).value);
+        qs("#registry-field-id").value = nextId;
+        qs("#registry-field-id").dataset.suggestedId = nextId;
+      }
+    }
+    resetRegistryChangePreview();
+  });
+}
+qs("#registry-use-in-pack").addEventListener("click", useRegistryAssetInPack);
+qs("#registry-open-render").addEventListener("click", () => void openRegistryAssetInRender().catch((error) => showMessage(error.message)));
+qs("#registry-open-threads").addEventListener("click", () => void openRegistryAssetThreads().catch((error) => showMessage(error.message)));
+qs("#renderer-asset-search").addEventListener("input", (event) => {
+  qs("#renderer-asset").value = "";
+  qs("#renderer-selected-asset").textContent = "NO ASSET SELECTED";
+  renderRendererAssetSearch(event.target.value);
+  resetStandaloneResult();
+});
 qs("#renderer-timeframe").addEventListener("change", resetStandaloneResult);
 qs("#renderer-source").addEventListener("change", (event) => {
   const file = event.target.files?.[0] ?? null;
@@ -1885,13 +2076,11 @@ qs("#thread-adopt-button").addEventListener("click", () => void adoptExistingThr
 qs("#thread-remove-binding").addEventListener("click", () => void removeCurrentThreadBinding());
 qs("#thread-inspect-forum").addEventListener("click", () => void inspectThreadForum());
 qs("#thread-title").addEventListener("input", updateThreadAdoptButton);
-qs("#thread-logo").addEventListener("change", (event) => void stageThreadLogo(event.target.files?.[0] ?? null));
 qs("#thread-provision-button").addEventListener("click", () => void provisionNewThread());
 qs("#thread-verify-routing").addEventListener("click", () => void verifyPackRouting());
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";
-    if (id === "#pack-id") resetMissingAssetLogos();
     persistInput();
     renderMembers();
     schedulePreview();

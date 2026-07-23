@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,11 +16,11 @@ afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-async function start(options: { readonly chartDownloadsRoot?: string } = {}) {
+async function start(options: { readonly chartDownloadsRoot?: string; readonly repositoryRoot?: string } = {}) {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "visionx-admin-http-test-"));
   cleanup.push(workspaceRoot);
   const service = await AdminService.create({
-    repositoryRoot: resolve("."),
+    repositoryRoot: options.repositoryRoot ?? resolve("."),
     workspaceRoot,
     ...(options.chartDownloadsRoot === undefined ? {} : {
       chartDownloadsRoot: options.chartDownloadsRoot,
@@ -29,6 +29,17 @@ async function start(options: { readonly chartDownloadsRoot?: string } = {}) {
   const server = await startAdminHttpServer({ service, host: "127.0.0.1", port: 0 });
   servers.push(server);
   return { service, server };
+}
+
+async function mutableRepository(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "visionx-admin-http-registry-source-"));
+  cleanup.push(root);
+  await Promise.all([
+    cp(resolve("definitions"), join(root, "definitions"), { recursive: true }),
+    cp(resolve("config"), join(root, "config"), { recursive: true }),
+    mkdir(join(root, "assets"), { recursive: true }),
+  ]);
+  return root;
 }
 
 async function jsonRequest(url: string, path: string, init?: RequestInit) {
@@ -88,12 +99,77 @@ describe("Admin HTTP server", () => {
     });
   });
 
-  it("returns bounded deterministic Asset search", async () => {
+  it("returns bounded deterministic Asset search through the canonical q contract", async () => {
     const { server } = await start();
-    const { body } = await jsonRequest(server.url, "/api/v1/assets?q=stock&limit=5");
+    const { body } = await jsonRequest(server.url, "/api/v1/assets?q=Apple%20stocks&limit=5");
     expect(body.data.assets.length).toBeLessThanOrEqual(5);
+    expect(body.data.assets).toContainEqual(expect.objectContaining({ id: "aapl" }));
     const ids = body.data.assets.map((asset: { id: string }) => asset.id);
     expect(ids).toEqual([...ids].sort((a, b) => a.localeCompare(b, "en")));
+  });
+
+  it("rejects misspelled, legacy, or duplicate Registry search parameters instead of silently ignoring them", async () => {
+    const { server } = await start();
+    const legacy = await jsonRequest(server.url, "/api/v1/assets?query=Apple&limit=5");
+    expect(legacy.response.status).toBe(400);
+    expect(legacy.body.error).toMatchObject({ code: "invalid_request" });
+    const duplicate = await jsonRequest(server.url, "/api/v1/assets?q=Apple&q=Bitcoin");
+    expect(duplicate.response.status).toBe(400);
+    expect(duplicate.body.error).toMatchObject({ code: "invalid_request" });
+  });
+
+  it("reviews and applies Registry metadata, canonical logo, and retirement routes with exact confirmations", async () => {
+    const repositoryRoot = await mutableRepository();
+    const { server } = await start({ repositoryRoot });
+    const preview = await jsonRequest(server.url, "/api/v1/registry/asset-changes/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        change: {
+          operation: "add",
+          asset: { id: "http_asset", displayName: "HTTP Asset", tradingViewSymbol: "NASDAQ:HTTP", currency: "USD", channel: "stocks" },
+        },
+      }),
+    });
+    expect(preview.response.status).toBe(201);
+    expect(preview.body.data).toMatchObject({ operation: "add", asset: { id: "http_asset", packIds: [] } });
+
+    const applied = await jsonRequest(server.url, `/api/v1/registry/asset-changes/${preview.body.data.changeId}/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation: "APPLY REGISTRY ASSET CHANGE" }),
+    });
+    expect(applied.response.status).toBe(200);
+    expect((await jsonRequest(server.url, "/api/v1/assets/http_asset")).body.data).toMatchObject({ displayName: "HTTP Asset" });
+
+    const logo = await sharp({
+      create: { width: 96, height: 96, channels: 4, background: { r: 12, g: 34, b: 56, alpha: 1 } },
+    }).png().toBuffer();
+    const logoQuery = new URLSearchParams({ expectedSha256: "", confirmation: "STORE REGISTRY ASSET LOGO" });
+    const stored = await fetch(`${server.url}/api/v1/assets/http_asset/logo?${logoQuery.toString()}`, {
+      method: "PUT",
+      headers: { "Content-Type": "image/png" },
+      body: logo,
+    });
+    expect(stored.status).toBe(201);
+    const storedBody = await stored.json() as any;
+    expect(storedBody).toMatchObject({ data: { exists: true, evidence: { width: 96, height: 96 } } });
+    const downloaded = await fetch(`${server.url}/api/v1/assets/http_asset/logo?v=${storedBody.data.evidence.sha256}`);
+    expect(downloaded.status).toBe(200);
+    expect(Buffer.from(await downloaded.arrayBuffer()).equals(logo)).toBe(true);
+
+    const retirement = await jsonRequest(server.url, "/api/v1/assets/http_asset/retirement-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(retirement.body.data).toMatchObject({ blockingPackIds: [], blockingThreadRoutes: [] });
+    const retired = await jsonRequest(server.url, "/api/v1/assets/http_asset/retire", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ previewId: retirement.body.data.previewId, confirmation: "RETIRE HTTP_ASSET" }),
+    });
+    expect(retired.body.data).toMatchObject({ retired: true, canonicalLogoRetained: true });
   });
 
   it("renders and downloads a standalone publication without canonical source mutation", async () => {
@@ -540,7 +616,7 @@ describe("Admin HTTP server", () => {
     expect(response.headers.get("content-security-policy")).toBe(ADMIN_CSP);
   });
 
-  it("serves the Pack Workspace, thread routing, Pack builder, standalone renderer, and read-only Registry without external resources", async () => {
+  it("serves the Pack Workspace, thread routing, Pack builder, standalone renderer, and Registry management router without external resources", async () => {
     const { server } = await start();
     const html = await (await fetch(`${server.url}/`)).text();
     expect(html).toContain("PACK BUILDER");
@@ -553,6 +629,9 @@ describe("Admin HTTP server", () => {
     expect(html).toContain("CREATE NEW FORUM POST");
     expect(html).toContain("EXPLICIT CONFIRMATION REQUIRED");
     expect(html).toContain("PUBLISH UNAVAILABLE");
+    expect(html).toContain("CANONICAL ASSET CUSTODY");
+    expect(html).toContain("ADD ASSET");
+    expect(html).toContain("REFRESH CANONICAL STATE");
     expect(html).toContain("/visionx-emblem.png");
     expect(html).toContain("/visionx-wordmark.png");
     expect(html).toContain("CREATE PACK");

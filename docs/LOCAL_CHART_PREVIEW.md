@@ -21,8 +21,9 @@ paths are no-overwrite destinations.
 
 Standalone rendering requires only a Registry Asset. Pack membership is not
 consulted, so an Asset may be rendered before it is assigned to a Pack. The
-operator supplies one validated timeframe directly; no per-ticker or
-per-timeframe profile file is required.
+administration Registry inspector can carry a metadata-complete Asset into the
+renderer without changing canonical source. The operator supplies one validated
+timeframe directly; no per-ticker or per-timeframe profile file is required.
 
 ```bash
 npm run preview-chart -- \
@@ -40,8 +41,8 @@ create a Release, look up a Discord thread, or publish anything.
 ### Administration UI
 
 Start the loopback administration service with `npm run admin`, open its local
-URL, and choose **RENDER**. The standalone renderer lists Registry Assets whose
-qualified TradingView identity and canonical currency are complete, exposes the
+URL, and choose **RENDER**. The standalone renderer searches all Registry Assets and
+offers those whose qualified TradingView identity and canonical currency are complete, exposes the
 shared validated timeframe list, accepts one native TradingView PNG export, and
 returns an inline preview plus separate PNG and receipt downloads.
 

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -45,6 +45,7 @@ async function temporaryRepository(): Promise<string> {
   cleanup.push(root);
   await cp(resolve("definitions"), join(root, "definitions"), { recursive: true });
   await cp(resolve("config"), join(root, "config"), { recursive: true });
+  await mkdir(join(root, "assets"), { recursive: true });
   return root;
 }
 
@@ -137,6 +138,7 @@ function provisioningSessionFactory(options: {
   readonly createdThreadId?: string;
   readonly deleteFails?: boolean;
   readonly closeFails?: boolean;
+  readonly availableTags?: readonly Readonly<{ readonly id: string; readonly name: string; readonly moderated: boolean }>[];
 } = {}): {
   readonly factory: AdminDiscordForumProvisioningSessionFactory;
   readonly opened: string[];
@@ -158,7 +160,7 @@ function provisioningSessionFactory(options: {
         return Object.freeze({
           forumChannelId,
           name: "Crypto Analyses",
-          availableTags: Object.freeze([
+          availableTags: Object.freeze(options.availableTags ?? [
             Object.freeze({ id: "1527777777777777777", name: "Analysis", moderated: false }),
             Object.freeze({ id: "1527777777777777778", name: "Members", moderated: true }),
           ]),
@@ -490,6 +492,24 @@ describe("Administration Discord thread routing", () => {
     expect(mock.inspected).toEqual([]);
   });
 
+  it("rejects forum inspections that exceed Discord's 20 available-tag limit", async () => {
+    const repositoryRoot = await temporaryRepository();
+    const availableTags = Object.freeze(Array.from({ length: 21 }, (_, index) => Object.freeze({
+      id: `1527777777777777${String(index).padStart(3, "0")}`,
+      name: `Tag ${index + 1}`,
+      moderated: false,
+    })));
+    const mock = provisioningSessionFactory({ availableTags });
+    const service = await createService(repositoryRoot, undefined, mock.factory);
+
+    await expect(service.inspectPackForum({
+      packId: "crypto",
+      confirmation: "inspect_forum_tags",
+    })).rejects.toMatchObject({ code: "thread_forum_inspection_failed" });
+    expect(mock.opened).toEqual(["session"]);
+    expect(mock.closed).toEqual(["session"]);
+  });
+
   it("inspects current forum tags, stages exact logo evidence, and provisions one persistent post", async () => {
     const repositoryRoot = await temporaryRepository();
     const mock = provisioningSessionFactory();
@@ -525,10 +545,12 @@ describe("Administration Discord thread routing", () => {
     });
 
     const logoBytes = await squarePng();
-    const staged = await service.stageThreadProvisioningLogo({ packId: "crypto", assetId: "akt", bytes: logoBytes });
+    await service.storeRegistryAssetLogo("akt", logoBytes, null, "STORE REGISTRY ASSET LOGO");
+    const staged = await service.stageThreadProvisioningCanonicalLogo({ packId: "crypto", assetId: "akt" });
     expect(staged).toMatchObject({
       packId: "crypto",
       assetId: "akt",
+      source: "canonical_registry_logo",
       evidence: { width: 96, height: 96 },
       effects: { discordContacted: false, repositoryChanged: false },
     });

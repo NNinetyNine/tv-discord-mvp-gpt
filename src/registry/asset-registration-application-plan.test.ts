@@ -278,7 +278,7 @@ describe("Asset registration application planning schemaVersion 2", () => {
     expect(planFor(proposal, { packPlacements: [{ packId: "crypto", placement: { mode: "append" } }] })).toMatchObject({ ok: false, reason: "unexpected_pack_placement" });
   });
 
-  it("plans update_identity only when channel remains unchanged", () => {
+  it("plans update_identity and an explicit configured channel change", () => {
     const updateInput = {
       ...ADD_INPUT,
       operation: "update_identity",
@@ -298,7 +298,11 @@ describe("Asset registration application planning schemaVersion 2", () => {
         computeAssetRegistrationRegistryFingerprint(expectedAssets, PACKS),
       );
     }
-    expect(() => proposalFor({ ...updateInput, asset: { ...updateInput.asset, channel: "crypto" } })).toThrow("channel_change_not_authorized");
+    const moved = planFor(proposalFor({ ...updateInput, asset: { ...updateInput.asset, channel: "crypto" } }));
+    expect(moved).toMatchObject({
+      ok: true,
+      plan: { operations: [{ type: "update_asset_identity", asset: { id: "aem", channel: "crypto" } }] },
+    });
   });
 
   it("returns deterministic immutable results without mutating current state", () => {

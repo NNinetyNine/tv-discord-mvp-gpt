@@ -36,6 +36,14 @@ async function fixture() {
   return { root, workspace, registry, packs, channels, service };
 }
 
+function registeredOnlyInput() {
+  return {
+    schemaVersion: 1,
+    pack: { id: "growth", display: "Growth", channel: "stocks" },
+    members: [{ id: "aapl" }],
+  };
+}
+
 function input() {
   return {
     schemaVersion: 1,
@@ -152,22 +160,34 @@ describe("Administration Create Pack front door", () => {
     expect(JSON.stringify(state)).not.toContain(f.workspace);
   });
 
-  it("serves strict preview/create routes and rejects foreign-origin writes and browser authority fields", async () => {
+  it("serves a Registry-only preview/create route and rejects missing Assets, foreign origins, and browser authority fields", async () => {
     const f = await fixture();
-    await stageRequiredLogos(f.service);
     const server = await startAdminHttpServer({ service: f.service, host: "127.0.0.1", port: 0 }); servers.push(server);
-    const preview = await request(server, "/api/v1/packs/create/preview", { input: input() });
+
+    const missing = await request(server, "/api/v1/packs/create/preview", { input: input() });
+    expect(missing.response.status).toBe(400);
+    expect(missing.body.error).toMatchObject({ code: "asset_not_found", details: { assetIds: ["dxy", "exy"] } });
+
+    const identityOverride = await request(server, "/api/v1/packs/create/preview", {
+      input: { ...registeredOnlyInput(), members: [{ id: "aapl", display: "Browser override" }] },
+    });
+    expect(identityOverride.response.status).toBe(400);
+    expect(identityOverride.body.error.code).toBe("invalid_pack_builder_input");
+
+    const browserInput = registeredOnlyInput();
+    const preview = await request(server, "/api/v1/packs/create/preview", { input: browserInput });
     expect(preview.response.status).toBe(200);
+    expect(preview.body.data).toMatchObject({ missingAssetCount: 0, existingAssetCount: 1 });
     expect(preview.body.data.previewId).toMatch(/^[a-f0-9]{64}$/u);
-    const foreign = await request(server, "/api/v1/packs/create", { packId: "forex", previewId: preview.body.data.previewId }, "https://evil.invalid");
+    const foreign = await request(server, "/api/v1/packs/create", { packId: "growth", previewId: preview.body.data.previewId }, "https://evil.invalid");
     expect(foreign.response.status).toBe(403);
     expect(foreign.body.error.code).toBe("origin_rejected");
-    const authority = await request(server, "/api/v1/packs/create", { packId: "forex", previewId: preview.body.data.previewId, registryBytes: "arbitrary" });
+    const authority = await request(server, "/api/v1/packs/create", { packId: "growth", previewId: preview.body.data.previewId, registryBytes: "arbitrary" });
     expect(authority.response.status).toBe(400);
     expect(authority.body.error.code).toBe("invalid_request");
-    const created = await request(server, "/api/v1/packs/create", { packId: "forex", previewId: preview.body.data.previewId });
+    const created = await request(server, "/api/v1/packs/create", { packId: "growth", previewId: preview.body.data.previewId });
     expect(created.response.status).toBe(201);
-    expect(created.body.data.created).toBe(true);
+    expect(created.body.data).toMatchObject({ created: true, packId: "growth", status: { registryAssetCount: 1, packCount: 2 } });
   });
 
   it("refreshes preview state and reports stale definitions without losing stored work", async () => {

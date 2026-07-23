@@ -112,7 +112,6 @@ export type AssetRegistrationProposalFailureReason =
   | "asset_already_exists"
   | "unknown_asset"
   | "stale_asset_state"
-  | "channel_change_not_authorized"
   | AssetMarketIdentityFailureReason
   | AssetRegistrationChannelFailureReason
   | "unknown_target_pack"
@@ -578,9 +577,6 @@ export function proposeAssetRegistration(
       existing.channel !== expected.channel
     ) {
       return failure("stale_asset_state", `Asset ${input.asset.id} no longer matches expectedCurrent`);
-    }
-    if (input.asset.channel !== existing.channel) {
-      return failure("channel_change_not_authorized", "update_identity cannot change an Asset logical channel");
     }
   }
 

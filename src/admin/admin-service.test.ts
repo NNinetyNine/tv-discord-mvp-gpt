@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import sharp from "sharp";
 
 import { AdminService } from "./admin-service.ts";
 import { PACK_DRAFT_TYPE } from "./admin-types.ts";
@@ -14,6 +15,17 @@ async function createService(repositoryRoot = resolve(".")) {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "visionx-admin-service-test-"));
   cleanup.push(workspaceRoot);
   return AdminService.create({ repositoryRoot, workspaceRoot });
+}
+
+async function mutableRepository(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "visionx-admin-registry-source-"));
+  cleanup.push(root);
+  await Promise.all([
+    cp(resolve("definitions"), join(root, "definitions"), { recursive: true }),
+    cp(resolve("config"), join(root, "config"), { recursive: true }),
+    mkdir(join(root, "assets"), { recursive: true }),
+  ]);
+  return root;
 }
 
 function sha256(bytes: Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
@@ -49,6 +61,22 @@ describe("AdminService", () => {
   ])("searches Assets by %s", async (query, expectedId) => {
     const result = (await createService()).searchAssets({ query, limit: 100 });
     expect(result.assets.some((asset) => asset.id === expectedId)).toBe(true);
+  });
+
+  it("matches every Registry search token across canonical identity, currency, channel, and Pack context", async () => {
+    const service = await createService();
+    expect(service.searchAssets({ query: "Apple stocks", limit: 100 }).assets.map((asset) => asset.id)).toContain("aapl");
+    expect(service.searchAssets({ query: "Bitcoin crypto", limit: 100 }).assets.map((asset) => asset.id)).toContain("btc");
+    expect(service.searchAssets({ query: "Apple crypto", limit: 100 }).assets).toEqual([]);
+  });
+
+  it("paginates one deterministic Registry search without overlapping Assets", async () => {
+    const service = await createService();
+    const first = service.searchAssets({ query: "stocks", offset: 0, limit: 3 });
+    const second = service.searchAssets({ query: "stocks", offset: 3, limit: 3 });
+    expect(first.total).toBeGreaterThan(3);
+    expect(new Set([...first.assets, ...second.assets].map((asset) => asset.id)).size).toBe(6);
+    expect(first.assets.map((asset) => asset.id)).toEqual([...first.assets.map((asset) => asset.id)].sort((a, b) => a.localeCompare(b, "en")));
   });
 
   it("returns Assets in stable id order", async () => {
@@ -90,6 +118,93 @@ describe("AdminService", () => {
   it("returns typed unknown Asset failure", async () => {
     const service = await createService();
     expect(() => service.getAsset("missing")).toThrowError(expect.objectContaining({ code: "asset_not_found", status: 404 }));
+  });
+
+  it("prepares and applies governed Registry add and metadata updates without changing Pack membership", async () => {
+    const root = await mutableRepository();
+    const service = await createService(root);
+    const added = await service.prepareRegistryAssetChange({
+      operation: "add",
+      asset: {
+        id: "qa_asset",
+        displayName: "QA Asset",
+        tradingViewSymbol: "NASDAQ:QA",
+        currency: "USD",
+        channel: "stocks",
+      },
+    });
+    expect(added).toMatchObject({
+      operation: "add",
+      asset: { id: "qa_asset", displayName: "QA Asset", packIds: [] },
+      effects: { registryChanged: true, packMembershipChanged: false, logoChanged: false, discordContacted: false },
+    });
+    await service.applyPreparedRegistryAssetChange(added.changeId, "APPLY REGISTRY ASSET CHANGE");
+    expect(service.getAsset("qa_asset")).toMatchObject({
+      tradingViewSymbol: "NASDAQ:QA",
+      currency: "USD",
+      logicalChannel: "stocks",
+      packIds: [],
+    });
+
+    const updated = await service.prepareRegistryAssetChange({
+      operation: "update",
+      asset: {
+        id: "qa_asset",
+        displayName: "QA Asset Renamed",
+        tradingViewSymbol: "NYSE:QA",
+        currency: "CAD",
+        channel: "crypto",
+      },
+    });
+    await service.applyPreparedRegistryAssetChange(updated.changeId, "APPLY REGISTRY ASSET CHANGE");
+    expect(service.getAsset("qa_asset")).toMatchObject({
+      displayName: "QA Asset Renamed",
+      tradingViewSymbol: "NYSE:QA",
+      currency: "CAD",
+      logicalChannel: "crypto",
+      packIds: [],
+    });
+  });
+
+  it("stores canonical Registry logos with exact-current hash protection", async () => {
+    const root = await mutableRepository();
+    const service = await createService(root);
+    const bytes = await sharp({
+      create: { width: 96, height: 96, channels: 4, background: { r: 20, g: 40, b: 60, alpha: 1 } },
+    }).png().toBuffer();
+    const competingBytes = await sharp({
+      create: { width: 96, height: 96, channels: 4, background: { r: 60, g: 40, b: 20, alpha: 1 } },
+    }).png().toBuffer();
+    expect(await service.inspectRegistryAssetLogo("btc")).toMatchObject({ exists: false });
+    const competing = await Promise.allSettled([
+      service.storeRegistryAssetLogo("btc", bytes, null, "STORE REGISTRY ASSET LOGO"),
+      service.storeRegistryAssetLogo("btc", competingBytes, null, "STORE REGISTRY ASSET LOGO"),
+    ]);
+    expect(competing.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(competing.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(competing.find((result) => result.status === "rejected")).toMatchObject({ reason: { code: "stale_asset_state" } });
+    const status = await service.inspectRegistryAssetLogo("btc") as any;
+    expect(status).toMatchObject({ exists: true, evidence: { width: 96, height: 96 } });
+    await service.removeRegistryAssetLogo("btc", status.evidence.sha256, "REMOVE REGISTRY ASSET LOGO");
+    expect(await service.inspectRegistryAssetLogo("btc")).toMatchObject({ exists: false });
+  });
+
+  it("blocks retirement while Pack or Thread ownership remains and retires an unowned Asset from a current preview", async () => {
+    const root = await mutableRepository();
+    const service = await createService(root);
+    const blocked = await service.previewRegistryAssetRetirement("btc");
+    expect(blocked.blockingPackIds).toContain("crypto");
+    await expect(service.retireRegistryAsset("btc", blocked.previewId, "RETIRE BTC")).rejects.toMatchObject({ code: "stale_asset_state" });
+
+    const added = await service.prepareRegistryAssetChange({
+      operation: "add",
+      asset: { id: "retire_me", displayName: "Retire Me", tradingViewSymbol: "NASDAQ:RETIRE", currency: "USD", channel: "stocks" },
+    });
+    await service.applyPreparedRegistryAssetChange(added.changeId, "APPLY REGISTRY ASSET CHANGE");
+    const preview = await service.previewRegistryAssetRetirement("retire_me");
+    expect(preview).toMatchObject({ blockingPackIds: [], blockingThreadRoutes: [] });
+    await service.retireRegistryAsset("retire_me", preview.previewId, "RETIRE RETIRE_ME");
+    expect(() => service.getAsset("retire_me")).toThrowError(expect.objectContaining({ code: "asset_not_found" }));
   });
 
   it("preserves exact canonical Pack order", async () => {

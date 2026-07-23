@@ -146,7 +146,7 @@
           <label><span>PACK ASSET</span><select id="thread-asset"><option value="">SELECT ASSET</option></select></label>
           <div class="derived-channel"><span>CURRENT BINDING</span><strong id="thread-current-id">UNBOUND</strong></div>
           <label><span>EXISTING OR REPLACEMENT THREAD ID</span><input id="thread-id" inputmode="numeric" autocomplete="off" maxlength="20" pattern="[0-9]{17,20}" placeholder="123456789012345678"></label>
-          <button id="thread-inspect-binding" class="outline-action" type="button" disabled>INSPECT CURRENT</button>
+          <button id="thread-inspect-binding" class="outline-action" type="button" disabled>VERIFY CURRENT BINDING</button>
           <button id="thread-adopt-button" class="primary-action" type="button" disabled>INSPECT &amp; ADOPT</button>
           <button id="thread-remove-binding" class="danger-action" type="button" disabled>REMOVE BINDING</button>
         </div>
@@ -161,20 +161,20 @@
           <div><p class="micro-label">NEW FORUM POST</p><h2 id="thread-provisioning-heading">CREATE NEW FORUM POST</h2></div>
           <span class="context-fact">EXPLICIT CONFIRMATION REQUIRED</span>
         </header>
-        <p class="window-help">Use this only when the Asset has no existing forum post. VisionX loads the forum first so optional tags are current, then creates one post from the exact title and starter logo and records its Thread ID. A forum with no tags is valid. Transparent and rectangular PNGs are supported.</p>
+        <p class="window-help">Use this only when the Asset has no existing forum post. VisionX loads the forum first so optional tags are current, verifies the Asset’s canonical Registry logo, then creates one post from the exact title and that logo and records its Thread ID. A forum with no tags is valid. Manage or replace the logo in Registry rather than uploading a separate thread image.</p>
         <div class="thread-provisioning-fields">
           <button id="thread-inspect-forum" class="outline-action" type="button" disabled>LOAD FORUM &amp; OPTIONAL TAGS</button>
           <label><span>EXACT POST TITLE</span><input id="thread-title" autocomplete="off" maxlength="100" placeholder="Akash Network // $AKT"></label>
-          <label class="renderer-file"><span>STARTER LOGO · PNG</span><input id="thread-logo" type="file" accept="image/png"></label>
+          <div class="derived-channel"><span>REGISTRY LOGO</span><strong id="thread-logo-state">NOT YET VERIFIED</strong></div>
           <button id="thread-provision-button" class="primary-action" type="button" disabled>PROVISION POST</button>
         </div>
         <fieldset id="thread-tags" class="thread-tags" disabled>
-          <legend>AVAILABLE FORUM TAGS · SELECT UP TO 5</legend>
+          <legend>UP TO 20 AVAILABLE TAGS · APPLY UP TO 5</legend>
           <p id="thread-tags-empty">INSPECT THE FORUM TO LOAD CURRENT TAGS</p>
         </fieldset>
         <div class="renderer-guidance">
           <span id="thread-provisioning-state">PROVISIONING UNAVAILABLE UNTIL FORUM INSPECTION</span>
-          <span id="thread-logo-state">NO STARTER LOGO STAGED</span>
+          <span>CANONICAL ASSET LOGO · NO SEPARATE THREAD UPLOAD</span>
         </div>
       </section>
 
@@ -216,6 +216,7 @@
           <div><p class="micro-label">PACK BUILDER</p><h1 id="pack-controls-heading">PACK IDENTITY</h1></div>
           <span id="member-count" class="context-fact">0 MEMBERS</span>
         </header>
+        <p class="window-help">Pack ID is the stable internal definition key; Display Name is the operator label; Logical Channel selects an existing configured route. Discord Channel IDs remain owned by channel configuration and are not edited on this page.</p>
         <div class="compact-fields">
           <label><span>PACK ID</span><input id="pack-id" autocomplete="off" maxlength="64" pattern="[a-z0-9][a-z0-9_-]{0,63}" placeholder="forex"></label>
           <label><span>DISPLAY NAME</span><input id="pack-display" autocomplete="off" maxlength="120" placeholder="Forex"></label>
@@ -227,9 +228,13 @@
       <section class="window membership-workspace" aria-labelledby="membership-heading">
         <header class="window-header">
           <div><p class="micro-label">ORDERED ASSET MEMBERSHIP</p><h2 id="membership-heading">MEMBERS</h2></div>
-          <button id="add-member" class="outline-action" type="button">+ ADD ASSET</button>
+          <span class="context-fact">REGISTRY ASSETS ONLY</span>
         </header>
-        <p class="window-help">Choose registered Assets by stable ID. Missing Assets can be completed inline and inherit the selected Pack channel.</p>
+        <p class="window-help">Search the Registry, select an existing Asset, and arrange the Pack order. Asset identity and logos are managed only in Registry.</p>
+        <div class="asset-search-picker">
+          <label><span>FIND REGISTRY ASSET</span><input id="pack-asset-search" type="search" autocomplete="off" placeholder="Display name, TradingView symbol, currency, channel, or ID"></label>
+          <div id="pack-asset-results" class="asset-search-results" hidden></div>
+        </div>
         <ol id="member-list" class="member-list" aria-live="polite"></ol>
         <p id="empty-members" class="empty-state">ADD THE FIRST ASSET TO BEGIN</p>
       </section>
@@ -266,7 +271,12 @@
         </header>
         <p class="window-help">Render a registered ticker at any supported timeframe. This does not change a Pack, stage a publication, create a Release, or contact Discord.</p>
         <div class="renderer-fields">
-          <label><span>REGISTERED TICKER</span><select id="renderer-asset"><option value="">SELECT TICKER</option></select></label>
+          <div class="renderer-asset-search">
+            <label><span>REGISTERED ASSET</span><input id="renderer-asset-search" type="search" autocomplete="off" placeholder="Search all Registry assets"></label>
+            <input id="renderer-asset" type="hidden" value="">
+            <div id="renderer-asset-results" class="asset-search-results" hidden></div>
+            <p id="renderer-selected-asset" class="selected-asset-summary">NO ASSET SELECTED</p>
+          </div>
           <label><span>TIMEFRAME</span><select id="renderer-timeframe"><option value="">SELECT TIMEFRAME</option></select></label>
           <label class="renderer-file"><span>TRADINGVIEW PNG</span><input id="renderer-source" type="file" accept="image/png"></label>
           <button id="render-chart" class="primary-action" type="button" disabled>RENDER CHART</button>
@@ -296,18 +306,89 @@
     <section class="view" data-view-panel="registry" hidden>
       <section class="window registry-window" aria-labelledby="registry-heading">
         <header class="window-header">
-          <div><p class="micro-label">CANONICAL DEFINITIONS</p><h1 id="registry-heading">REGISTRY</h1></div>
-          <span class="context-fact">READ ONLY</span>
+          <div><p class="micro-label">CANONICAL ASSET CUSTODY</p><h1 id="registry-heading">REGISTRY</h1></div>
+          <div class="window-header-actions">
+            <span id="registry-context" class="context-fact">LOADING ASSETS</span>
+            <button id="registry-add-asset" class="primary-action" type="button">ADD ASSET</button>
+          </div>
         </header>
-        <p class="window-help">Registry source is canonical and read-only in this interface.</p>
-        <label class="registry-search"><span>SEARCH ASSETS</span><input id="registry-search" type="search" placeholder="ID, display, or TradingView token"></label>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>ID</th><th>DISPLAY</th><th>TRADINGVIEW</th><th>CURRENCY</th><th>CHANNEL</th></tr></thead>
-            <tbody id="registry-body"></tbody>
-          </table>
+        <p class="window-help">Registry owns the stable Asset ID, display name, TradingView identity, currency, logical channel, aliases, and canonical logo. Packs only select these existing Assets.</p>
+        <div class="registry-toolbar">
+          <label class="registry-search"><span>SEARCH ASSETS</span><input id="registry-search" type="search" placeholder="Display name, TradingView, currency, channel, Pack, alias, or ID"></label>
+          <button id="registry-refresh" class="outline-action" type="button">REFRESH CANONICAL STATE</button>
+        </div>
+        <div class="registry-layout">
+          <div class="registry-results">
+            <div class="table-wrap registry-table-wrap">
+              <table>
+                <thead><tr><th>DISPLAY NAME</th><th>TRADINGVIEW</th><th>CURRENCY</th><th>CHANNEL</th><th>PACKS</th><th>ID</th><th>ACTION</th></tr></thead>
+                <tbody id="registry-body"></tbody>
+              </table>
+            </div>
+            <div class="registry-pagination" aria-label="Registry search pagination">
+              <button id="registry-previous" class="outline-action compact-action" type="button" disabled>PREVIOUS</button>
+              <span id="registry-page-state">0 RESULTS</span>
+              <button id="registry-next" class="outline-action compact-action" type="button" disabled>NEXT</button>
+            </div>
+          </div>
+          <aside id="registry-inspector" class="registry-inspector" aria-labelledby="registry-inspector-heading">
+            <header>
+              <div><p class="micro-label">ASSET DETAILS</p><h2 id="registry-inspector-heading">SELECT AN ASSET</h2></div>
+              <span id="registry-inspector-state" class="workspace-status pending">NO SELECTION</span>
+            </header>
+            <p id="registry-inspector-guidance">Choose MANAGE beside a current result to verify its exact Asset ID and inspect canonical metadata.</p>
+            <div id="registry-logo-card" class="registry-logo-card" hidden>
+              <img id="registry-logo-image" alt="" hidden>
+              <div><strong id="registry-logo-state">NO CANONICAL LOGO</strong><span id="registry-logo-evidence">PNG optional until a downstream workflow requires it.</span></div>
+            </div>
+            <dl id="registry-asset-facts" class="registry-asset-facts" hidden></dl>
+            <div id="registry-primary-controls" class="registry-management-controls" hidden>
+              <button id="registry-edit-asset" class="primary-action" type="button">EDIT METADATA</button>
+              <label class="registry-logo-upload"><span>REPLACE CANONICAL LOGO</span><input id="registry-logo-input" type="file" accept="image/png"></label>
+              <button id="registry-remove-logo" class="outline-action" type="button" hidden>REMOVE LOGO</button>
+              <button id="registry-retire-asset" class="danger-action" type="button">RETIRE ASSET</button>
+            </div>
+            <details id="registry-workflow-actions" class="technical-details" hidden>
+              <summary>OPEN IN ANOTHER WORKSPACE</summary>
+              <div class="registry-management-controls">
+                <label id="registry-pack-choice-label" hidden><span>PACK CONTEXT</span><select id="registry-pack-choice"></select></label>
+                <button id="registry-use-in-pack" class="outline-action" type="button">USE IN NEW PACK</button>
+                <button id="registry-open-render" class="outline-action" type="button">OPEN IN RENDER</button>
+                <button id="registry-open-threads" class="outline-action" type="button">MANAGE THREAD BINDING</button>
+              </div>
+            </details>
+            <p class="registry-non-effect">The internal ID is required: Pack memberships, revisions, archive filenames, logos, and thread routes reference it. It is immutable after creation.</p>
+          </aside>
         </div>
       </section>
+
+      <aside id="registry-editor" class="registry-editor" hidden aria-labelledby="registry-editor-heading">
+        <header class="window-header">
+          <div><p class="micro-label">GOVERNED REGISTRY CHANGE</p><h2 id="registry-editor-heading">ADD ASSET</h2></div>
+          <button id="registry-editor-close" class="icon-action" type="button" aria-label="Close Registry editor">×</button>
+        </header>
+        <p id="registry-editor-guidance" class="window-help">Enter canonical metadata, review the exact source change, then apply it explicitly.</p>
+        <div class="registry-editor-fields">
+          <label><span>DISPLAY NAME</span><input id="registry-field-display" maxlength="120" autocomplete="off"></label>
+          <label><span>TRADINGVIEW SYMBOL</span><input id="registry-field-tradingview" maxlength="96" autocomplete="off" placeholder="NASDAQ:AAPL"></label>
+          <label><span>CURRENCY</span><input id="registry-field-currency" maxlength="16" autocomplete="off" placeholder="USD"></label>
+          <label><span>ASSIGNED CHANNEL</span><select id="registry-field-channel"><option value="">SELECT CHANNEL</option></select></label>
+          <details class="technical-details">
+            <summary>INTERNAL ID</summary>
+            <label><span>STABLE ASSET ID</span><input id="registry-field-id" maxlength="64" autocomplete="off" placeholder="aapl"></label>
+            <p class="window-help">Generated from the TradingView symbol when possible. It becomes immutable after the Asset is created.</p>
+          </details>
+        </div>
+        <section id="registry-change-preview" class="registry-change-preview" hidden>
+          <h3 id="registry-change-title">REVIEW CHANGE</h3>
+          <div id="registry-change-summary"></div>
+          <details class="technical-details"><summary>TECHNICAL EVIDENCE</summary><pre id="registry-change-technical"></pre></details>
+        </section>
+        <div class="registry-editor-actions">
+          <button id="registry-review-change" class="outline-action" type="button">REVIEW CHANGE</button>
+          <button id="registry-apply-change" class="primary-action" type="button" disabled>APPLY REGISTRY CHANGE</button>
+        </div>
+      </aside>
     </section>
   </main>
 

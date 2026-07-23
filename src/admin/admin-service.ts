@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,6 +10,13 @@ import {
   type ValidatedAssetLogo,
 } from "../assets/asset-logo.ts";
 import {
+  AssetLogoFileError,
+  deleteCanonicalAssetLogo,
+  inspectCanonicalAssetLogo,
+  readCanonicalAssetLogo,
+  writeCanonicalAssetLogo,
+} from "../assets/asset-logo-file.ts";
+import {
   prepareCreatePackWithMissingAssets,
   serializeCreatePackPreview,
   serializeCreatePackWithMissingAssetsInput,
@@ -18,7 +25,7 @@ import {
 import { applyCreatePackWithMissingAssetsFile } from "../application/create-pack-with-missing-assets-file.ts";
 import type { Pack } from "../packs/packs.ts";
 import { buildPacks } from "../packs/packs.ts";
-import { buildRegistry } from "../registry/registry.ts";
+import { buildRegistry, retireAsset, RegistryError } from "../registry/registry.ts";
 import { createResolver } from "../resolver/index.ts";
 import { auditAssetMarketIdentity, type AssetMarketIdentityAudit } from "../registry/asset-market-identity-audit.ts";
 import { computeAssetRegistrationRegistryFingerprint } from "../registry/asset-registration-proposal.ts";
@@ -217,6 +224,39 @@ export interface AdminAssetSearchResult {
   readonly limit: number;
   readonly total: number;
   readonly assets: readonly AdminAssetSummary[];
+}
+
+export interface AdminRegistryAssetChangePreview {
+  readonly schemaVersion: 1;
+  readonly changeId: string;
+  readonly operation: "add" | "update";
+  readonly asset: AdminAssetSummary;
+  readonly previous: AdminAssetSummary | null;
+  readonly sourceState: {
+    readonly registrySha256: string;
+    readonly packsSha256: string;
+    readonly channelsSha256: string;
+  };
+  readonly effects: {
+    readonly registryChanged: true;
+    readonly packMembershipChanged: false;
+    readonly logoChanged: false;
+    readonly discordContacted: false;
+  };
+}
+
+export interface AdminRegistryAssetRetirementPreview {
+  readonly schemaVersion: 1;
+  readonly operation: "retire";
+  readonly previewId: string;
+  readonly asset: AdminAssetSummary;
+  readonly blockingPackIds: readonly string[];
+  readonly blockingThreadRoutes: readonly string[];
+  readonly sourceState: {
+    readonly registrySha256: string;
+    readonly packsSha256: string;
+    readonly threadBindingsSha256: string;
+  };
 }
 
 export interface AdminPackSummary {
@@ -542,6 +582,7 @@ export class AdminService {
   #state: LiveState;
   #packMutationLock: Promise<void> = Promise.resolve();
   #threadMutationLock: Promise<void> = Promise.resolve();
+  #registryLogoMutationLock: Promise<void> = Promise.resolve();
   readonly #openDiscordForumSession?: AdminDiscordForumSessionFactory;
   readonly #openDiscordForumProvisioningSession?: AdminDiscordForumProvisioningSessionFactory;
 
@@ -870,6 +911,9 @@ export class AdminService {
         { sessionClosed },
       );
     }
+    if (facts.availableTags.length > 20) {
+      throw new AdminError("thread_forum_inspection_failed", "Discord forum inspection returned more than 20 available tags.", 502);
+    }
     const seen = new Set<string>();
     for (const tag of facts.availableTags) {
       if (!/^[0-9]{17,20}$/u.test(tag.id) || tag.name.length === 0 || seen.has(tag.id)) {
@@ -926,6 +970,24 @@ export class AdminService {
       evidence: stored.evidence,
       effects: Object.freeze({ discordContacted: false, repositoryChanged: false }),
     });
+  }
+
+  async stageThreadProvisioningCanonicalLogo(input: {
+    readonly packId: string;
+    readonly assetId: string;
+  }): Promise<Readonly<Record<string, unknown>>> {
+    const bytes = await this.readRegistryAssetLogo(input.assetId);
+    const staged = await this.stageThreadProvisioningLogo({ ...input, bytes });
+    return Object.freeze({ ...staged, source: "canonical_registry_logo" });
+  }
+
+  async #withRegistryLogoMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const prior = this.#registryLogoMutationLock;
+    let release!: () => void;
+    this.#registryLogoMutationLock = new Promise<void>((resolvePromise) => { release = resolvePromise; });
+    await prior;
+    try { return await operation(); }
+    finally { release(); }
   }
 
   async #withThreadMutationLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -2266,8 +2328,44 @@ export class AdminService {
 
   async previewPackCreation(
     value: unknown,
+    registryOnly = false,
   ): Promise<CreatePackPreview> {
     await this.refresh();
+
+    if (registryOnly) {
+      if (!isRecord(value) || !Array.isArray(value.members)) {
+        throw new AdminError("invalid_pack_builder_input", "Registry-owned Pack input must contain a members array.");
+      }
+      const members: Array<Record<string, unknown>> = [];
+      const memberIds: string[] = [];
+      for (const member of value.members) {
+        if (!isRecord(member) || typeof member.id !== "string") {
+          throw new AdminError(
+            "invalid_pack_builder_input",
+            "Pack members must identify one current Registry Asset ID.",
+          );
+        }
+        members.push(member);
+        memberIds.push(member.id);
+      }
+      const missingAssetIds = memberIds.filter((assetId) => !this.#state.byAssetId.has(assetId));
+      if (missingAssetIds.length > 0) {
+        throw new AdminError(
+          "asset_not_found",
+          `Pack members must already exist in Registry: ${missingAssetIds.join(", ")}.`,
+          400,
+          { assetIds: Object.freeze(missingAssetIds) },
+        );
+      }
+      for (const member of members) {
+        if (Object.keys(member).length !== 1) {
+          throw new AdminError(
+            "invalid_pack_builder_input",
+            "Pack members must contain only one current Registry Asset ID. Manage identity and logos in Registry.",
+          );
+        }
+      }
+    }
 
     const prepareCurrent = (
       assetLogos?: ReadonlyMap<
@@ -2403,6 +2501,10 @@ export class AdminService {
     );
 
     return prepared.preview;
+  }
+
+  previewRegistryPackCreation(value: unknown): Promise<CreatePackPreview> {
+    return this.previewPackCreation(value, true);
   }
 
   async createPackFromPreview(
@@ -2587,10 +2689,25 @@ export class AdminService {
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_ASSET_SEARCH_LIMIT) {
       throw new AdminError("invalid_request", `offset must be nonnegative and limit must be between 1 and ${MAX_ASSET_SEARCH_LIMIT}.`);
     }
-    const needle = query.toLocaleLowerCase("en-US");
+    const needles = query
+      .toLocaleLowerCase("en-US")
+      .split(/\s+/u)
+      .filter((token) => token.length > 0);
     const matching = [...this.#state.assets]
-      .filter((asset) => needle.length === 0 || [asset.id, asset.display, asset.tradingView, asset.channel]
-        .some((value) => value.toLocaleLowerCase("en-US").includes(needle)))
+      .filter((asset) => {
+        const packIds = this.#state.assetPackIds.get(asset.id) ?? [];
+        const searchable = [
+          asset.id,
+          asset.display,
+          asset.tradingView,
+          asset.channel,
+          asset.currency ?? "",
+          ...(asset.tradingViewAliases ?? []),
+          ...packIds,
+          ...packIds.map((packId) => this.#state.byPackId.get(packId)?.display ?? ""),
+        ].map((value) => value.toLocaleLowerCase("en-US"));
+        return needles.every((needle) => searchable.some((value) => value.includes(needle)));
+      })
       .sort((a, b) => a.id.localeCompare(b.id, "en"));
     const assets = matching.slice(offset, offset + limit).map((asset) => assetSummary(asset, this.#state.assetPackIds.get(asset.id) ?? []));
     return Object.freeze({
@@ -2607,6 +2724,285 @@ export class AdminService {
     const asset = this.#state.byAssetId.get(assetId);
     if (asset === undefined) throw new AdminError("asset_not_found", `Asset ${assetId} was not found.`, 404, { assetId });
     return assetSummary(asset, this.#state.assetPackIds.get(asset.id) ?? []);
+  }
+
+
+  registryOptions(): Readonly<Record<string, unknown>> {
+    return Object.freeze({
+      schemaVersion: 1,
+      logicalChannels: Object.freeze(Object.entries(this.#state.rawChannels)
+        .sort(([a], [b]) => a.localeCompare(b, "en"))
+        .map(([logicalChannel, discordChannelId]) => Object.freeze({
+          logicalChannel,
+          discordChannelId: String(discordChannelId),
+        }))),
+    });
+  }
+
+  async prepareRegistryAssetChange(value: unknown): Promise<AdminRegistryAssetChangePreview> {
+    if (!isRecord(value)) throw new AdminError("invalid_request", "Registry Asset change must be an object.");
+    const allowed = new Set(["operation", "asset"]);
+    const unknown = Object.keys(value).filter((key) => !allowed.has(key));
+    if (unknown.length > 0) throw new AdminError("invalid_request", `Registry Asset change contains unknown fields: ${unknown.join(", ")}.`);
+    if (value.operation !== "add" && value.operation !== "update") {
+      throw new AdminError("invalid_request", "Registry Asset change operation must be add or update.");
+    }
+    if (!isRecord(value.asset)) throw new AdminError("invalid_request", "Registry Asset change asset must be an object.");
+    const assetFields = new Set(["id", "displayName", "tradingViewSymbol", "currency", "channel"]);
+    const unknownAsset = Object.keys(value.asset).filter((key) => !assetFields.has(key));
+    if (unknownAsset.length > 0) throw new AdminError("invalid_request", `Registry Asset contains unknown fields: ${unknownAsset.join(", ")}.`);
+    const { id, displayName, tradingViewSymbol, currency, channel } = value.asset;
+    if (![id, displayName, tradingViewSymbol, currency, channel].every((entry) => typeof entry === "string" && entry.trim() === entry && entry.length > 0)) {
+      throw new AdminError("invalid_request", "Asset ID, display name, TradingView symbol, currency, and channel are required exact strings.");
+    }
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(id as string)) {
+      throw new AdminError("invalid_request", "Asset ID must be a stable lowercase slug of 1 to 64 characters.");
+    }
+    const parts = (tradingViewSymbol as string).split(":");
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      throw new AdminError("invalid_request", "TradingView symbol must be a qualified MARKET:SYMBOL identity.");
+    }
+    const previous = this.#state.byAssetId.get(id as string);
+    if (value.operation === "add" && previous !== undefined) {
+      throw new AdminError("asset_id_already_exists", `Asset ${id as string} already exists.`, 409);
+    }
+    if (value.operation === "update" && previous === undefined) {
+      throw new AdminError("asset_not_found", `Asset ${id as string} was not found.`, 404);
+    }
+    const now = new Date().toISOString();
+    const changeId = `ui-${(id as string).slice(0, 35)}-${randomBytes(6).toString("hex")}`;
+    const input = {
+      schemaVersion: 2,
+      operation: value.operation === "add" ? "add" : "update_identity",
+      asset: {
+        id,
+        displayName,
+        symbol: parts[1],
+        market: parts[0],
+        tradingViewSymbol,
+        currency,
+        channel,
+      },
+      targetPackIds: [],
+      decision: {
+        reviewerId: "visionx-local-operator",
+        decidedAt: now,
+        referenceId: `visionx.registry.${changeId}`,
+        notes: "Prepared through the local Registry management interface.",
+      },
+      ...(previous === undefined ? {} : {
+        expectedCurrent: {
+          display: previous.display,
+          tradingView: previous.tradingView,
+          channel: previous.channel,
+        },
+      }),
+    };
+    const validated = validateAssetRegistrationInput(input, this.#state.rawChannels);
+    if (!validated.ok) this.#assetFailure(validated.reason, validated.detail, "proposal");
+    const inputBytes = Buffer.from(`${JSON.stringify(validated.input, null, 2)}\n`, "utf8");
+    await this.assetRegistrations.writeArtifact(changeId, "registration-input.json", inputBytes);
+    const proposalResult = await proposeAssetRegistrationFile({
+      inputPath: await this.assetRegistrations.artifactPath(changeId, "registration-input.json", false),
+      outputPath: await this.assetRegistrations.artifactPath(changeId, "asset-proposal.json"),
+      ...this.#assetRegistrationCanonicalPaths(),
+    });
+    if (!proposalResult.ok) this.#assetFailure(proposalResult.reason, proposalResult.detail, "proposal");
+    const proposalBytes = await this.assetRegistrations.readArtifact(changeId, "asset-proposal.json");
+    await this.storeAssetRegistrationPlanningAuthorization(changeId, {
+      schemaVersion: 1,
+      decision: "approved",
+      proposalSha256: sha256(proposalBytes),
+      reviewerId: "visionx-local-operator",
+      decidedAt: now,
+      referenceId: `visionx.registry.${changeId}.plan`,
+      packPlacements: [],
+    });
+    await this.generateAssetRegistrationPlan(changeId);
+    await this.generateAssetRegistrationSourceChange(changeId);
+    await this.reviewAssetRegistration(changeId, {
+      schemaVersion: 1,
+      decision: "approved",
+      reviewerId: "visionx-local-operator",
+      decidedAt: now,
+      referenceId: `visionx.registry.${changeId}.review`,
+    });
+    const [reviewBytes, patchBytes, sourceChangeBytes] = await Promise.all([
+      this.assetRegistrations.readArtifact(changeId, "asset-source-review.json"),
+      this.assetRegistrations.readArtifact(changeId, "asset-source.patch"),
+      this.assetRegistrations.readArtifact(changeId, "asset-source-change.json"),
+    ]);
+    await this.storeAssetRegistrationApplicationAuthorization(changeId, {
+      schemaVersion: 1,
+      decision: "approved",
+      sourceChangeReviewSha256: sha256(reviewBytes),
+      sourcePatchSha256: sha256(patchBytes),
+      sourceChangeReceiptSha256: sha256(sourceChangeBytes),
+      reviewerId: "visionx-local-operator",
+      decidedAt: now,
+      referenceId: `visionx.registry.${changeId}.apply`,
+    });
+    const proposedAsset: Asset = Object.freeze({
+      id: id as string,
+      display: displayName as string,
+      tradingView: tradingViewSymbol as string,
+      currency: currency as string,
+      channel: channel as string,
+      ...(previous?.tradingViewAliases === undefined ? {} : { tradingViewAliases: previous.tradingViewAliases }),
+    });
+    return Object.freeze({
+      schemaVersion: 1,
+      changeId,
+      operation: value.operation,
+      asset: assetSummary(proposedAsset, this.#state.assetPackIds.get(id as string) ?? []),
+      previous: previous === undefined ? null : assetSummary(previous, this.#state.assetPackIds.get(previous.id) ?? []),
+      sourceState: Object.freeze({
+        registrySha256: this.#state.registryFile.sha256,
+        packsSha256: this.#state.packsFile.sha256,
+        channelsSha256: this.#state.channelsFile.sha256,
+      }),
+      effects: Object.freeze({
+        registryChanged: true,
+        packMembershipChanged: false,
+        logoChanged: false,
+        discordContacted: false,
+      }),
+    });
+  }
+
+  async applyPreparedRegistryAssetChange(changeId: string, confirmation: unknown): Promise<Readonly<Record<string, unknown>>> {
+    if (confirmation !== "APPLY REGISTRY ASSET CHANGE") {
+      throw new AdminError("application_confirmation_invalid", "Confirmation must equal APPLY REGISTRY ASSET CHANGE exactly.");
+    }
+    return this.applyAssetRegistration(changeId, "APPLY ASSET SOURCE CHANGE");
+  }
+
+  async inspectRegistryAssetLogo(assetId: string): Promise<Readonly<Record<string, unknown>>> {
+    this.getAsset(assetId);
+    try {
+      const status = await inspectCanonicalAssetLogo(this.repositoryRoot, assetId);
+      return Object.freeze({
+        schemaVersion: 1,
+        assetId,
+        exists: status.exists,
+        evidence: status.evidence,
+        url: status.exists ? `/api/v1/assets/${encodeURIComponent(assetId)}/logo` : null,
+      });
+    } catch (error) {
+      if (error instanceof AssetLogoFileError && error.code === "logo_directory_unsafe") {
+        return Object.freeze({ schemaVersion: 1, assetId, exists: false, evidence: null, url: null });
+      }
+      throw this.#mapAssetLogoError(error);
+    }
+  }
+
+  #mapAssetLogoError(error: unknown): AdminError {
+    if (!(error instanceof AssetLogoFileError)) {
+      return new AdminError("internal_error", error instanceof Error ? error.message : String(error), 500);
+    }
+    const code = error.code === "logo_not_found" ? "asset_logo_not_found"
+      : error.code === "invalid_asset_logo" ? "invalid_asset_logo"
+      : error.code === "logo_state_conflict" ? "stale_asset_state"
+      : error.code === "invalid_asset_id" ? "invalid_request"
+      : "source_write_failed";
+    const status = code === "asset_logo_not_found" ? 404 : code === "stale_asset_state" ? 409 : code === "source_write_failed" ? 500 : 400;
+    return new AdminError(code as never, error.message, status);
+  }
+
+  async readRegistryAssetLogo(assetId: string): Promise<Buffer> {
+    this.getAsset(assetId);
+    try {
+      return (await readCanonicalAssetLogo(this.repositoryRoot, assetId)).bytes;
+    } catch (error) {
+      throw this.#mapAssetLogoError(error);
+    }
+  }
+
+  async storeRegistryAssetLogo(assetId: string, bytes: Buffer, expectedCurrentSha256: string | null, confirmation: unknown): Promise<Readonly<Record<string, unknown>>> {
+    if (confirmation !== "STORE REGISTRY ASSET LOGO") {
+      throw new AdminError("application_confirmation_invalid", "Confirmation must equal STORE REGISTRY ASSET LOGO exactly.");
+    }
+    return this.#withRegistryLogoMutationLock(async () => {
+      await this.refresh();
+      this.getAsset(assetId);
+      try {
+        const logo = await writeCanonicalAssetLogo(this.repositoryRoot, assetId, bytes, expectedCurrentSha256);
+        return Object.freeze({ schemaVersion: 1, assetId, exists: true, evidence: logo.evidence, url: `/api/v1/assets/${encodeURIComponent(assetId)}/logo` });
+      } catch (error) {
+        throw this.#mapAssetLogoError(error);
+      }
+    });
+  }
+
+  async removeRegistryAssetLogo(assetId: string, expectedCurrentSha256: string, confirmation: unknown): Promise<Readonly<Record<string, unknown>>> {
+    if (confirmation !== "REMOVE REGISTRY ASSET LOGO") {
+      throw new AdminError("application_confirmation_invalid", "Confirmation must equal REMOVE REGISTRY ASSET LOGO exactly.");
+    }
+    return this.#withRegistryLogoMutationLock(async () => {
+      await this.refresh();
+      this.getAsset(assetId);
+      try {
+        await deleteCanonicalAssetLogo(this.repositoryRoot, assetId, expectedCurrentSha256);
+        return Object.freeze({ schemaVersion: 1, assetId, exists: false, evidence: null, url: null, removed: true });
+      } catch (error) {
+        throw this.#mapAssetLogoError(error);
+      }
+    });
+  }
+
+  async previewRegistryAssetRetirement(assetId: string): Promise<AdminRegistryAssetRetirementPreview> {
+    const asset = this.getAsset(assetId);
+    const bindingsBytes = await readFile(join(this.repositoryRoot, THREAD_BINDINGS_RELATIVE_PATH));
+    let bindings: AssetThreadBindings;
+    try {
+      bindings = parseAssetThreadBindings(JSON.parse(bindingsBytes.toString("utf8")) as unknown);
+    } catch (error) {
+      throw new AdminError("invalid_thread_bindings", error instanceof Error ? error.message : String(error));
+    }
+    const blockingThreadRoutes = Object.entries(bindings.packs)
+      .flatMap(([packId, assets]) => Object.prototype.hasOwnProperty.call(assets, assetId) ? [`${packId}/${assetId}`] : []);
+    const payload = Object.freeze({
+      schemaVersion: 1,
+      operation: "retire" as const,
+      asset,
+      blockingPackIds: asset.packIds,
+      blockingThreadRoutes: Object.freeze(blockingThreadRoutes),
+      sourceState: Object.freeze({
+        registrySha256: this.#state.registryFile.sha256,
+        packsSha256: this.#state.packsFile.sha256,
+        threadBindingsSha256: sha256(bindingsBytes),
+      }),
+    });
+    return Object.freeze({ ...payload, previewId: sha256(Buffer.from(JSON.stringify(payload), "utf8")) });
+  }
+
+  async retireRegistryAsset(assetId: string, previewId: unknown, confirmation: unknown): Promise<Readonly<Record<string, unknown>>> {
+    const preview = await this.previewRegistryAssetRetirement(assetId);
+    if (preview.previewId !== previewId) {
+      throw new AdminError("stale_asset_state", "Registry, Pack membership, or Thread routing changed after the retirement preview.", 409);
+    }
+    if (preview.blockingPackIds.length > 0 || preview.blockingThreadRoutes.length > 0) {
+      throw new AdminError("stale_asset_state", "Remove the Asset from every Pack and local Thread route before retiring it.", 409, {
+        packIds: preview.blockingPackIds,
+        threadRoutes: preview.blockingThreadRoutes,
+      });
+    }
+    if (confirmation !== `RETIRE ${assetId.toUpperCase()}`) {
+      throw new AdminError("application_confirmation_invalid", `Confirmation must equal RETIRE ${assetId.toUpperCase()} exactly.`);
+    }
+    try {
+      retireAsset(
+        join(this.repositoryRoot, REGISTRY_RELATIVE_PATH),
+        join(this.repositoryRoot, CHANNELS_RELATIVE_PATH),
+        assetId,
+        new Set(this.#state.packs.flatMap((pack) => pack.assets)),
+      );
+    } catch (error) {
+      if (error instanceof RegistryError) throw new AdminError("stale_asset_state", error.message, 409);
+      throw error;
+    }
+    await this.refresh();
+    return Object.freeze({ schemaVersion: 1, assetId, retired: true, canonicalLogoRetained: true, status: this.status() });
   }
 
   listPacks(): readonly AdminPackSummary[] {
