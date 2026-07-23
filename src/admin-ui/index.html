@@ -276,6 +276,7 @@
             <input id="renderer-asset" type="hidden" value="">
             <div id="renderer-asset-results" class="asset-search-results" hidden></div>
             <p id="renderer-selected-asset" class="selected-asset-summary">NO ASSET SELECTED</p>
+            <button id="renderer-open-registry" class="outline-action compact-action" type="button" hidden>OPEN IN REGISTRY</button>
           </div>
           <label><span>TIMEFRAME</span><select id="renderer-timeframe"><option value="">SELECT TIMEFRAME</option></select></label>
           <label class="renderer-file"><span>TRADINGVIEW PNG</span><input id="renderer-source" type="file" accept="image/png"></label>
@@ -361,36 +362,38 @@
           </aside>
         </div>
       </section>
-
-      <aside id="registry-editor" class="registry-editor" hidden aria-labelledby="registry-editor-heading">
-        <header class="window-header">
-          <div><p class="micro-label">GOVERNED REGISTRY CHANGE</p><h2 id="registry-editor-heading">ADD ASSET</h2></div>
-          <button id="registry-editor-close" class="icon-action" type="button" aria-label="Close Registry editor">×</button>
-        </header>
-        <p id="registry-editor-guidance" class="window-help">Enter canonical metadata, review the exact source change, then apply it explicitly.</p>
-        <div class="registry-editor-fields">
-          <label><span>DISPLAY NAME</span><input id="registry-field-display" maxlength="120" autocomplete="off"></label>
-          <label><span>TRADINGVIEW SYMBOL</span><input id="registry-field-tradingview" maxlength="96" autocomplete="off" placeholder="NASDAQ:AAPL"></label>
-          <label><span>CURRENCY</span><input id="registry-field-currency" maxlength="16" autocomplete="off" placeholder="USD"></label>
-          <label><span>ASSIGNED CHANNEL</span><select id="registry-field-channel"><option value="">SELECT CHANNEL</option></select></label>
-          <details class="technical-details">
-            <summary>INTERNAL ID</summary>
-            <label><span>STABLE ASSET ID</span><input id="registry-field-id" maxlength="64" autocomplete="off" placeholder="aapl"></label>
-            <p class="window-help">Generated from the TradingView symbol when possible. It becomes immutable after the Asset is created.</p>
-          </details>
-        </div>
-        <section id="registry-change-preview" class="registry-change-preview" hidden>
-          <h3 id="registry-change-title">REVIEW CHANGE</h3>
-          <div id="registry-change-summary"></div>
-          <details class="technical-details"><summary>TECHNICAL EVIDENCE</summary><pre id="registry-change-technical"></pre></details>
-        </section>
-        <div class="registry-editor-actions">
-          <button id="registry-review-change" class="outline-action" type="button">REVIEW CHANGE</button>
-          <button id="registry-apply-change" class="primary-action" type="button" disabled>APPLY REGISTRY CHANGE</button>
-        </div>
-      </aside>
     </section>
   </main>
+
+  <button id="registry-editor-backdrop" class="registry-editor-backdrop" type="button" aria-label="Close Registry editor" hidden></button>
+  <aside id="registry-editor" class="registry-editor" role="dialog" aria-modal="true" aria-labelledby="registry-editor-heading" aria-describedby="registry-editor-guidance" tabindex="-1" hidden>
+    <header class="window-header">
+      <div><p class="micro-label">GOVERNED REGISTRY CHANGE</p><h2 id="registry-editor-heading">ADD ASSET</h2></div>
+      <button id="registry-editor-close" class="icon-action" type="button" aria-label="Close Registry editor">×</button>
+    </header>
+    <p id="registry-editor-guidance" class="window-help">Enter canonical metadata, review the exact source change, then apply it explicitly.</p>
+    <div class="registry-editor-fields">
+      <label><span>DISPLAY NAME</span><input id="registry-field-display" maxlength="120" autocomplete="off"></label>
+      <label><span>TRADINGVIEW SYMBOL</span><input id="registry-field-tradingview" maxlength="96" autocomplete="off" placeholder="NASDAQ:AAPL"></label>
+      <label><span>CURRENCY</span><input id="registry-field-currency" maxlength="16" autocomplete="off" placeholder="USD"></label>
+      <label><span>ASSIGNED CHANNEL</span><select id="registry-field-channel"><option value="">SELECT CHANNEL</option></select></label>
+      <details class="technical-details">
+        <summary>INTERNAL ID</summary>
+        <label><span>STABLE ASSET ID</span><input id="registry-field-id" maxlength="64" autocomplete="off" placeholder="aapl"></label>
+        <p class="window-help">Generated from the TradingView symbol when possible. It becomes immutable after the Asset is created.</p>
+      </details>
+    </div>
+    <section id="registry-change-preview" class="registry-change-preview" hidden>
+      <h3 id="registry-change-title">REVIEW CHANGE</h3>
+      <div id="registry-change-summary"></div>
+      <details class="technical-details"><summary>TECHNICAL EVIDENCE</summary><pre id="registry-change-technical"></pre></details>
+    </section>
+    <div class="registry-editor-actions">
+      <button id="registry-editor-cancel" class="outline-action" type="button">CANCEL</button>
+      <button id="registry-review-change" class="outline-action" type="button">REVIEW CHANGE</button>
+      <button id="registry-apply-change" class="primary-action" type="button" disabled>APPLY REGISTRY CHANGE</button>
+    </div>
+  </aside>
 
   <footer>VISIONX · LOCAL ADMINISTRATION · DISCORD PUBLICATION DISABLED</footer>
 </body>

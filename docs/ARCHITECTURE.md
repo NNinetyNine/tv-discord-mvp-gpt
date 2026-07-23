@@ -234,3 +234,11 @@ rendering, and thread management. The most prominent columns are display name,
 TradingView identity, currency, and logical channel; the immutable ID remains visible
 as the cross-system reference used by Packs, revisions, Archive files, logos, and
 thread bindings.
+
+## Step 537 administration audit
+
+The current Administration ownership and workflow findings are recorded in
+`docs/ADMINISTRATION_ARCHITECTURE_AUDIT.md`. The conservative capability
+inventory is recorded in `docs/EXISTING_FUNCTIONALITY_AUDIT.md`. These documents
+must be consulted before changing Pack, channel, publishing, server-migration,
+or stable Asset-ID architecture.

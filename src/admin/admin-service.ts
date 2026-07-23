@@ -27,7 +27,11 @@ import type { Pack } from "../packs/packs.ts";
 import { buildPacks } from "../packs/packs.ts";
 import { buildRegistry, retireAsset, RegistryError } from "../registry/registry.ts";
 import { createResolver } from "../resolver/index.ts";
-import { auditAssetMarketIdentity, type AssetMarketIdentityAudit } from "../registry/asset-market-identity-audit.ts";
+import {
+  auditAssetMarketIdentity,
+  type AssetMarketIdentityAudit,
+  type MarketIdentityAuditIssue,
+} from "../registry/asset-market-identity-audit.ts";
 import { computeAssetRegistrationRegistryFingerprint } from "../registry/asset-registration-proposal.ts";
 import { validateAssetRegistrationChannel } from "../registry/asset-registration-channel.ts";
 import {
@@ -279,20 +283,37 @@ export interface AdminStandaloneRenderAsset {
   readonly id: string;
   readonly displayName: string;
   readonly tradingViewSymbol: string;
-  readonly currency: string;
+  readonly logicalChannel: string;
+  readonly currency?: string;
+  readonly renderReady: boolean;
+  readonly reconciliationIssues: readonly MarketIdentityAuditIssue[];
 }
 
 export interface AdminStandaloneRenderOptions {
   readonly schemaVersion: 1;
   readonly timeframes: readonly ChartPublicationTimeframe[];
+  /** Every canonical Registry Asset remains discoverable, even when metadata blocks rendering. */
   readonly assets: readonly AdminStandaloneRenderAsset[];
+  readonly renderableAssetCount: number;
+  readonly reconciliationRequiredCount: number;
+  /** Compatibility alias retained for existing clients; equals reconciliationRequiredCount. */
   readonly unavailableAssetCount: number;
+}
+
+export interface AdminStandaloneRenderedAsset {
+  readonly id: string;
+  readonly displayName: string;
+  readonly tradingViewSymbol: string;
+  readonly logicalChannel: string;
+  readonly currency: string;
+  readonly renderReady: true;
+  readonly reconciliationIssues: readonly MarketIdentityAuditIssue[];
 }
 
 export interface AdminStandaloneRenderResult {
   readonly schemaVersion: 1;
   readonly renderId: string;
-  readonly asset: AdminStandaloneRenderAsset;
+  readonly asset: AdminStandaloneRenderedAsset;
   readonly timeframe: ChartPublicationTimeframe;
   readonly dataAsOf: string;
   readonly sourceBasename: string;
@@ -307,7 +328,11 @@ export interface AdminStandaloneRenderResult {
   };
 }
 
-export interface AdminPackWorkspaceAssetState extends AdminStandaloneRenderAsset {
+export interface AdminPackWorkspaceAssetState {
+  readonly id: string;
+  readonly displayName: string;
+  readonly tradingViewSymbol: string;
+  readonly currency: string;
   readonly renderReady: boolean;
   readonly captured: boolean;
   readonly artifactReady: boolean;
@@ -1680,20 +1705,34 @@ export class AdminService {
   }
 
   standaloneRenderOptions(): AdminStandaloneRenderOptions {
-    const assets = this.#state.assets
-      .filter((asset) => asset.currency !== undefined && asset.tradingView.indexOf(":") > 0)
+    const auditByAssetId = new Map(this.#state.audit.assets.map((entry) => [entry.assetId, entry] as const));
+    const assets = [...this.#state.assets]
       .sort((a, b) => a.id.localeCompare(b.id, "en"))
-      .map((asset) => Object.freeze({
-        id: asset.id,
-        displayName: asset.display,
-        tradingViewSymbol: asset.tradingView,
-        currency: asset.currency as string,
-      }));
+      .map((asset) => {
+        const audit = auditByAssetId.get(asset.id);
+        if (audit === undefined) {
+          throw new AdminError("internal_error", `Asset ${asset.id} is missing from the market-identity audit.`, 500);
+        }
+        const renderReady = audit.marketIdentityStatus === "complete" && audit.currencyStatus === "valid";
+        return Object.freeze({
+          id: asset.id,
+          displayName: asset.display,
+          tradingViewSymbol: asset.tradingView,
+          logicalChannel: asset.channel,
+          ...(audit.currency === undefined ? {} : { currency: audit.currency }),
+          renderReady,
+          reconciliationIssues: Object.freeze([...audit.issues]),
+        });
+      });
+    const renderableAssetCount = assets.filter((asset) => asset.renderReady).length;
+    const reconciliationRequiredCount = assets.length - renderableAssetCount;
     return Object.freeze({
       schemaVersion: 1,
       timeframes: Object.freeze([...SUPPORTED_CHART_PUBLICATION_TIMEFRAMES]),
       assets: Object.freeze(assets),
-      unavailableAssetCount: this.#state.assets.length - assets.length,
+      renderableAssetCount,
+      reconciliationRequiredCount,
+      unavailableAssetCount: reconciliationRequiredCount,
     });
   }
 
@@ -1707,10 +1746,18 @@ export class AdminService {
     if (asset === undefined) {
       throw new AdminError("asset_not_found", `Asset ${input.assetId} was not found.`, 404, { assetId: input.assetId });
     }
-    if (asset.currency === undefined || asset.tradingView.indexOf(":") <= 0) {
+    const identityAudit = this.#state.audit.assets.find((entry) => entry.assetId === asset.id);
+    if (
+      identityAudit === undefined ||
+      identityAudit.marketIdentityStatus !== "complete" ||
+      identityAudit.currencyStatus !== "valid" ||
+      identityAudit.currency === undefined
+    ) {
       throw new AdminError(
         "invalid_standalone_render",
         `Asset ${asset.id} needs qualified TradingView identity and canonical currency before rendering.`,
+        400,
+        { assetId: asset.id, reconciliationIssues: identityAudit?.issues ?? [] },
       );
     }
     const timeframe = validateChartPublicationTimeframe(input.timeframe);
@@ -1753,7 +1800,10 @@ export class AdminService {
         id: asset.id,
         displayName: asset.display,
         tradingViewSymbol: asset.tradingView,
-        currency: asset.currency,
+        logicalChannel: asset.channel,
+        currency: identityAudit.currency,
+        renderReady: true,
+        reconciliationIssues: Object.freeze([]),
       }),
       timeframe: rendered.timeframe,
       dataAsOf: rendered.dataAsOf,

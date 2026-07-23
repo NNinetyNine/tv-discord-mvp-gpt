@@ -179,7 +179,10 @@ describe("Admin HTTP server", () => {
 
     const options = await jsonRequest(server.url, "/api/v1/standalone-render/options");
     expect(options.body.data.timeframes).toContain("4D");
-    expect(options.body.data.assets).toContainEqual(expect.objectContaining({ id: "btc", tradingViewSymbol: "CRYPTO:BTCUSD", currency: "USD" }));
+    expect(options.body.data.assets).toHaveLength(131);
+    expect(options.body.data).toMatchObject({ renderableAssetCount: 16, reconciliationRequiredCount: 115 });
+    expect(options.body.data.assets).toContainEqual(expect.objectContaining({ id: "btc", tradingViewSymbol: "CRYPTO:BTCUSD", currency: "USD", renderReady: true }));
+    expect(options.body.data.assets).toContainEqual(expect.objectContaining({ id: "aapl", tradingViewSymbol: "AAPL", renderReady: false }));
 
     const query = new URLSearchParams({
       assetId: "btc",
@@ -228,6 +231,27 @@ describe("Admin HTTP server", () => {
     });
     expect(invalid.status).toBe(400);
     expect((await invalid.json() as any).error.code).toBe("invalid_standalone_render");
+
+    const unreconciledAsset = new URLSearchParams({
+      assetId: "aapl",
+      timeframe: "1D",
+      filename: "AAPL_2026-07-22_18-58-01.png",
+    });
+    const blocked = await fetch(`${server.url}/api/v1/standalone-renders?${unreconciledAsset.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "image/png" },
+      body: await framedPng(),
+    });
+    expect(blocked.status).toBe(400);
+    expect(await blocked.json()).toMatchObject({
+      error: {
+        code: "invalid_standalone_render",
+        details: {
+          assetId: "aapl",
+          reconciliationIssues: ["unqualified_market_symbol", "missing_publication_currency"],
+        },
+      },
+    });
 
     const mismatch = new URLSearchParams({
       assetId: "btc",

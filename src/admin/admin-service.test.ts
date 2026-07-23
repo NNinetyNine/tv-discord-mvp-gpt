@@ -84,25 +84,31 @@ describe("AdminService", () => {
     expect(ids).toEqual([...ids].sort((a, b) => a.localeCompare(b, "en")));
   });
 
-  it("exposes only metadata-complete standalone render choices with all supported timeframes", async () => {
+  it("keeps every Registry Asset discoverable while identifying exact standalone-render reconciliation blockers", async () => {
     const options = (await createService()).standaloneRenderOptions();
     expect(options.timeframes).toEqual(expect.arrayContaining(["1H", "1D", "4D", "1W"]));
     expect(options.assets).toContainEqual({
       id: "btc",
       displayName: "Bitcoin / U.S. Dollar",
       tradingViewSymbol: "CRYPTO:BTCUSD",
+      logicalChannel: "crypto",
       currency: "USD",
+      renderReady: true,
+      reconciliationIssues: [],
     });
     expect(options.assets).toContainEqual({
-      id: "tao",
-      displayName: "Bittensor",
-      tradingViewSymbol: "BINANCE:TAOUSDT",
-      currency: "USDT",
+      id: "aapl",
+      displayName: "Apple",
+      tradingViewSymbol: "AAPL",
+      logicalChannel: "stocks",
+      renderReady: false,
+      reconciliationIssues: ["unqualified_market_symbol", "missing_publication_currency"],
     });
-    expect(options.assets.every((asset) => asset.tradingViewSymbol.includes(":") && asset.currency.length > 0)).toBe(true);
-    expect(options.assets).toHaveLength(16);
-    expect(options.unavailableAssetCount).toBe(115);
-    expect(options.assets.length + options.unavailableAssetCount).toBe(131);
+    expect(options.assets).toHaveLength(131);
+    expect(options.renderableAssetCount).toBe(16);
+    expect(options.reconciliationRequiredCount).toBe(115);
+    expect(options.unavailableAssetCount).toBe(options.reconciliationRequiredCount);
+    expect(options.assets.filter((asset) => asset.renderReady)).toHaveLength(options.renderableAssetCount);
   });
 
   it("enforces bounded Asset search results", async () => {

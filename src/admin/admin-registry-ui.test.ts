@@ -66,14 +66,36 @@ describe("Operational Registry UI", () => {
     expect(js).toContain("this canonical Registry logo as its starter message");
   });
 
-  it("uses a sliding editor and searchable Registry-only selectors", async () => {
+  it("keeps the Registry editor above an explicit recoverable backdrop with keyboard and pointer escape paths", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
     const css = await readFile(resolve("src/admin-ui/styles.css"), "utf8");
+    const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
     expect(html).toContain('id="pack-asset-search"');
     expect(html).toContain('id="renderer-asset-search"');
+    expect(html).toContain('id="registry-editor-backdrop"');
+    expect(html).toContain('id="registry-editor-cancel"');
+    expect(html).toContain('role="dialog" aria-modal="true"');
+    expect(html.indexOf("</main>")).toBeLessThan(html.indexOf('id="registry-editor-backdrop"'));
+    expect(html.indexOf('id="registry-editor-backdrop"')).toBeLessThan(html.indexOf('id="registry-editor"'));
     expect(css).toContain(".registry-editor {");
-    expect(css).toContain("position: fixed");
-    expect(css).toContain("body.registry-editor-open::after");
-    expect(css).toContain(".asset-search-results");
+    expect(css).toContain(".registry-editor-backdrop {");
+    expect(css).not.toContain("body.registry-editor-open::after");
+    expect(js).toContain('event.key === "Escape"');
+    expect(js).toContain("registryEditorFocusableElements");
+    expect(js).toContain('qs("#registry-editor-backdrop").addEventListener("click", closeRegistryEditor)');
+    expect(js).toContain("registryEditorReturnFocus");
+  });
+
+  it("keeps all Registry categories discoverable in Render and explains metadata blockers", async () => {
+    const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
+    const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
+    expect(html).toContain('id="renderer-open-registry"');
+    expect(js).toContain("result.renderableAssetCount");
+    expect(js).toContain("result.reconciliationRequiredCount");
+    expect(js).toContain("asset.logicalChannel");
+    expect(js).toContain("asset.reconciliationIssues.map(rendererIssueLabel)");
+    expect(js).toContain('NO REGISTRY ASSETS MATCH.');
+    expect(js).not.toContain('NO RENDERABLE REGISTRY ASSETS MATCH.');
+    expect(js).toContain('activateView("registry")');
   });
 });

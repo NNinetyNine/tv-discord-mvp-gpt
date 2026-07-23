@@ -36,6 +36,7 @@ const state = {
   registryEditorMode: "add",
   registryChangePreview: null,
   registryChangeBusy: false,
+  registryEditorReturnFocus: null,
   packAssetSearchGeneration: 0,
   packAssetSearchTimer: null,
   rendererAssetSearchGeneration: 0,
@@ -1166,32 +1167,79 @@ async function populateRegistryChannelOptions() {
   select.value = selected;
 }
 
-async function openRegistryEditor(mode) {
-  state.registryEditorMode = mode;
-  state.registryChangeBusy = false;
-  resetRegistryChangePreview();
-  await populateRegistryChannelOptions();
-  const asset = mode === "edit" ? state.registrySelectedAsset : null;
-  qs("#registry-editor-heading").textContent = mode === "edit" ? `EDIT ${asset.displayName.toUpperCase()}` : "ADD ASSET";
-  qs("#registry-editor-guidance").textContent = mode === "edit"
-    ? "The stable Asset ID cannot change. Review the exact metadata source change before applying it."
-    : "Create one canonical Asset. Pack membership and logos are managed separately after creation.";
-  qs("#registry-field-id").value = asset?.id ?? "";
-  qs("#registry-field-id").dataset.suggestedId = asset?.id ?? "";
-  qs("#registry-field-id").disabled = mode === "edit";
-  qs("#registry-field-display").value = asset?.displayName ?? "";
-  qs("#registry-field-tradingview").value = asset?.tradingViewSymbol ?? "";
-  qs("#registry-field-currency").value = asset?.currency ?? "";
-  qs("#registry-field-channel").value = asset?.logicalChannel ?? "";
-  qs("#registry-editor").hidden = false;
-  document.body.classList.add("registry-editor-open");
-  qs("#registry-field-display").focus();
+function registryEditorFocusableElements() {
+  return qsa("#registry-editor button, #registry-editor input, #registry-editor select, #registry-editor summary")
+    .filter((element) => !element.disabled && !element.hidden && element.getAttribute("aria-hidden") !== "true" && element.offsetParent !== null);
 }
 
-function closeRegistryEditor() {
+function handleRegistryEditorKeydown(event) {
+  const editor = qs("#registry-editor");
+  if (editor.hidden) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeRegistryEditor();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = registryEditorFocusableElements();
+  if (focusable.length === 0) {
+    event.preventDefault();
+    editor.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+async function openRegistryEditor(mode) {
+  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  try {
+    state.registryEditorMode = mode;
+    state.registryChangeBusy = false;
+    resetRegistryChangePreview();
+    await populateRegistryChannelOptions();
+    const asset = mode === "edit" ? state.registrySelectedAsset : null;
+    if (mode === "edit" && asset === null) throw new Error("Select a current Registry Asset before editing metadata.");
+    qs("#registry-editor-heading").textContent = mode === "edit" ? `EDIT ${asset.displayName.toUpperCase()}` : "ADD ASSET";
+    qs("#registry-editor-guidance").textContent = mode === "edit"
+      ? "The stable Asset ID cannot change. Review the exact metadata source change before applying it."
+      : "Create one canonical Asset. Pack membership and logos are managed separately after creation.";
+    qs("#registry-field-id").value = asset?.id ?? "";
+    qs("#registry-field-id").dataset.suggestedId = asset?.id ?? "";
+    qs("#registry-field-id").disabled = mode === "edit";
+    qs("#registry-field-display").value = asset?.displayName ?? "";
+    qs("#registry-field-tradingview").value = asset?.tradingViewSymbol ?? "";
+    qs("#registry-field-currency").value = asset?.currency ?? "";
+    qs("#registry-field-channel").value = asset?.logicalChannel ?? "";
+    state.registryEditorReturnFocus = returnFocus;
+    qs("#registry-editor-backdrop").hidden = false;
+    qs("#registry-editor").hidden = false;
+    document.body.classList.add("registry-editor-open");
+    requestAnimationFrame(() => {
+      if (!qs("#registry-editor").hidden) qs("#registry-field-display").focus();
+    });
+  } catch (error) {
+    closeRegistryEditor({ restoreFocus: false });
+    throw error;
+  }
+}
+
+function closeRegistryEditor(options = {}) {
+  const restoreFocus = options.restoreFocus !== false;
   qs("#registry-editor").hidden = true;
+  qs("#registry-editor-backdrop").hidden = true;
   document.body.classList.remove("registry-editor-open");
   resetRegistryChangePreview();
+  const returnFocus = state.registryEditorReturnFocus;
+  state.registryEditorReturnFocus = null;
+  if (restoreFocus && returnFocus?.isConnected) returnFocus.focus();
 }
 
 function registryChangeValue() {
@@ -1374,9 +1422,27 @@ async function openRegistryAssetThreads() {
   qs("#thread-adoption-heading").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function selectedRendererAsset() {
+  const assetId = qs("#renderer-asset").value;
+  return state.renderOptions?.assets.find((asset) => asset.id === assetId) ?? null;
+}
+
+function rendererIssueLabel(issue) {
+  const labels = {
+    unqualified_market_symbol: "QUALIFIED TRADINGVIEW SYMBOL REQUIRED",
+    missing_publication_currency: "CURRENCY REQUIRED",
+    invalid_publication_currency: "CURRENCY INVALID",
+    market_symbol_mismatch: "TRADINGVIEW IDENTITY CONFLICT",
+    unknown_pack_asset: "PACK MEMBERSHIP INVALID",
+    duplicate_pack_asset: "DUPLICATE PACK MEMBERSHIP",
+  };
+  return labels[issue] ?? issue.replaceAll("_", " ").toUpperCase();
+}
+
 function updateRenderButton() {
+  const selected = selectedRendererAsset();
   const ready = Boolean(
-    qs("#renderer-asset").value &&
+    selected?.renderReady &&
     qs("#renderer-timeframe").value &&
     state.renderSourceFile &&
     !state.renderBusy
@@ -1387,7 +1453,13 @@ function updateRenderButton() {
 function selectRendererAsset(asset) {
   qs("#renderer-asset").value = asset.id;
   qs("#renderer-asset-search").value = asset.displayName;
-  qs("#renderer-selected-asset").textContent = `${asset.displayName} · ${asset.tradingViewSymbol} · ${asset.currency}`;
+  const summary = qs("#renderer-selected-asset");
+  const currency = asset.currency ?? "CURRENCY MISSING";
+  summary.textContent = asset.renderReady
+    ? `${asset.displayName} · ${asset.tradingViewSymbol} · ${currency} · READY TO RENDER`
+    : `${asset.displayName} · ${asset.tradingViewSymbol} · ${currency} · ${asset.reconciliationIssues.map(rendererIssueLabel).join(" · ")}`;
+  summary.className = `selected-asset-summary ${asset.renderReady ? "ready" : "reconciliation"}`;
+  qs("#renderer-open-registry").hidden = asset.renderReady;
   qs("#renderer-asset-results").hidden = true;
   resetStandaloneResult();
 }
@@ -1401,13 +1473,17 @@ function renderRendererAssetSearch(query) {
     return;
   }
   const matches = (state.renderOptions?.assets ?? []).filter((asset) => {
-    const haystack = [asset.id, asset.displayName, asset.tradingViewSymbol, asset.currency].join(" ").toLocaleLowerCase("en-US");
+    const haystack = [asset.id, asset.displayName, asset.tradingViewSymbol, asset.currency ?? "", asset.logicalChannel]
+      .join(" ").toLocaleLowerCase("en-US");
     return terms.every((term) => haystack.includes(term));
   }).slice(0, 16);
   panel.hidden = false;
   panel.innerHTML = matches.length === 0
-    ? '<p class="asset-search-empty">NO RENDERABLE REGISTRY ASSETS MATCH.</p>'
-    : matches.map((asset) => `<button type="button" data-renderer-asset="${escapeAttribute(asset.id)}"><strong>${escapeHtml(asset.displayName)}</strong><span>${escapeHtml(asset.tradingViewSymbol)} · ${escapeHtml(asset.currency)} · ID ${escapeHtml(asset.id)}</span></button>`).join("");
+    ? '<p class="asset-search-empty">NO REGISTRY ASSETS MATCH.</p>'
+    : matches.map((asset) => {
+        const readiness = asset.renderReady ? "READY TO RENDER" : asset.reconciliationIssues.map(rendererIssueLabel).join(" · ");
+        return `<button type="button" data-renderer-asset="${escapeAttribute(asset.id)}" data-render-ready="${asset.renderReady}"><strong>${escapeHtml(asset.displayName)}</strong><span>${escapeHtml(asset.tradingViewSymbol)} · ${escapeHtml(asset.currency ?? "CURRENCY MISSING")} · ${escapeHtml(asset.logicalChannel.toUpperCase())}</span><span class="asset-search-readiness">${escapeHtml(readiness)}</span></button>`;
+      }).join("");
   qsa("[data-renderer-asset]").forEach((button) => button.addEventListener("click", () => {
     const asset = state.renderOptions.assets.find((entry) => entry.id === button.dataset.rendererAsset);
     if (asset) selectRendererAsset(asset);
@@ -1421,8 +1497,18 @@ async function loadStandaloneRenderOptions() {
   qs("#renderer-timeframe").innerHTML = '<option value="">SELECT TIMEFRAME</option>' + result.timeframes
     .map((timeframe) => `<option value="${escapeAttribute(timeframe)}">${escapeHtml(timeframe)}</option>`)
     .join("");
-  qs("#renderer-availability").textContent = `${result.assets.length} RENDERABLE REGISTRY ASSETS · ${result.unavailableAssetCount} REQUIRE METADATA RECONCILIATION`;
+  qs("#renderer-availability").textContent = `${result.assets.length} REGISTRY ASSETS · ${result.renderableAssetCount} RENDER READY · ${result.reconciliationRequiredCount} REQUIRE METADATA RECONCILIATION`;
   updateRenderButton();
+}
+
+async function openSelectedRendererAssetInRegistry() {
+  const asset = selectedRendererAsset();
+  if (asset === null) return;
+  await activateView("registry");
+  qs("#registry-search").value = asset.id;
+  await loadRegistry({ query: asset.id, offset: 0 });
+  await selectRegistryAsset(asset.id);
+  qs("#registry-inspector").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function resetStandaloneResult() {
@@ -1999,6 +2085,9 @@ qs("#registry-next").addEventListener("click", () => void loadRegistry({ offset:
 qs("#registry-add-asset").addEventListener("click", () => void openRegistryEditor("add").catch((error) => showMessage(error.message)));
 qs("#registry-edit-asset").addEventListener("click", () => void openRegistryEditor("edit").catch((error) => showMessage(error.message)));
 qs("#registry-editor-close").addEventListener("click", closeRegistryEditor);
+qs("#registry-editor-cancel").addEventListener("click", closeRegistryEditor);
+qs("#registry-editor-backdrop").addEventListener("click", closeRegistryEditor);
+qs("#registry-editor").addEventListener("keydown", handleRegistryEditorKeydown);
 qs("#registry-review-change").addEventListener("click", () => void reviewRegistryChange());
 qs("#registry-apply-change").addEventListener("click", () => void applyRegistryChange());
 qs("#registry-logo-input").addEventListener("change", (event) => void storeRegistryLogo(event.target.files?.[0] ?? null));
@@ -2023,9 +2112,12 @@ qs("#registry-open-threads").addEventListener("click", () => void openRegistryAs
 qs("#renderer-asset-search").addEventListener("input", (event) => {
   qs("#renderer-asset").value = "";
   qs("#renderer-selected-asset").textContent = "NO ASSET SELECTED";
+  qs("#renderer-selected-asset").className = "selected-asset-summary";
+  qs("#renderer-open-registry").hidden = true;
   renderRendererAssetSearch(event.target.value);
   resetStandaloneResult();
 });
+qs("#renderer-open-registry").addEventListener("click", () => void openSelectedRendererAssetInRegistry().catch((error) => showMessage(error.message)));
 qs("#renderer-timeframe").addEventListener("change", resetStandaloneResult);
 qs("#renderer-source").addEventListener("change", (event) => {
   const file = event.target.files?.[0] ?? null;
