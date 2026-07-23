@@ -426,6 +426,69 @@ async function routeApi(
 ): Promise<void> {
   const method = request.method ?? "GET";
   if (pathname === "/api/v1/status" && method === "GET") return ok(response, service.status());
+  if (pathname === "/api/v1/operator-tools" && method === "GET") {
+    exactSearchParameters(url, [], "Operator tools request");
+    return ok(response, await service.operatorToolsState());
+  }
+  if (pathname === "/api/v1/operator-tools/export-audit") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Export audit request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Export audit body must be an object.");
+    exactFields(body, [], "Export audit body");
+    return ok(response, await service.auditChartExports());
+  }
+  if (pathname === "/api/v1/releases" && method === "GET") {
+    exactSearchParameters(url, [], "Release archive request");
+    return ok(response, service.releaseArchiveState());
+  }
+  const releaseRecordRoute = /^\/api\/v1\/releases\/([^/]+)\/([^/]+)\/release\.json$/u.exec(pathname);
+  if (releaseRecordRoute !== null) {
+    if (method !== "GET" && method !== "HEAD") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Release record request");
+    const bytes = service.releaseRecordBytes(releaseRecordRoute[1] ?? "", releaseRecordRoute[2] ?? "");
+    securityHeaders(response, true);
+    response.statusCode = 200;
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    response.setHeader("Content-Disposition", `attachment; filename="${(releaseRecordRoute[2] ?? "release").replace(/[^A-Za-z0-9._-]/gu, "-")}-release.json"`);
+    response.setHeader("Content-Length", String(bytes.length));
+    response.end(method === "HEAD" ? undefined : bytes);
+    return;
+  }
+  const releaseImageRoute = /^\/api\/v1\/releases\/([^/]+)\/([^/]+)\/images\/([^/]+)$/u.exec(pathname);
+  if (releaseImageRoute !== null) {
+    if (method !== "GET" && method !== "HEAD") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Release image request");
+    return inlinePng(request, response, await service.releaseImageBytes(releaseImageRoute[1] ?? "", releaseImageRoute[2] ?? "", releaseImageRoute[3] ?? ""), releaseImageRoute[3] ?? "release.png");
+  }
+  const releaseDetailRoute = /^\/api\/v1\/releases\/([^/]+)\/([^/]+)$/u.exec(pathname);
+  if (releaseDetailRoute !== null) {
+    if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Release detail request");
+    return ok(response, service.releaseArchiveDetail(releaseDetailRoute[1] ?? "", releaseDetailRoute[2] ?? ""));
+  }
+  if (pathname === "/api/v1/packs/maintenance") {
+    if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Pack maintenance request");
+    return ok(response, await service.packMaintenanceState());
+  }
+  if (pathname === "/api/v1/packs/maintenance/preview") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Pack maintenance preview request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Pack maintenance preview body must be an object.");
+    exactFields(body, ["change"], "Pack maintenance preview body");
+    return ok(response, await service.preparePackMaintenance(body.change), 201);
+  }
+  const packMaintenanceApply = /^\/api\/v1\/packs\/maintenance\/([a-f0-9]{64})\/apply$/u.exec(pathname);
+  if (packMaintenanceApply !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Pack maintenance apply request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Pack maintenance application body must be an object.");
+    exactFields(body, ["confirmation"], "Pack maintenance application body");
+    return ok(response, await service.applyPackMaintenance(packMaintenanceApply[1] ?? "", body.confirmation));
+  }
   if (pathname === "/api/v1/channels" && method === "GET") return ok(response, { schemaVersion: 1, logicalChannels: service.logicalChannels() });
   if (pathname === "/api/v1/server-configuration") {
     if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
@@ -833,6 +896,24 @@ async function routeApi(
     if (!isRecord(body)) throw new AdminError("invalid_request", "Registry change application body must be an object.");
     exactFields(body, ["confirmation"], "Registry change application body");
     return ok(response, await service.applyPreparedRegistryAssetChange(registryChangeApply[1] ?? "", body.confirmation));
+  }
+  const aliasPreviewRoute = /^\/api\/v1\/assets\/([^/]+)\/aliases\/preview$/u.exec(pathname);
+  if (aliasPreviewRoute !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Registry alias preview request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Alias change preview body must be an object.");
+    exactFields(body, ["change"], "Alias change preview body");
+    return ok(response, await service.prepareRegistryAliasChange(aliasPreviewRoute[1] ?? "", body.change), 201);
+  }
+  const aliasApplyRoute = /^\/api\/v1\/assets\/([^/]+)\/aliases\/([a-f0-9]{64})\/apply$/u.exec(pathname);
+  if (aliasApplyRoute !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Registry alias apply request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Alias change application body must be an object.");
+    exactFields(body, ["confirmation"], "Alias change application body");
+    return ok(response, await service.applyRegistryAliasChange(aliasApplyRoute[1] ?? "", aliasApplyRoute[2] ?? "", body.confirmation));
   }
   const registryLogoStatus = /^\/api\/v1\/assets\/([^/]+)\/logo\/status$/u.exec(pathname);
   if (registryLogoStatus !== null) {

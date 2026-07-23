@@ -281,3 +281,25 @@ mode preserves exact evidence under the Administration workspace, uses a
 rollback-protected route and binding transaction, and removes only bindings
 owned by Packs whose destination changed. Registry, Packs, Discord content,
 current staging, and Release archives are non-effects.
+
+## Administration operator tools and archive
+
+The Administration Packs page now composes the existing Pack definition write
+functions into one exact-current maintenance transaction. The service validates
+the complete candidate Pack set and preserves the existing global-disjointness,
+Empty-only membership, route-binding, and stable-ID boundaries. It does not add
+a second Pack representation.
+
+Registry alias maintenance is a narrow transaction over canonical Registry
+source using the existing alias functions. Alias tokens share one
+case-insensitive namespace with every canonical TradingView identity and alias.
+
+The Archive page is a read-only projection of the existing Administration
+ReleaseStore. `listPackIds()` deliberately includes archive directories for
+historical Pack IDs, and record downloads return exact stored `release.json`
+bytes after record validation. The archive remains installation state below the
+Administration workspace and is not moved into repository source.
+
+Read-only market-identity and export audits are service projections over the
+existing audit, resolver, and duplicate-grouping modules. Specialist browser
+scripts remain development/recovery tooling rather than a second operator UI.

@@ -30,6 +30,19 @@ const state = {
   serverInspection: null,
   serverPreview: null,
   serverBusy: false,
+  operatorTools: null,
+  exportAudit: null,
+  packMaintenance: null,
+  packMaintenanceSelectedId: "",
+  packMaintenanceAssetIds: [],
+  packMaintenanceOrder: [],
+  packMaintenanceHeldAssetId: "",
+  packMaintenancePreview: null,
+  packMaintenanceBusy: false,
+  releaseArchive: null,
+  releaseDetail: null,
+  aliasPreview: null,
+  aliasBusy: false,
   registryQuery: "",
   registryPackId: "",
   registryPacks: [],
@@ -1008,6 +1021,8 @@ function renderRegistryInspector() {
     controls.hidden = true;
     workflows.hidden = true;
     qs("#registry-logo-card").hidden = true;
+    qs("#registry-alias-management").hidden = true;
+    clearAliasPreview();
     return;
   }
 
@@ -1035,6 +1050,7 @@ function renderRegistryInspector() {
   qs("#registry-open-threads").disabled = asset.packIds.length === 0;
   qs("#registry-retire-asset").disabled = asset.packIds.length > 0;
   renderRegistryLogo();
+  renderAliasManagement();
 }
 
 async function loadRegistryLogo(assetId) {
@@ -1058,6 +1074,9 @@ async function selectRegistryAsset(assetId) {
   qs("#registry-asset-facts").hidden = true;
   qs("#registry-primary-controls").hidden = true;
   qs("#registry-workflow-actions").hidden = true;
+  qs("#registry-alias-management").hidden = true;
+  qs("#registry-alias-input").value = "";
+  clearAliasPreview();
   try {
     const asset = await api(`/api/v1/assets/${encodeURIComponent(assetId)}`);
     if (generation !== state.registrySelectionGeneration) return;
@@ -2698,6 +2717,326 @@ async function applyServerChange() {
   }
 }
 
+
+function formatTimestamp(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : String(value);
+}
+
+function renderOperatorTools() {
+  const tools = state.operatorTools;
+  if (tools === null) return;
+  qs("#operator-status-assets").textContent = String(tools.status.registryAssetCount);
+  qs("#operator-status-packs").textContent = String(tools.status.packCount);
+  qs("#operator-status-gaps").textContent = String(tools.marketIdentityAudit.gapCount);
+  qs("#operator-status-releases").textContent = String(tools.archive.releaseCount);
+  qs("#operator-audit-state").textContent = tools.marketIdentityAudit.ok ? "CANONICAL AUDIT CLEAR" : `${tools.marketIdentityAudit.gapCount} RECONCILIATION GAPS`;
+  const gaps = tools.marketIdentityAudit.gaps;
+  qs("#operator-identity-gaps").innerHTML = gaps.length === 0
+    ? '<p class="empty-state">NO MARKET IDENTITY OR CURRENCY GAPS.</p>'
+    : `<ul>${gaps.slice(0, 100).map((gap) => `<li><strong>${escapeHtml(gap.assetId.toUpperCase())}</strong> · ${escapeHtml(gap.issue.replaceAll("_", " ").toUpperCase())}${gap.packId ? ` · PACK ${escapeHtml(gap.packId.toUpperCase())}` : ""}</li>`).join("")}</ul>${gaps.length > 100 ? `<p>${gaps.length - 100} MORE GAPS NOT SHOWN.</p>` : ""}`;
+  qs("#operator-run-export-audit").disabled = !tools.exportAudit.available;
+  if (!tools.exportAudit.available) qs("#operator-export-audit-state").textContent = "DOWNLOADS FOLDER NOT CONFIGURED";
+}
+
+async function loadOperatorTools() {
+  state.operatorTools = await api("/api/v1/operator-tools");
+  renderOperatorTools();
+}
+
+async function runExportAudit() {
+  if (state.operatorTools?.exportAudit.available !== true) return;
+  qs("#operator-run-export-audit").disabled = true;
+  qs("#operator-export-audit-state").textContent = "SCANNING EXPORTS";
+  try {
+    state.exportAudit = await api("/api/v1/operator-tools/export-audit", { method: "POST", body: "{}" });
+    const audit = state.exportAudit;
+    qs("#operator-export-audit-state").textContent = `${audit.scannedCount} FILES · ${audit.unresolvedCount} UNRESOLVED · ${audit.duplicateGroupCount} DUPLICATE GROUPS`;
+    const results = qs("#operator-export-audit-results");
+    results.hidden = false;
+    results.innerHTML = `<p><strong>${audit.resolvedCount}</strong> RESOLVED · <strong>${audit.unresolvedCount}</strong> UNRESOLVED · <strong>${audit.duplicateGroupCount}</strong> DUPLICATE GROUPS</p>
+      ${audit.unknown.length ? `<h3>UNKNOWN SYMBOLS</h3><ul>${audit.unknown.map((entry) => `<li>${escapeHtml(entry.file)} · ${escapeHtml(entry.symbol)}</li>`).join("")}</ul>` : ""}
+      ${audit.unparseable.length ? `<h3>UNPARSEABLE FILENAMES</h3><ul>${audit.unparseable.map((entry) => `<li>${escapeHtml(entry.file)}</li>`).join("")}</ul>` : ""}
+      ${audit.duplicates.length ? `<h3>DUPLICATE IDENTITIES</h3><ul>${audit.duplicates.map((group) => `<li>${escapeHtml(group.label)} · ${escapeHtml(group.files.join(", "))}</li>`).join("")}</ul>` : ""}`;
+    showMessage("Downloads-folder audit completed without changing Registry, Workspace, staging, or Discord.", false);
+  } catch (error) {
+    showMessage(error.message);
+    qs("#operator-export-audit-state").textContent = "AUDIT FAILED";
+  } finally {
+    qs("#operator-run-export-audit").disabled = state.operatorTools?.exportAudit.available !== true;
+  }
+}
+
+function currentMaintenancePack() {
+  return state.packMaintenance?.packs.find((pack) => pack.id === state.packMaintenanceSelectedId) ?? null;
+}
+
+function clearPackMaintenancePreview() {
+  state.packMaintenancePreview = null;
+  qs("#pack-maintenance-preview").hidden = true;
+  qs("#pack-maintenance-confirmation").value = "";
+  qs("#pack-maintenance-apply").disabled = true;
+}
+
+function setMaintenancePack(packId) {
+  const pack = state.packMaintenance?.packs.find((entry) => entry.id === packId) ?? null;
+  state.packMaintenanceSelectedId = pack?.id ?? "";
+  state.packMaintenanceAssetIds = pack ? [...pack.assetIds] : [];
+  state.packMaintenanceOrder = state.packMaintenance ? state.packMaintenance.packs.map((entry) => entry.id) : [];
+  state.packMaintenanceHeldAssetId = "";
+  if (pack) {
+    qs("#pack-maintenance-display").value = pack.displayName;
+    qs("#pack-maintenance-channel").value = pack.logicalChannel;
+  } else {
+    qs("#pack-maintenance-display").value = "";
+    qs("#pack-maintenance-channel").value = "";
+  }
+  clearPackMaintenancePreview();
+  renderPackMaintenance();
+}
+
+function maintenanceAsset(assetId) {
+  const pack = currentMaintenancePack();
+  return pack?.assets.find((asset) => asset.id === assetId) ?? state.packMaintenance?.heldAssets.find((asset) => asset.id === assetId) ?? null;
+}
+
+function moveMaintenanceMember(index, delta) {
+  const target = index + delta;
+  if (target < 0 || target >= state.packMaintenanceAssetIds.length) return;
+  const [id] = state.packMaintenanceAssetIds.splice(index, 1);
+  state.packMaintenanceAssetIds.splice(target, 0, id);
+  clearPackMaintenancePreview();
+  renderPackMaintenance();
+}
+
+function removeMaintenanceMember(index) {
+  if (state.packMaintenanceAssetIds.length <= 1) {
+    showMessage("A Pack must retain at least one Asset.");
+    return;
+  }
+  state.packMaintenanceAssetIds.splice(index, 1);
+  clearPackMaintenancePreview();
+  renderPackMaintenance();
+}
+
+function moveMaintenancePack(delta) {
+  const index = state.packMaintenanceOrder.indexOf(state.packMaintenanceSelectedId);
+  const target = index + delta;
+  if (index < 0 || target < 0 || target >= state.packMaintenanceOrder.length) return;
+  const [id] = state.packMaintenanceOrder.splice(index, 1);
+  state.packMaintenanceOrder.splice(target, 0, id);
+  clearPackMaintenancePreview();
+  renderPackMaintenance();
+}
+
+function renderPackMaintenance() {
+  const data = state.packMaintenance;
+  const select = qs("#pack-maintenance-pack");
+  if (data === null) return;
+  select.innerHTML = data.packs.map((pack) => `<option value="${escapeAttribute(pack.id)}">${escapeHtml(pack.displayName)} · ${escapeHtml(pack.id.toUpperCase())}</option>`).join("");
+  select.value = state.packMaintenanceSelectedId;
+  const pack = currentMaintenancePack();
+  const disabled = pack === null || state.packMaintenanceBusy;
+  for (const id of ["#pack-maintenance-display", "#pack-maintenance-channel", "#pack-maintenance-pack-up", "#pack-maintenance-pack-down", "#pack-maintenance-review", "#pack-maintenance-delete"]) qs(id).disabled = disabled;
+  if (pack === null) return;
+  qs("#pack-maintenance-state").textContent = `${data.packs.length} CURRENT PACKS`;
+  qs("#pack-maintenance-workspace").textContent = `${pack.state.toUpperCase()} · ${pack.capturedCount} CAPTURED`;
+  qs("#pack-maintenance-bindings").textContent = String(pack.boundThreadCount);
+  qs("#pack-maintenance-releases").textContent = String(pack.releaseCount);
+  const orderIndex = state.packMaintenanceOrder.indexOf(pack.id);
+  qs("#pack-maintenance-order").textContent = `PACK ORDER ${orderIndex + 1} / ${state.packMaintenanceOrder.length}`;
+  qs("#pack-maintenance-pack-up").disabled = disabled || orderIndex <= 0;
+  qs("#pack-maintenance-pack-down").disabled = disabled || orderIndex < 0 || orderIndex >= state.packMaintenanceOrder.length - 1;
+
+  const held = data.heldAssets.filter((asset) => !state.packMaintenanceAssetIds.includes(asset.id));
+  const heldSelect = qs("#pack-maintenance-held-asset");
+  heldSelect.innerHTML = '<option value="">SELECT HELD ASSET</option>' + held.map((asset) => `<option value="${escapeAttribute(asset.id)}">${escapeHtml(asset.displayName)} · ${escapeHtml(asset.tradingViewSymbol)}</option>`).join("");
+  heldSelect.value = held.some((asset) => asset.id === state.packMaintenanceHeldAssetId) ? state.packMaintenanceHeldAssetId : "";
+  state.packMaintenanceHeldAssetId = heldSelect.value;
+  qs("#pack-maintenance-add-asset").disabled = disabled || held.length === 0 || !state.packMaintenanceHeldAssetId;
+
+  const list = qs("#pack-maintenance-members");
+  list.innerHTML = state.packMaintenanceAssetIds.map((assetId, index) => {
+    const asset = maintenanceAsset(assetId);
+    return `<li class="member-row"><div class="member-summary"><span class="member-index">${String(index + 1).padStart(2, "0")}</span><div><strong>${escapeHtml(asset?.displayName ?? assetId.toUpperCase())}</strong><span class="member-secondary">${escapeHtml(asset?.tradingViewSymbol ?? assetId)}</span></div><div class="member-actions"><button type="button" data-maintenance-up="${index}" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-maintenance-down="${index}" ${index === state.packMaintenanceAssetIds.length - 1 ? "disabled" : ""}>↓</button><button type="button" data-maintenance-remove="${index}" ${state.packMaintenanceAssetIds.length === 1 ? "disabled" : ""}>×</button></div></div></li>`;
+  }).join("");
+  qsa("[data-maintenance-up]").forEach((button) => button.addEventListener("click", () => moveMaintenanceMember(Number(button.dataset.maintenanceUp), -1)));
+  qsa("[data-maintenance-down]").forEach((button) => button.addEventListener("click", () => moveMaintenanceMember(Number(button.dataset.maintenanceDown), 1)));
+  qsa("[data-maintenance-remove]").forEach((button) => button.addEventListener("click", () => removeMaintenanceMember(Number(button.dataset.maintenanceRemove))));
+}
+
+async function loadPackMaintenance() {
+  state.packMaintenance = await api("/api/v1/packs/maintenance");
+  const selected = state.packMaintenance.packs.some((pack) => pack.id === state.packMaintenanceSelectedId)
+    ? state.packMaintenanceSelectedId
+    : state.packMaintenance.packs[0]?.id ?? "";
+  setMaintenancePack(selected);
+}
+
+function renderPackMaintenancePreview() {
+  const preview = state.packMaintenancePreview;
+  if (preview === null) return clearPackMaintenancePreview();
+  qs("#pack-maintenance-preview").hidden = false;
+  qs("#pack-maintenance-preview-state").textContent = preview.ready ? "READY FOR CONFIRMATION" : "BLOCKED";
+  qs("#pack-maintenance-preview-state").className = `workspace-status ${preview.ready ? "valid" : "blocked"}`;
+  qs("#pack-maintenance-preview-summary").innerHTML = `<p><strong>${escapeHtml(preview.operation.toUpperCase())}</strong> · ${escapeHtml(preview.packDisplayName)} · ${preview.changes.length} CHANGE${preview.changes.length === 1 ? "" : "S"}</p><ul>${preview.changes.map((change) => `<li>${escapeHtml(change.field.replaceAll("Name", " name").replaceAll("Order", " order").toUpperCase())}: ${escapeHtml(JSON.stringify(change.before))} → ${escapeHtml(JSON.stringify(change.after))}</li>`).join("")}</ul>`;
+  const blockers = qs("#pack-maintenance-preview-blockers");
+  blockers.hidden = preview.blockers.length === 0;
+  blockers.innerHTML = preview.blockers.length ? `<ul>${preview.blockers.map((blocker) => `<li>${escapeHtml(blocker.detail)}</li>`).join("")}</ul>` : "";
+  qs("#pack-maintenance-confirmation").placeholder = preview.confirmation;
+  qs("#pack-maintenance-apply").textContent = preview.operation === "delete" ? "DELETE PACK" : "APPLY PACK CHANGE";
+  updatePackMaintenanceApply();
+}
+
+function updatePackMaintenanceApply() {
+  const preview = state.packMaintenancePreview;
+  qs("#pack-maintenance-apply").disabled = state.packMaintenanceBusy || preview === null || !preview.ready || qs("#pack-maintenance-confirmation").value !== preview.confirmation;
+}
+
+async function reviewPackMaintenance(operation) {
+  const pack = currentMaintenancePack();
+  if (pack === null || state.packMaintenanceBusy) return;
+  clearMessage();
+  state.packMaintenanceBusy = true;
+  clearPackMaintenancePreview();
+  renderPackMaintenance();
+  try {
+    const change = operation === "delete" ? { operation: "delete", packId: pack.id } : {
+      operation: "update",
+      packId: pack.id,
+      displayName: qs("#pack-maintenance-display").value,
+      logicalChannel: qs("#pack-maintenance-channel").value,
+      assetIds: [...state.packMaintenanceAssetIds],
+      packOrder: [...state.packMaintenanceOrder],
+    };
+    state.packMaintenancePreview = await api("/api/v1/packs/maintenance/preview", { method: "POST", body: JSON.stringify({ change }) });
+    renderPackMaintenancePreview();
+    if (!state.packMaintenancePreview.ready) showMessage("The Pack change is blocked. Resolve every listed blocker before applying it.");
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    state.packMaintenanceBusy = false;
+    renderPackMaintenance();
+    updatePackMaintenanceApply();
+  }
+}
+
+async function applyPackMaintenance() {
+  const preview = state.packMaintenancePreview;
+  if (preview === null || !preview.ready || state.packMaintenanceBusy || qs("#pack-maintenance-confirmation").value !== preview.confirmation) return;
+  clearMessage();
+  state.packMaintenanceBusy = true;
+  updatePackMaintenanceApply();
+  try {
+    await api(`/api/v1/packs/maintenance/${encodeURIComponent(preview.previewId)}/apply`, { method: "POST", body: JSON.stringify({ confirmation: preview.confirmation }) });
+    state.packMaintenancePreview = null;
+    await Promise.all([loadPackMaintenance(), loadPackWorkspace(), refreshStatus()]);
+    showMessage(preview.operation === "delete" ? `Pack ${preview.packId.toUpperCase()} was deleted. Historical Releases were preserved.` : `Pack ${preview.packId.toUpperCase()} was updated.`, false);
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    state.packMaintenanceBusy = false;
+    renderPackMaintenance();
+  }
+}
+
+function renderReleaseArchive() {
+  const archive = state.releaseArchive;
+  if (archive === null) return;
+  qs("#archive-state").textContent = `${archive.releaseCount} RELEASE${archive.releaseCount === 1 ? "" : "S"}`;
+  qs("#archive-total").textContent = String(archive.releaseCount);
+  qs("#archive-published").textContent = String(archive.publishedCount);
+  qs("#archive-interrupted").textContent = String(archive.interruptedCount);
+  const filter = qs("#archive-pack-filter");
+  const current = filter.value;
+  const packIds = [...new Set(archive.releases.map((release) => release.packId))];
+  filter.innerHTML = '<option value="">ALL PACKS</option>' + packIds.map((id) => `<option value="${escapeAttribute(id)}">${escapeHtml(id.toUpperCase())}</option>`).join("");
+  filter.value = packIds.includes(current) ? current : "";
+  const visible = archive.releases.filter((release) => !filter.value || release.packId === filter.value);
+  qs("#archive-body").innerHTML = visible.length === 0 ? '<tr><td colspan="7">NO RELEASES MATCH THIS FILTER.</td></tr>' : visible.map((release) => `<tr><td><strong>${escapeHtml(release.packDisplayName)}</strong><span class="table-secondary">${escapeHtml(release.packId)}${release.packCurrent ? "" : " · HISTORICAL PACK"}</span></td><td>${escapeHtml(release.releaseId)}</td><td><span class="workspace-status ${release.state === "published" ? "valid" : "blocked"}">${escapeHtml(release.state.toUpperCase())}</span></td><td>${escapeHtml(formatTimestamp(release.startedAt))}</td><td>${escapeHtml(formatTimestamp(release.publishedAt))}</td><td>${release.postedCount} / ${release.analysisCount}</td><td><button class="outline-action compact-action" type="button" data-open-release="${escapeAttribute(release.packId)}|${escapeAttribute(release.releaseId)}">OPEN</button></td></tr>`).join("");
+  qsa("[data-open-release]").forEach((button) => button.addEventListener("click", () => {
+    const [packId, releaseId] = button.dataset.openRelease.split("|");
+    void openReleaseDetail(packId, releaseId);
+  }));
+}
+
+async function loadReleaseArchive() {
+  state.releaseArchive = await api("/api/v1/releases");
+  renderReleaseArchive();
+}
+
+async function openReleaseDetail(packId, releaseId) {
+  clearMessage();
+  try {
+    state.releaseDetail = await api(`/api/v1/releases/${encodeURIComponent(packId)}/${encodeURIComponent(releaseId)}`);
+    const detail = state.releaseDetail;
+    qs("#archive-detail").hidden = false;
+    qs("#archive-detail-heading").textContent = `${detail.packDisplayName} · ${detail.releaseId}`;
+    qs("#archive-record-download").href = detail.recordUrl;
+    qs("#archive-record-download").setAttribute("download", `${detail.releaseId}-release.json`);
+    qs("#archive-detail-facts").innerHTML = `<div><strong>STATE</strong><span>${escapeHtml(detail.state.toUpperCase())}</span></div><div><strong>STARTED</strong><span>${escapeHtml(formatTimestamp(detail.startedAt))}</span></div><div><strong>PUBLISHED</strong><span>${escapeHtml(formatTimestamp(detail.publishedAt))}</span></div><div><strong>DESTINATION</strong><span>${escapeHtml(detail.destinationId)}</span></div>`;
+    qs("#archive-analyses").innerHTML = detail.analyses.map((analysis) => `<article><img src="${escapeAttribute(analysis.imageUrl)}" alt="${escapeAttribute(analysis.displayName)} archived chart"><div><strong>${escapeHtml(analysis.displayName)}</strong><span>${escapeHtml(analysis.assetId.toUpperCase())} · ${escapeHtml(formatTimestamp(analysis.capturedAt))}</span><span>${analysis.discordMessageId ? `MESSAGE ${escapeHtml(analysis.discordMessageId)}` : "NOT POSTED"}</span><a class="outline-action compact-action download-link" href="${escapeAttribute(analysis.imageUrl)}" download="${escapeAttribute(analysis.imageFile)}">DOWNLOAD PNG</a></div></article>`).join("");
+    qs("#archive-detail").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) { showMessage(error.message); }
+}
+
+function clearAliasPreview() {
+  state.aliasPreview = null;
+  qs("#registry-alias-preview").hidden = true;
+  qs("#registry-alias-confirmation").value = "";
+  qs("#registry-alias-apply").disabled = true;
+}
+
+function renderAliasManagement() {
+  const asset = state.registrySelectedAsset;
+  const section = qs("#registry-alias-management");
+  section.hidden = asset === null;
+  if (asset === null) return;
+  const aliases = asset.tradingViewAliases ?? [];
+  qs("#registry-alias-list").innerHTML = aliases.length === 0 ? '<p class="empty-state">NO ALIASES</p>' : aliases.map((alias) => `<span class="registry-alias-pill">${escapeHtml(alias)}<button type="button" data-remove-alias="${escapeAttribute(alias)}" aria-label="Remove alias ${escapeAttribute(alias)}">×</button></span>`).join("");
+  qsa("[data-remove-alias]").forEach((button) => button.addEventListener("click", () => void reviewAliasChange("remove", button.dataset.removeAlias)));
+}
+
+async function reviewAliasChange(operation, alias) {
+  const asset = state.registrySelectedAsset;
+  const value = (alias ?? qs("#registry-alias-input").value).trim();
+  if (asset === null || !value || state.aliasBusy) return;
+  clearMessage();
+  state.aliasBusy = true;
+  clearAliasPreview();
+  try {
+    state.aliasPreview = await api(`/api/v1/assets/${encodeURIComponent(asset.id)}/aliases/preview`, { method: "POST", body: JSON.stringify({ change: { assetId: asset.id, operation, alias: value } }) });
+    const preview = state.aliasPreview;
+    qs("#registry-alias-preview").hidden = false;
+    qs("#registry-alias-preview-summary").innerHTML = `<p><strong>${escapeHtml(preview.operation.toUpperCase())}</strong> ${escapeHtml(preview.alias)} · ${escapeHtml(preview.displayName)}</p><p>${escapeHtml(preview.aliasesBefore.join(", ") || "NONE")} → ${escapeHtml(preview.aliasesAfter.join(", ") || "NONE")}</p>`;
+    qs("#registry-alias-confirmation").placeholder = preview.confirmation;
+  } catch (error) { showMessage(error.message); }
+  finally { state.aliasBusy = false; updateAliasApplyButton(); }
+}
+
+function updateAliasApplyButton() {
+  const preview = state.aliasPreview;
+  qs("#registry-alias-apply").disabled = state.aliasBusy || preview === null || qs("#registry-alias-confirmation").value !== preview.confirmation;
+}
+
+async function applyAliasChange() {
+  const preview = state.aliasPreview;
+  if (preview === null || state.aliasBusy || qs("#registry-alias-confirmation").value !== preview.confirmation) return;
+  state.aliasBusy = true;
+  updateAliasApplyButton();
+  try {
+    await api(`/api/v1/assets/${encodeURIComponent(preview.assetId)}/aliases/${encodeURIComponent(preview.previewId)}/apply`, { method: "POST", body: JSON.stringify({ confirmation: preview.confirmation }) });
+    clearAliasPreview();
+    qs("#registry-alias-input").value = "";
+    await refreshStatus();
+    await loadRegistry({ offset: state.registryOffset });
+    await selectRegistryAsset(preview.assetId);
+    showMessage(`Alias ${preview.alias} was ${preview.operation === "add" ? "added" : "removed"}.`, false);
+  } catch (error) { showMessage(error.message); }
+  finally { state.aliasBusy = false; updateAliasApplyButton(); }
+}
+
 async function activateView(view) {
   qsa("[data-view]").forEach((item) => {
     if (item.dataset.view === view) item.setAttribute("aria-current", "page");
@@ -2706,7 +3045,9 @@ async function activateView(view) {
   qsa("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== view; });
   if (view === "workspace") await loadPackWorkspace();
   if (view === "threads") await loadThreadManagement();
-  if (view === "server") await loadServerConfiguration();
+  if (view === "server") await Promise.all([loadServerConfiguration(), loadOperatorTools()]);
+  if (view === "packs") await loadPackMaintenance();
+  if (view === "archive") await loadReleaseArchive();
   if (view === "registry") {
     await loadRegistryPacks();
     await loadRegistry({ query: qs("#registry-search").value, offset: state.registryOffset });
@@ -2849,6 +3190,34 @@ qs("#server-review-configuration").addEventListener("click", () => void reviewSe
 qs("#server-review-migration").addEventListener("click", () => void reviewServerChange("migration"));
 qs("#server-confirmation").addEventListener("input", updateServerApplyButton);
 qs("#server-apply").addEventListener("click", () => void applyServerChange());
+qs("#operator-run-export-audit").addEventListener("click", () => void runExportAudit());
+qs("#pack-maintenance-pack").addEventListener("change", (event) => setMaintenancePack(event.target.value));
+for (const id of ["#pack-maintenance-display", "#pack-maintenance-channel"]) {
+  qs(id).addEventListener("input", clearPackMaintenancePreview);
+}
+qs("#pack-maintenance-pack-up").addEventListener("click", () => moveMaintenancePack(-1));
+qs("#pack-maintenance-pack-down").addEventListener("click", () => moveMaintenancePack(1));
+qs("#pack-maintenance-held-asset").addEventListener("change", (event) => {
+  state.packMaintenanceHeldAssetId = event.target.value;
+  qs("#pack-maintenance-add-asset").disabled = state.packMaintenanceBusy || !state.packMaintenanceHeldAssetId;
+});
+qs("#pack-maintenance-add-asset").addEventListener("click", () => {
+  const assetId = state.packMaintenanceHeldAssetId;
+  if (!assetId || state.packMaintenanceAssetIds.includes(assetId)) return;
+  state.packMaintenanceAssetIds.push(assetId);
+  state.packMaintenanceHeldAssetId = "";
+  clearPackMaintenancePreview();
+  renderPackMaintenance();
+});
+qs("#pack-maintenance-review").addEventListener("click", () => void reviewPackMaintenance("update"));
+qs("#pack-maintenance-delete").addEventListener("click", () => void reviewPackMaintenance("delete"));
+qs("#pack-maintenance-confirmation").addEventListener("input", updatePackMaintenanceApply);
+qs("#pack-maintenance-apply").addEventListener("click", () => void applyPackMaintenance());
+qs("#archive-pack-filter").addEventListener("change", renderReleaseArchive);
+qs("#registry-alias-input").addEventListener("input", clearAliasPreview);
+qs("#registry-alias-review-add").addEventListener("click", () => void reviewAliasChange("add"));
+qs("#registry-alias-confirmation").addEventListener("input", updateAliasApplyButton);
+qs("#registry-alias-apply").addEventListener("click", () => void applyAliasChange());
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";

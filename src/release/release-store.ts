@@ -181,6 +181,10 @@ export interface ReleaseStore {
   getRelease(packId: string, releaseId: string): ReleaseRecord;
   /** ALL release records for a pack, unordered. Policy-free facts. */
   listReleases(packId: string): readonly ReleaseRecord[];
+  /** Every archived Pack directory, including Packs no longer in current definitions. */
+  listPackIds(): readonly string[];
+  /** Exact archived release.json bytes after validating the record. */
+  recordBytes(packId: string, releaseId: string): Buffer;
   /**
    * Absolute path of an archived image belonging to a release. Throws if the
    * file is missing: a record without custody of its artifacts is a violated
@@ -460,20 +464,24 @@ export function createReleaseStore(archiveDir: string): ReleaseStore {
     }
   }
 
-  function readRecord(packId: string, releaseId: string): ReleaseRecord {
-    const path = recordPath(packId, releaseId);
-    if (!existsSync(path)) {
-      throw new ReleaseError(`no release record at ${path}`);
-    }
+  function parseRecordBytes(bytes: Buffer, path: string): ReleaseRecord {
     let raw: unknown;
     try {
-      raw = JSON.parse(readFileSync(path, "utf8"));
+      raw = JSON.parse(bytes.toString("utf8"));
     } catch (e) {
       throw new ReleaseError(
         `corrupt release record at ${path}: invalid JSON (${e instanceof Error ? e.message : String(e)})`,
       );
     }
     return parseRecord(raw, path);
+  }
+
+  function readRecord(packId: string, releaseId: string): ReleaseRecord {
+    const path = recordPath(packId, releaseId);
+    if (!existsSync(path)) {
+      throw new ReleaseError(`no release record at ${path}`);
+    }
+    return parseRecordBytes(readFileSync(path), path);
   }
 
   function validateCreateAnalyses(
@@ -699,6 +707,28 @@ export function createReleaseStore(archiveDir: string): ReleaseStore {
         out.push(readRecord(packId, entry));
       }
       return out;
+    },
+
+    listPackIds(): readonly string[] {
+      if (!existsSync(root)) return [];
+      const out: string[] = [];
+      for (const entry of readdirSync(root)) {
+        const candidate = join(root, entry);
+        if (!statSync(candidate).isDirectory()) continue;
+        assertSafeId("packId", entry);
+        out.push(entry);
+      }
+      return out.sort((a, b) => a.localeCompare(b, "en"));
+    },
+
+    recordBytes(packId: string, releaseId: string): Buffer {
+      const path = recordPath(packId, releaseId);
+      if (!existsSync(path)) {
+        throw new ReleaseError(`no release record at ${path}`);
+      }
+      const bytes = readFileSync(path);
+      parseRecordBytes(bytes, path);
+      return bytes;
     },
 
     imagePath(packId: string, releaseId: string, imageFile: string): string {

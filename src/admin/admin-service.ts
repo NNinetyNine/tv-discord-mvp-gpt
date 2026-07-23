@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 
@@ -24,8 +24,18 @@ import {
 } from "../application/create-pack-with-missing-assets.ts";
 import { applyCreatePackWithMissingAssetsFile } from "../application/create-pack-with-missing-assets-file.ts";
 import type { Pack } from "../packs/packs.ts";
-import { buildPacks } from "../packs/packs.ts";
-import { buildRegistry, retireAsset, RegistryError } from "../registry/registry.ts";
+import {
+  addPackAsset,
+  buildPacks,
+  deletePack,
+  PackError,
+  reassignPackChannel,
+  removePackAsset,
+  renamePackDisplay,
+  reorderPackAssets,
+  reorderPacks,
+} from "../packs/packs.ts";
+import { addAssetAlias, buildRegistry, removeAssetAlias, retireAsset, RegistryError } from "../registry/registry.ts";
 import {
   previewRegistryCsvImport,
   type RegistryCsvImportIssue,
@@ -36,6 +46,7 @@ import {
   RegistryCsvImportFileError,
 } from "../registry/registry-csv-import-file.ts";
 import { createResolver } from "../resolver/index.ts";
+import { findDuplicates } from "../audit/find-duplicates.ts";
 import {
   auditAssetMarketIdentity,
   type AssetMarketIdentityAudit,
@@ -120,7 +131,7 @@ import {
 } from "../application/verify-pack-discord-thread-routing.ts";
 import { createPersistentWorkspace } from "../packs/persistence.ts";
 import { createStagingStore } from "../wiring/staging.ts";
-import { createReleaseStore, type ReleaseStore } from "../release/release-store.ts";
+import { createReleaseStore, type ReleaseRecord, type ReleaseStore } from "../release/release-store.ts";
 import {
   inspectPackPublishReadiness,
   publishPack,
@@ -171,6 +182,14 @@ import { buildChannelResolver } from "../wiring/channels.ts";
 import { AdminThreadProvisioningWorkspace } from "./admin-thread-provisioning-workspace.ts";
 import { AdminPublicationWorkspace } from "./admin-publication-workspace.ts";
 import { AdminServerConfigurationWorkspace } from "./admin-server-configuration-workspace.ts";
+import {
+  buildAliasChangePreview,
+  buildPackMaintenancePreview,
+  parsePackMaintenanceInput,
+  type AdminAliasChangePreview,
+  type AdminPackMaintenanceInput,
+  type AdminPackMaintenancePreview,
+} from "./admin-operator-tools.ts";
 import {
   applyServerConfigurationFile,
   ServerConfigurationFileError,
@@ -700,6 +719,15 @@ interface AdminServerConfigurationPreviewRecord {
   readonly threadBindingsAfterBytes: Buffer;
 }
 
+interface AdminPackMaintenancePreviewRecord {
+  readonly request: AdminPackMaintenanceInput;
+  readonly preview: AdminPackMaintenancePreview;
+}
+
+interface AdminAliasChangePreviewRecord {
+  readonly preview: AdminAliasChangePreview;
+}
+
 export interface AdminThreadForumInspectionResult {
   readonly schemaVersion: 1;
   readonly packId: string;
@@ -888,6 +916,8 @@ export class AdminService {
   #registryCsvImports = new Map<string, AdminRegistryCsvImportRecord>();
   #publicationPreviews = new Map<string, AdminPackPublicationPreview>();
   #serverConfigurationPreviews = new Map<string, AdminServerConfigurationPreviewRecord>();
+  #packMaintenancePreviews = new Map<string, AdminPackMaintenancePreviewRecord>();
+  #aliasChangePreviews = new Map<string, AdminAliasChangePreviewRecord>();
   #publicationInProgress = false;
   readonly #openDiscordForumSession?: AdminDiscordForumSessionFactory;
   readonly #openDiscordForumProvisioningSession?: AdminDiscordForumProvisioningSessionFactory;
@@ -4443,6 +4473,311 @@ export class AdminService {
       await this.refresh();
       return Object.freeze({ schemaVersion: 1, assetId, retired: true, canonicalLogoRetained: true, status: this.status() });
     });
+  }
+
+  async operatorToolsState(): Promise<Readonly<Record<string, unknown>>> {
+    const releasePacks = this.releases.listPackIds();
+    const records = releasePacks.flatMap((packId) => this.releases.listReleases(packId));
+    return Object.freeze({
+      schemaVersion: 1,
+      status: this.status(),
+      marketIdentityAudit: Object.freeze({
+        ok: this.#state.audit.ok,
+        gapCount: this.#state.audit.gaps.length,
+        gaps: Object.freeze(this.#state.audit.gaps.map((gap) => Object.freeze({ ...gap }))),
+      }),
+      exportAudit: Object.freeze({
+        available: this.packCaptureSessions.downloadsRoot !== null,
+        downloadsFolder: this.packCaptureSessions.downloadsRoot,
+      }),
+      archive: Object.freeze({
+        packCount: releasePacks.length,
+        releaseCount: records.length,
+        publishedCount: records.filter((record) => record.publishedAt !== null).length,
+        interruptedCount: records.filter((record) => record.publishedAt === null).length,
+      }),
+      specialistTools: Object.freeze({
+        classification: "development_or_recovery_only",
+        exposedInAdministration: false,
+        tools: Object.freeze([
+          "TradingView login and chart loading",
+          "button inspection and snapshot spike",
+          "fixture posting",
+          "legacy runtime helpers",
+        ]),
+      }),
+    });
+  }
+
+  async auditChartExports(): Promise<Readonly<Record<string, unknown>>> {
+    const root = this.packCaptureSessions.downloadsRoot;
+    if (root === null) throw new AdminError("chart_downloads_not_configured", "Configure a Chart Downloads folder before running the export audit.", 409);
+    const registry = buildRegistry(this.#state.rawRegistry as Record<string, Record<string, unknown>>, this.#state.rawChannels as Record<string, unknown>);
+    const resolver = createResolver(registry);
+    const entries = (await readdir(root, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.toLocaleLowerCase("en-US").endsWith(".png"))
+      .sort((a, b) => a.name.localeCompare(b.name, "en"));
+    const resolved: { readonly file: string; readonly identity: { readonly id: string; readonly display: string } }[] = [];
+    const unknown: { readonly file: string; readonly symbol: string }[] = [];
+    const unparseable: { readonly file: string }[] = [];
+    for (const entry of entries) {
+      const file = entry.name;
+      const candidatePath = join(root, file);
+      const candidateStat = await stat(candidatePath);
+      if (!candidateStat.isFile()) continue;
+      const result = resolver.resolve(file);
+      if (result.ok) resolved.push(Object.freeze({ file, identity: Object.freeze({ id: result.asset.id, display: result.asset.display }) }));
+      else if (result.reason === "unknown_symbol") unknown.push(Object.freeze({ file, symbol: result.symbol }));
+      else unparseable.push(Object.freeze({ file }));
+    }
+    const duplicates = findDuplicates(resolved, unknown);
+    return Object.freeze({
+      schemaVersion: 1,
+      scannedCount: entries.length,
+      resolvedCount: resolved.length,
+      unresolvedCount: unknown.length + unparseable.length,
+      duplicateGroupCount: duplicates.length,
+      resolved: Object.freeze(resolved),
+      unknown: Object.freeze(unknown),
+      unparseable: Object.freeze(unparseable),
+      duplicates: Object.freeze(duplicates.map((group) => Object.freeze({ ...group, files: Object.freeze([...group.files]) }))),
+      effects: Object.freeze({ repositoryChanged: false, workspaceChanged: false, stagingChanged: false, discordContacted: false }),
+    });
+  }
+
+  async packMaintenanceState(): Promise<Readonly<Record<string, unknown>>> {
+    const runtime = this.#packRuntime();
+    const { bindings } = await this.#readThreadBindings();
+    const packs = this.#state.packs.map((pack, order) => Object.freeze({
+      id: pack.id,
+      displayName: pack.display,
+      logicalChannel: pack.channel,
+      order,
+      state: runtime.workspace.packState(pack.id),
+      capturedCount: runtime.workspace.capturedFor(pack.id).length,
+      boundThreadCount: Object.keys(bindings.packs[pack.id] ?? {}).length,
+      releaseCount: this.releases.listReleases(pack.id).length,
+      assetIds: Object.freeze([...pack.assets]),
+      assets: Object.freeze(pack.assets.map((assetId) => this.getAsset(assetId))),
+    }));
+    const heldAssets = this.#state.assets
+      .filter((asset) => (this.#state.assetPackIds.get(asset.id) ?? []).length === 0)
+      .map((asset) => assetSummary(asset, []));
+    return Object.freeze({
+      schemaVersion: 1,
+      packsSourceSha256: this.#state.packsFile.sha256,
+      logicalChannels: Object.freeze(this.logicalChannels()),
+      packs: Object.freeze(packs),
+      heldAssets: Object.freeze(heldAssets),
+    });
+  }
+
+  async #currentPackMaintenancePreview(request: AdminPackMaintenanceInput): Promise<AdminPackMaintenancePreview> {
+    const pack = this.#state.byPackId.get(request.packId);
+    if (pack === undefined) throw new AdminError("pack_not_found", `Pack ${request.packId} was not found.`, 404);
+    const runtime = this.#packRuntime();
+    const { bindings } = await this.#readThreadBindings();
+    return buildPackMaintenancePreview({
+      value: request,
+      packs: this.#state.packs,
+      assets: this.#state.assets,
+      channelNames: new Set(this.logicalChannels()),
+      packsSha256: this.#state.packsFile.sha256,
+      workspaceState: runtime.workspace.packState(pack.id),
+      capturedCount: runtime.workspace.capturedFor(pack.id).length,
+      boundThreadCount: Object.keys(bindings.packs[pack.id] ?? {}).length,
+    });
+  }
+
+  async preparePackMaintenance(value: unknown): Promise<AdminPackMaintenancePreview> {
+    await this.refresh();
+    const request = parsePackMaintenanceInput(value);
+    const preview = await this.#currentPackMaintenancePreview(request);
+    this.#packMaintenancePreviews.clear();
+    this.#packMaintenancePreviews.set(preview.previewId, Object.freeze({ request, preview }));
+    return preview;
+  }
+
+  async applyPackMaintenance(previewId: unknown, confirmation: unknown): Promise<Readonly<Record<string, unknown>>> {
+    return this.#withCanonicalSourceMutationLock(async () => {
+      if (typeof previewId !== "string") throw new AdminError("invalid_request", "Pack maintenance preview ID is required.");
+      const stored = this.#packMaintenancePreviews.get(previewId);
+      if (stored === undefined) throw new AdminError("pack_maintenance_preview_not_found", "Pack maintenance preview was not found or has expired.", 404);
+      await this.refresh();
+      const currentPreview = await this.#currentPackMaintenancePreview(stored.request);
+      if (currentPreview.previewId !== previewId) throw new AdminError("stale_pack_state", "Pack definitions, Workspace state, or Thread bindings changed after review.", 409);
+      if (!currentPreview.ready) throw new AdminError("pack_maintenance_blocked", "Resolve every Pack maintenance blocker before applying the change.", 409, { blockers: currentPreview.blockers });
+      if (confirmation !== currentPreview.confirmation) throw new AdminError("application_confirmation_invalid", `Confirmation must equal ${currentPreview.confirmation} exactly.`);
+      const packsPath = join(this.repositoryRoot, PACKS_RELATIVE_PATH);
+      const originalBytes = this.#state.packsFile.bytes;
+      const validIds = new Set(this.#state.assets.map((asset) => asset.id));
+      const channelNames = new Set(this.logicalChannels());
+      try {
+        if (stored.request.operation === "delete") {
+          deletePack(packsPath, validIds, channelNames, stored.request.packId);
+        } else {
+          const request = stored.request;
+          const current = this.#state.byPackId.get(request.packId);
+          if (current === undefined) throw new AdminError("pack_not_found", `Pack ${request.packId} was not found.`, 404);
+          if (current.display !== request.displayName) renamePackDisplay(packsPath, validIds, channelNames, request.packId, request.displayName);
+          if (current.channel !== request.logicalChannel) reassignPackChannel(packsPath, validIds, channelNames, request.packId, request.logicalChannel);
+          let workingAssets = [...current.assets];
+          for (const assetId of request.assetIds) {
+            if (!workingAssets.includes(assetId)) {
+              addPackAsset(packsPath, validIds, channelNames, request.packId, assetId);
+              workingAssets.push(assetId);
+            }
+          }
+          for (const assetId of [...workingAssets]) {
+            if (!request.assetIds.includes(assetId)) {
+              removePackAsset(packsPath, validIds, channelNames, request.packId, assetId);
+              workingAssets = workingAssets.filter((id) => id !== assetId);
+            }
+          }
+          if (workingAssets.some((id, index) => request.assetIds[index] !== id)) {
+            reorderPackAssets(packsPath, validIds, channelNames, request.packId, request.assetIds);
+          }
+          if (this.#state.packs.some((pack, index) => request.packOrder[index] !== pack.id)) {
+            reorderPacks(packsPath, validIds, channelNames, request.packOrder);
+          }
+        }
+      } catch (error) {
+        await writeFile(packsPath, originalBytes);
+        await this.refresh();
+        if (error instanceof AdminError) throw error;
+        if (error instanceof PackError) throw new AdminError("pack_maintenance_failed", error.message, 409);
+        throw error;
+      }
+      await this.refresh();
+      this.#packMaintenancePreviews.delete(previewId);
+      return Object.freeze({
+        schemaVersion: 1,
+        operation: stored.request.operation,
+        packId: stored.request.packId,
+        applied: true,
+        status: this.status(),
+        effects: Object.freeze({ packsChanged: true, registryChanged: false, threadBindingsChanged: false, workspaceChanged: false, archiveChanged: false, discordContacted: false }),
+      });
+    });
+  }
+
+  async prepareRegistryAliasChange(assetId: string, value: unknown): Promise<AdminAliasChangePreview> {
+    await this.refresh();
+    const asset = this.#state.byAssetId.get(assetId);
+    if (asset === undefined) throw new AdminError("asset_not_found", `Asset ${assetId} was not found.`, 404);
+    const preview = buildAliasChangePreview({ value, asset, registrySha256: this.#state.registryFile.sha256, allAssets: this.#state.assets });
+    this.#aliasChangePreviews.clear();
+    this.#aliasChangePreviews.set(preview.previewId, Object.freeze({ preview }));
+    return preview;
+  }
+
+  async applyRegistryAliasChange(assetId: string, previewId: unknown, confirmation: unknown): Promise<Readonly<Record<string, unknown>>> {
+    return this.#withCanonicalSourceMutationLock(async () => {
+      if (typeof previewId !== "string") throw new AdminError("invalid_request", "Alias change preview ID is required.");
+      const stored = this.#aliasChangePreviews.get(previewId);
+      if (stored === undefined || stored.preview.assetId !== assetId) throw new AdminError("alias_preview_not_found", "Alias change preview was not found or has expired.", 404);
+      await this.refresh();
+      const asset = this.#state.byAssetId.get(assetId);
+      if (asset === undefined) throw new AdminError("asset_not_found", `Asset ${assetId} was not found.`, 404);
+      const currentPreview = buildAliasChangePreview({
+        value: { assetId, operation: stored.preview.operation, alias: stored.preview.alias },
+        asset,
+        registrySha256: this.#state.registryFile.sha256,
+        allAssets: this.#state.assets,
+      });
+      if (currentPreview.previewId !== previewId) throw new AdminError("stale_asset_state", "Registry aliases changed after review.", 409);
+      if (confirmation !== currentPreview.confirmation) throw new AdminError("application_confirmation_invalid", `Confirmation must equal ${currentPreview.confirmation} exactly.`);
+      const registryPath = join(this.repositoryRoot, REGISTRY_RELATIVE_PATH);
+      const channelsPath = join(this.repositoryRoot, CHANNELS_RELATIVE_PATH);
+      const originalBytes = this.#state.registryFile.bytes;
+      try {
+        if (currentPreview.operation === "add") addAssetAlias(registryPath, channelsPath, assetId, currentPreview.alias);
+        else removeAssetAlias(registryPath, channelsPath, assetId, currentPreview.alias);
+      } catch (error) {
+        await writeFile(registryPath, originalBytes);
+        await this.refresh();
+        if (error instanceof RegistryError) throw new AdminError("alias_change_failed", error.message, 409);
+        throw error;
+      }
+      await this.refresh();
+      this.#aliasChangePreviews.delete(previewId);
+      return Object.freeze({
+        schemaVersion: 1,
+        asset: this.getAsset(assetId),
+        operation: currentPreview.operation,
+        alias: currentPreview.alias,
+        applied: true,
+        effects: Object.freeze({ registryChanged: true, packMembershipChanged: false, logoChanged: false, discordContacted: false }),
+      });
+    });
+  }
+
+  releaseArchiveState(): Readonly<Record<string, unknown>> {
+    const currentPackIds = new Set(this.#state.packs.map((pack) => pack.id));
+    const packIds = this.releases.listPackIds();
+    const releases = packIds.flatMap((packId) => this.releases.listReleases(packId).map((record) => this.#releaseSummary(record, currentPackIds.has(packId))));
+    releases.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt), "en"));
+    return Object.freeze({
+      schemaVersion: 1,
+      releaseCount: releases.length,
+      publishedCount: releases.filter((record) => record.state === "published").length,
+      interruptedCount: releases.filter((record) => record.state === "interrupted").length,
+      releases: Object.freeze(releases),
+    });
+  }
+
+  #releaseSummary(record: ReleaseRecord, packCurrent: boolean): Readonly<Record<string, unknown>> {
+    const postedCount = record.analyses.filter((analysis) => analysis.discordMessageId !== null).length;
+    return Object.freeze({
+      releaseId: record.releaseId,
+      version: record.version,
+      packId: record.packId,
+      packDisplayName: record.packDisplay,
+      packCurrent,
+      state: record.publishedAt === null ? "interrupted" as const : "published" as const,
+      startedAt: record.startedAt,
+      publishedAt: record.publishedAt,
+      analysisCount: record.analyses.length,
+      postedCount,
+      destinationId: record.version === 1 ? record.channelId : record.forumChannelId,
+      detailUrl: `/api/v1/releases/${encodeURIComponent(record.packId)}/${encodeURIComponent(record.releaseId)}`,
+      recordUrl: `/api/v1/releases/${encodeURIComponent(record.packId)}/${encodeURIComponent(record.releaseId)}/release.json`,
+    });
+  }
+
+  releaseArchiveDetail(packId: string, releaseId: string): Readonly<Record<string, unknown>> {
+    let record: ReleaseRecord;
+    try { record = this.releases.getRelease(packId, releaseId); }
+    catch (error) { throw new AdminError("release_not_found", error instanceof Error ? error.message : "Release was not found.", 404); }
+    return Object.freeze({
+      schemaVersion: 1,
+      ...this.#releaseSummary(record, this.#state.byPackId.has(packId)),
+      corrections: Object.freeze([...record.corrections]),
+      analyses: Object.freeze(record.analyses.map((analysis) => Object.freeze({
+        assetId: analysis.assetId,
+        displayName: analysis.display,
+        capturedAt: analysis.capturedAt,
+        imageFile: analysis.imageFile,
+        threadId: "threadId" in analysis ? analysis.threadId : null,
+        discordMessageId: analysis.discordMessageId,
+        postedAt: analysis.postedAt,
+        imageUrl: `/api/v1/releases/${encodeURIComponent(packId)}/${encodeURIComponent(releaseId)}/images/${encodeURIComponent(analysis.imageFile)}`,
+      }))),
+    });
+  }
+
+  releaseRecordBytes(packId: string, releaseId: string): Buffer {
+    try { return this.releases.recordBytes(packId, releaseId); }
+    catch (error) { throw new AdminError("release_not_found", error instanceof Error ? error.message : "Release was not found.", 404); }
+  }
+
+  async releaseImageBytes(packId: string, releaseId: string, imageFile: string): Promise<Buffer> {
+    let record: ReleaseRecord;
+    try { record = this.releases.getRelease(packId, releaseId); }
+    catch (error) { throw new AdminError("release_not_found", error instanceof Error ? error.message : "Release was not found.", 404); }
+    if (!record.analyses.some((analysis) => analysis.imageFile === imageFile)) throw new AdminError("release_artifact_not_found", "Release image was not found.", 404);
+    try { return await readFile(this.releases.imagePath(packId, releaseId, imageFile)); }
+    catch (error) { throw new AdminError("release_artifact_not_found", error instanceof Error ? error.message : "Release image was not found.", 404); }
   }
 
   listPacks(): readonly AdminPackSummary[] {

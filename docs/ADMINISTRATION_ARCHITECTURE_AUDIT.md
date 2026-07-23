@@ -211,3 +211,32 @@ Discord content is never deleted or modified by migration.
 Historical Release custody remains unchanged. Administration archive migration
 or consolidation is not implied by a Discord server move and remains a separate
 future workflow.
+
+## Step 541 hidden operator-function exposure
+
+The remaining routine operator gaps identified in the Step 537 audit now have
+Administration front doors without introducing duplicate domain stores:
+
+- current Pack rename, route assignment, held-Asset membership, member order,
+  Pack order, and deletion reuse the existing Pack persistence functions;
+- Registry alias changes reuse the existing alias store operations and global
+  identity namespace;
+- historical Release browsing reads the existing installation-owned Release
+  store, including custody for Packs no longer in current definitions; and
+- canonical status, market-identity reconciliation, and export filename audits
+  are available as read-only Server tools.
+
+Pack maintenance is preview-bound to exact Pack source, Workspace, and thread
+facts. Membership-sensitive changes require Empty Workspace state; route changes
+and deletion require zero persistent bindings. Registry alias application is
+bound to exact Registry source. Neither path contacts Discord or changes Release
+custody.
+
+Release archive downloads return exact stored record bytes and archived image
+bytes. Archive browsing has no resume, supersession, deletion, or correction
+write path. Interrupted Release recovery remains owned by Workspace publishing.
+
+Specialist TradingView/browser and fixture scripts remain explicitly classified
+as development or recovery surfaces. Their continued existence is not evidence
+that they belong in primary Administration navigation, and no cleanup is
+performed in this milestone.

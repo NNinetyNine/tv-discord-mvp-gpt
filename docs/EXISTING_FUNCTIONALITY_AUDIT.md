@@ -7,7 +7,7 @@ source tree and is intentionally conservative. Nothing listed here is removed.
 
 - Canonical status and source-integrity summary.
 - Registry search, Pack-filter pills, exact-ID inspection, governed create/update/retire,
-  validated additions-only CSV import, and canonical logo custody.
+  validated additions-only CSV import, canonical alias maintenance, and canonical logo custody.
 - Registry-only selection when creating a Pack.
 - Pack capture sessions, Downloads-folder scanning, manual import/review,
   accepted revisions, individual revision deletion, and Pack reset.
@@ -16,17 +16,19 @@ source tree and is intentionally conservative. Nothing listed here is removed.
 - Standalone chart rendering and local artifact download.
 - Existing-thread adoption, current-binding verification, replacement, local
   unbinding, new post provisioning, canonical logo reuse, and Pack-route checks.
+- Existing Pack rename, logical-route reassignment, held-Asset membership,
+  member order, Pack order, and guarded deletion.
+- Historical Release browsing and exact record/image downloads, including
+  custody for Packs no longer in current definitions.
+- Canonical status, market-identity reconciliation, and chart-export filename audits.
 
 ## Implemented but not fully exposed
 
-- Historical Release listing and archive browsing.
-- Existing Pack maintenance: rename, reorder members, add/remove members,
-  reassign channel, reorder Packs, and delete Pack.
-- Registry alias maintenance through dedicated add/remove scripts.
-- Market-identity and export audits.
-- Installation status reporting through the status script. Administration now exposes Discord installation readiness, while the script remains a recovery and non-UI surface.
-
-These are candidates for UI exposure or consolidation, not deletion.
+Routine Pack maintenance, Registry aliases, historical Release custody, and the
+identified status/audit surfaces are exposed as of Step 541. The remaining
+non-primary functions are the specialist browser, fixture, legacy-runtime, and
+scripted recovery surfaces classified below. They remain candidates for later
+consolidation or documentation, not deletion.
 
 ## Script-only governed workflows
 
@@ -50,10 +52,11 @@ must not be removed before reference and deployment analysis.
 ## UI gaps confirmed
 
 - Channel-route inspection, live Discord validation, governed modification, and controlled server migration are exposed in Administration. Credentials remain process-environment only; guild, forum, role, permission, and tag facts are read-only inspection evidence.
-- Publication and interrupted Release recovery are exposed in Workspace, but
-  historical Release browsing and export remain absent.
-- No complete maintenance surface for existing Packs.
-- CSV onboarding can set aliases for new Assets, but there is still no governed UI for editing aliases on existing Assets.
+- Publication, interrupted Release recovery, and historical Release browsing
+  are exposed. Archive browsing remains intentionally read-only; corrections and
+  archive migration are separate future decisions.
+- Existing Pack maintenance is exposed with Empty-Workspace and thread-binding gates.
+- CSV onboarding and the Registry inspector both support governed aliases.
 - Missing-metadata Assets were hidden from the renderer before Step 537.
 - Registry Add/Edit was inaccessible because of the stacking-context defect
   fixed in Step 537.
@@ -75,3 +78,17 @@ Later audits should trace each CLI script from package/deployment documentation,
 identify every consumer of legacy configuration, inventory archived Release
 operators, and determine which recovery functions need UI access before any
 cleanup proposal is prepared.
+
+## Step 541 operator-surface decision
+
+Routine hidden capabilities identified by the initial audit are now exposed by
+reusing existing domain implementations. Pack maintenance is not a second Pack
+editor: it calls the existing Pack persistence functions after a full candidate
+preview. Alias maintenance is not a second Registry: it calls existing alias
+operations under exact-current Registry custody. The Archive page is a read-only
+projection of the existing Administration Release store.
+
+Status and filename audits are read-only. TradingView browser automation, button
+inspection, snapshot experiments, fixture posting, and legacy-runtime helpers
+remain development or recovery tools and are deliberately absent from primary
+Administration navigation. No script, configuration, or archive is removed.

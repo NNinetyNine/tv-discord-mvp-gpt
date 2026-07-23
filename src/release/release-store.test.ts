@@ -179,6 +179,31 @@ describe("listReleases — policy-free facts", () => {
   });
 });
 
+describe("archive discovery and exact record custody", () => {
+  it("lists current and historical Pack directories and returns exact validated record bytes", () => {
+    const crypto = store.createRelease(singleAt("2026-07-08T09:00:00.000Z"));
+    const historical = store.createRelease({
+      ...singleAt("2026-07-08T10:00:00.000Z"),
+      packId: "retired_pack",
+      packDisplay: "Retired Pack",
+    });
+
+    expect(store.listPackIds()).toEqual(["crypto", "retired_pack"]);
+    expect(store.recordBytes("crypto", crypto.releaseId)).toEqual(
+      readFileSync(join(archiveDir, "crypto", crypto.releaseId, "release.json")),
+    );
+    expect(store.recordBytes("retired_pack", historical.releaseId)).toEqual(
+      readFileSync(join(archiveDir, "retired_pack", historical.releaseId, "release.json")),
+    );
+  });
+
+  it("validates a record before returning its bytes", () => {
+    const record = store.createRelease(input());
+    writeFileSync(join(archiveDir, "crypto", record.releaseId, "release.json"), "{ not json", "utf8");
+    expect(() => store.recordBytes("crypto", record.releaseId)).toThrow(/corrupt release record/);
+  });
+});
+
 describe("recordPost", () => {
   it("records a message identity incrementally and persists it", () => {
     const rec = store.createRelease(input());

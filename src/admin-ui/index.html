@@ -27,6 +27,7 @@
     <button type="button" data-view="threads">THREADS</button>
     <button type="button" data-view="server">SERVER</button>
     <button type="button" data-view="packs">PACKS</button>
+    <button type="button" data-view="archive">ARCHIVE</button>
     <button type="button" data-view="renderer">RENDER</button>
     <button type="button" data-view="registry">REGISTRY</button>
   </nav>
@@ -306,6 +307,29 @@
           <button id="server-apply" class="primary-action" type="button" disabled>APPLY SERVER CHANGE</button>
         </div>
       </section>
+
+      <section class="window operator-audits" aria-labelledby="operator-audits-heading">
+        <header class="window-header">
+          <div><p class="micro-label">RECOVERY &amp; INSPECTION SURFACES</p><h2 id="operator-audits-heading">STATUS &amp; AUDITS</h2></div>
+          <span id="operator-audit-state" class="context-fact">LOADING AUDITS</span>
+        </header>
+        <p class="window-help">These read-only tools expose the canonical status report, market-identity reconciliation, Release custody totals, and the configured TradingView export-folder audit. Specialist browser automation remains development and recovery tooling rather than normal Administration workflow.</p>
+        <div class="operator-audit-grid">
+          <div class="derived-channel"><span>CANONICAL ASSETS</span><strong id="operator-status-assets">—</strong></div>
+          <div class="derived-channel"><span>PACKS</span><strong id="operator-status-packs">—</strong></div>
+          <div class="derived-channel"><span>IDENTITY GAPS</span><strong id="operator-status-gaps">—</strong></div>
+          <div class="derived-channel"><span>ARCHIVED RELEASES</span><strong id="operator-status-releases">—</strong></div>
+        </div>
+        <details class="technical-details" open>
+          <summary>MARKET IDENTITY RECONCILIATION</summary>
+          <div id="operator-identity-gaps" class="operator-audit-results"></div>
+        </details>
+        <div class="server-route-actions">
+          <button id="operator-run-export-audit" class="outline-action" type="button">AUDIT DOWNLOADS FOLDER</button>
+          <span id="operator-export-audit-state" class="context-fact">NOT RUN</span>
+        </div>
+        <div id="operator-export-audit-results" class="operator-audit-results" hidden></div>
+      </section>
     </section>
 
     <section class="view" data-view-panel="packs" hidden>
@@ -321,6 +345,45 @@
           <div><strong>RELEASE BOUNDARY</strong><span>Archive custody, interrupted Release recovery, and publication history are recorded per Pack.</span></div>
           <div><strong>FORUM ROUTE</strong><span>The Pack logical channel resolves the Discord forum; each Pack/Asset pair owns one persistent thread binding.</span></div>
         </div>
+      </section>
+
+      <section class="window pack-maintenance" aria-labelledby="pack-maintenance-heading">
+        <header class="window-header">
+          <div><p class="micro-label">EXISTING DEFINITION MAINTENANCE</p><h2 id="pack-maintenance-heading">MANAGE CURRENT PACKS</h2></div>
+          <span id="pack-maintenance-state" class="context-fact">LOADING PACKS</span>
+        </header>
+        <p class="window-help">Rename, reassign the logical route, add held Registry Assets, remove or reorder members, reorder Packs, or delete an Empty Pack. Membership and member-order changes remain Empty-only. Route changes and deletion are blocked while persistent thread bindings exist.</p>
+        <div class="pack-maintenance-fields">
+          <label><span>CURRENT PACK</span><select id="pack-maintenance-pack"><option value="">SELECT PACK</option></select></label>
+          <label><span>DISPLAY NAME</span><input id="pack-maintenance-display" maxlength="120" autocomplete="off"></label>
+          <label><span>LOGICAL CHANNEL</span><select id="pack-maintenance-channel"><option value="">SELECT CHANNEL</option></select></label>
+          <div class="derived-channel"><span>WORKSPACE</span><strong id="pack-maintenance-workspace">—</strong></div>
+          <div class="derived-channel"><span>THREAD BINDINGS</span><strong id="pack-maintenance-bindings">—</strong></div>
+          <div class="derived-channel"><span>RELEASES</span><strong id="pack-maintenance-releases">—</strong></div>
+        </div>
+        <div class="pack-order-actions">
+          <button id="pack-maintenance-pack-up" class="outline-action compact-action" type="button">MOVE PACK EARLIER</button>
+          <button id="pack-maintenance-pack-down" class="outline-action compact-action" type="button">MOVE PACK LATER</button>
+          <span id="pack-maintenance-order" class="context-fact">—</span>
+        </div>
+        <div class="asset-search-picker pack-held-asset">
+          <label><span>ADD HELD REGISTRY ASSET</span><select id="pack-maintenance-held-asset"><option value="">SELECT HELD ASSET</option></select></label>
+          <button id="pack-maintenance-add-asset" class="outline-action" type="button" disabled>ADD TO PACK</button>
+        </div>
+        <ol id="pack-maintenance-members" class="member-list" aria-live="polite"></ol>
+        <div class="pack-maintenance-actions">
+          <button id="pack-maintenance-review" class="primary-action" type="button" disabled>REVIEW PACK CHANGE</button>
+          <button id="pack-maintenance-delete" class="danger-action" type="button" disabled>REVIEW PACK DELETION</button>
+        </div>
+        <section id="pack-maintenance-preview" class="publication-preview" hidden aria-live="polite">
+          <header><div><p class="micro-label">EXACT PACK PREFLIGHT</p><h3>PACK CHANGE REVIEW</h3></div><span id="pack-maintenance-preview-state" class="workspace-status pending">AWAITING REVIEW</span></header>
+          <div id="pack-maintenance-preview-summary"></div>
+          <div id="pack-maintenance-preview-blockers" class="server-preview-issues" hidden></div>
+          <div class="publication-confirmation">
+            <label><span>TYPE EXACT CONFIRMATION</span><input id="pack-maintenance-confirmation" autocomplete="off" placeholder="REVIEW PACK FIRST"></label>
+            <button id="pack-maintenance-apply" class="primary-action" type="button" disabled>APPLY PACK CHANGE</button>
+          </div>
+        </section>
       </section>
 
       <section class="window pack-controls" aria-labelledby="pack-controls-heading">
@@ -372,6 +435,30 @@
       <section id="result-window" class="window result-window" hidden aria-live="polite">
         <header class="window-header"><div><p class="micro-label">RESULT</p><h2 id="result-heading">PACK CREATED</h2></div></header>
         <div id="result-content"></div>
+      </section>
+    </section>
+
+    <section class="view" data-view-panel="archive" hidden>
+      <section class="window archive-overview" aria-labelledby="archive-heading">
+        <header class="window-header">
+          <div><p class="micro-label">DURABLE RELEASE CUSTODY</p><h1 id="archive-heading">RELEASE ARCHIVE</h1></div>
+          <span id="archive-state" class="context-fact">LOADING RELEASES</span>
+        </header>
+        <p class="window-help">Browse every Administration-owned Release, including history for Packs no longer in current definitions. Release records and archived chart images are read-only and downloadable. Interrupted Releases remain resumable from Workspace publication controls.</p>
+        <div class="archive-fact-grid">
+          <div class="derived-channel"><span>TOTAL RELEASES</span><strong id="archive-total">—</strong></div>
+          <div class="derived-channel"><span>PUBLISHED</span><strong id="archive-published">—</strong></div>
+          <div class="derived-channel"><span>INTERRUPTED</span><strong id="archive-interrupted">—</strong></div>
+          <label><span>FILTER PACK</span><select id="archive-pack-filter"><option value="">ALL PACKS</option></select></label>
+        </div>
+        <div class="table-wrap archive-table-wrap">
+          <table><thead><tr><th>PACK</th><th>RELEASE</th><th>STATE</th><th>STARTED</th><th>PUBLISHED</th><th>ANALYSES</th><th>ACTION</th></tr></thead><tbody id="archive-body"></tbody></table>
+        </div>
+      </section>
+      <section id="archive-detail" class="window archive-detail" hidden aria-live="polite">
+        <header class="window-header"><div><p class="micro-label">RELEASE EVIDENCE</p><h2 id="archive-detail-heading">RELEASE DETAIL</h2></div><a id="archive-record-download" class="outline-action download-link">DOWNLOAD RECORD</a></header>
+        <div id="archive-detail-facts" class="archive-detail-facts"></div>
+        <div id="archive-analyses" class="archive-analysis-grid"></div>
       </section>
     </section>
 
@@ -460,6 +547,16 @@
               <div><strong id="registry-logo-state">NO CANONICAL LOGO</strong><span id="registry-logo-evidence">PNG optional until a downstream workflow requires it.</span></div>
             </div>
             <dl id="registry-asset-facts" class="registry-asset-facts" hidden></dl>
+            <section id="registry-alias-management" class="registry-alias-management" hidden>
+              <h3>TRADINGVIEW ALIASES</h3>
+              <div id="registry-alias-list" class="registry-alias-list"></div>
+              <div class="registry-alias-add"><label><span>NEW ALIAS</span><input id="registry-alias-input" maxlength="96" autocomplete="off" placeholder="Alternate TradingView token"></label><button id="registry-alias-review-add" class="outline-action compact-action" type="button">REVIEW ADD</button></div>
+              <section id="registry-alias-preview" class="registry-change-preview" hidden>
+                <div id="registry-alias-preview-summary"></div>
+                <label><span>TYPE EXACT CONFIRMATION</span><input id="registry-alias-confirmation" autocomplete="off"></label>
+                <button id="registry-alias-apply" class="primary-action compact-action" type="button" disabled>APPLY ALIAS CHANGE</button>
+              </section>
+            </section>
             <div id="registry-primary-controls" class="registry-management-controls" hidden>
               <button id="registry-edit-asset" class="primary-action" type="button">EDIT METADATA</button>
               <label class="registry-logo-upload"><span>REPLACE CANONICAL LOGO</span><input id="registry-logo-input" type="file" accept="image/png"></label>
