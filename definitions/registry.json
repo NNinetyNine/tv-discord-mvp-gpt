@@ -64,7 +64,7 @@
   "bas":  { "tradingView": "BAS",    "display": "BASF",        "channel": "stocks" },
   "b":    { "tradingView": "B",      "display": "Barrick Mining Corporation", "channel": "stocks" },
   "asts": { "tradingView": "ASTS",   "display": "AST SpaceMobile", "channel": "stocks" },
-  "aapl": { "tradingView": "AAPL",   "display": "Apple",       "channel": "stocks" },
+  "aapl": { "tradingView": "NASDAQ:AAPL",   "display": "Apple",       "currency": "USD", "channel": "stocks" },
   "axp":  { "tradingView": "AXP",    "display": "American Express", "channel": "stocks" },
   "amzn": { "tradingView": "AMZN",   "display": "Amazon",      "channel": "stocks" },
   "amd":  { "tradingView": "AMD",    "display": "AMD",         "channel": "stocks" },
