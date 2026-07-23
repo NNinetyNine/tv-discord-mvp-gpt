@@ -145,6 +145,16 @@ h1, h2 { margin: 0; font-size: .78rem; letter-spacing: .15em; font-weight: 850; 
 .workspace-progress-track { height: .3rem; margin: 0 1.1rem .8rem; overflow: hidden; border-radius: 999px; background: rgba(231, 216, 168, .08); }
 .workspace-progress-track span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, #aa8530, var(--gold-strong)); transition: width .2s ease; }
 .workspace-remaining { margin: 0; padding: 0 1.1rem 1rem; color: var(--text-faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .6rem; letter-spacing: .06em; }
+.workspace-session-grid { display: grid; grid-template-columns: 1.4fr 1fr .8fr .8fr; gap: .75rem; padding: 1rem 1.1rem; }
+.workspace-session-actions { display: flex; justify-content: flex-end; gap: .65rem; padding: 0 1.1rem 1rem; }
+.workspace-scan-results { margin: 0 1.1rem 1rem; padding: .7rem; border: 1px solid var(--border); border-radius: .5rem; }
+.workspace-scan-results p { margin: 0 0 .5rem; color: var(--text-faint); font-size: .64rem; }
+.workspace-scan-results ul { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0; padding: 0; list-style: none; }
+.workspace-scan-results button { width: auto; padding: .25rem .55rem; }
+.workspace-import > summary { cursor: pointer; list-style: none; }
+.workspace-import > summary::-webkit-details-marker { display: none; }
+.workspace-import > summary::after { content: "COLLAPSE"; color: var(--text-faint); font-size: .55rem; letter-spacing: .12em; }
+.workspace-import:not([open]) > summary::after { content: "EXPAND"; }
 .workspace-import-fields { display: grid; grid-template-columns: 1.25fr 1.8fr auto; gap: .75rem; align-items: end; padding: 1rem 1.1rem .75rem; }
 .workspace-import-fields .primary-action { min-width: 10rem; }
 .workspace-review-actions { display: flex; justify-content: flex-end; gap: .65rem; padding: 0 1.1rem 1.1rem; }
@@ -169,6 +179,7 @@ footer { padding: 1rem 2.2rem; color: var(--text-faint); font-size: .55rem; lett
   .compact-fields { grid-template-columns: 1fr 1fr; }
   .renderer-fields { grid-template-columns: 1fr 1fr; }
   .workspace-overview-grid { grid-template-columns: 1fr 1fr; }
+  .workspace-session-grid { grid-template-columns: 1fr 1fr; }
   .thread-overview-grid { grid-template-columns: 1fr 1fr; }
   .thread-adoption-fields { grid-template-columns: 1fr 1fr; }
   .thread-provisioning-fields { grid-template-columns: 1fr 1fr; }

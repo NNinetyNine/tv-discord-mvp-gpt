@@ -8,18 +8,19 @@ import { AdminService } from "../admin/admin-service.ts";
 import { startAdminHttpServer } from "../admin/admin-http-server.ts";
 import { openDiscordForumSession } from "../publish/discord-forum-session.ts";
 
-export const START_ADMIN_USAGE = "Usage: npx tsx src/scripts/start-admin.ts --repository-root <path> --workspace-root <path> [--host 127.0.0.1] [--port 4173]";
+export const START_ADMIN_USAGE = "Usage: npx tsx src/scripts/start-admin.ts --repository-root <path> --workspace-root <path> [--chart-downloads-root <path>] [--host 127.0.0.1] [--port 4173]";
 
 export interface StartAdminArguments {
   readonly repositoryRoot: string;
   readonly workspaceRoot: string;
+  readonly chartDownloadsRoot?: string;
   readonly host: string;
   readonly port: number;
 }
 
 export function parseStartAdminArguments(argv: readonly string[]): StartAdminArguments {
   const values = new Map<string, string>();
-  const allowed = new Set(["--repository-root", "--workspace-root", "--host", "--port"]);
+  const allowed = new Set(["--repository-root", "--workspace-root", "--chart-downloads-root", "--host", "--port"]);
   const supplied = argv.slice(2);
   for (let index = 0; index < supplied.length; index += 2) {
     const flag = supplied[index];
@@ -36,11 +37,18 @@ export function parseStartAdminArguments(argv: readonly string[]): StartAdminArg
     throw new AdminError("invalid_arguments", "--repository-root and --workspace-root are required.");
   }
   const host = values.get("--host") ?? "127.0.0.1";
+  const chartDownloadsRoot = values.get("--chart-downloads-root");
   const portText = values.get("--port") ?? "4173";
   if (!/^[0-9]+$/u.test(portText)) throw new AdminError("invalid_arguments", "--port must be an integer from 0 to 65535.");
   const port = Number(portText);
   if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new AdminError("invalid_arguments", "--port must be an integer from 0 to 65535.");
-  return Object.freeze({ repositoryRoot, workspaceRoot, host, port });
+  return Object.freeze({
+    repositoryRoot,
+    workspaceRoot,
+    ...(chartDownloadsRoot === undefined ? {} : { chartDownloadsRoot }),
+    host,
+    port,
+  });
 }
 
 export async function main(
@@ -54,6 +62,9 @@ export async function main(
     const service = await AdminService.create({
       repositoryRoot: options.repositoryRoot,
       workspaceRoot: options.workspaceRoot,
+      ...(options.chartDownloadsRoot === undefined ? {} : {
+        chartDownloadsRoot: options.chartDownloadsRoot,
+      }),
       ...(discordConfigured ? {
         openDiscordForumSession,
         openDiscordForumProvisioningSession: openDiscordForumSession,

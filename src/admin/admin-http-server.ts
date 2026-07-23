@@ -494,6 +494,27 @@ async function routeApi(
     if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     return ok(response, service.packWorkspaceState());
   }
+  if (pathname === "/api/v1/pack-workspace/capture-session") {
+    if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, ["packId"], "Pack capture-session state request");
+    return ok(response, await service.packCaptureSessionState(url.searchParams.get("packId") ?? ""));
+  }
+  if (pathname === "/api/v1/pack-workspace/capture-session/start") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Start capture-session body must be an object.");
+    exactFields(body, ["packId"], "Start capture-session body");
+    if (typeof body.packId !== "string") throw new AdminError("invalid_request", "Start capture-session packId must be a string.");
+    return ok(response, await service.startPackCaptureSession(body.packId), 201);
+  }
+  if (pathname === "/api/v1/pack-workspace/capture-session/scan") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Scan capture-session body must be an object.");
+    exactFields(body, ["packId"], "Scan capture-session body");
+    if (typeof body.packId !== "string") throw new AdminError("invalid_request", "Scan capture-session packId must be a string.");
+    return ok(response, await service.scanPackCaptureSession(body.packId));
+  }
   const packAssetReset = /^\/api\/v1\/pack-workspace\/packs\/([^/]+)\/assets\/([^/]+)\/reset$/u.exec(pathname);
   if (packAssetReset !== null) {
     if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);

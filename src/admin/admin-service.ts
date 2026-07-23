@@ -19,6 +19,7 @@ import { applyCreatePackWithMissingAssetsFile } from "../application/create-pack
 import type { Pack } from "../packs/packs.ts";
 import { buildPacks } from "../packs/packs.ts";
 import { buildRegistry } from "../registry/registry.ts";
+import { createResolver } from "../resolver/index.ts";
 import { auditAssetMarketIdentity, type AssetMarketIdentityAudit } from "../registry/asset-market-identity-audit.ts";
 import { computeAssetRegistrationRegistryFingerprint } from "../registry/asset-registration-proposal.ts";
 import { validateAssetRegistrationChannel } from "../registry/asset-registration-channel.ts";
@@ -104,6 +105,11 @@ import {
   AdminPackRenderWorkspace,
   type PackRenderPreviewArtifactName,
 } from "./admin-pack-render-workspace.ts";
+import {
+  AdminPackCaptureSessionWorkspace,
+  type PackCaptureSessionState,
+  type QueuedPackCapture,
+} from "./admin-pack-capture-session-workspace.ts";
 import {
   adoptDiscordAssetThread,
   type AdoptDiscordAssetThreadResult,
@@ -408,6 +414,7 @@ export interface AdminPackThreadRoutingVerificationResult {
 export interface AdminServiceOptions {
   readonly repositoryRoot: string;
   readonly workspaceRoot: string;
+  readonly chartDownloadsRoot?: string;
   readonly openDiscordForumSession?: AdminDiscordForumSessionFactory;
   readonly openDiscordForumProvisioningSession?: AdminDiscordForumProvisioningSessionFactory;
 }
@@ -506,6 +513,7 @@ export class AdminService {
   readonly packBuilder: AdminPackBuilderWorkspace;
   readonly standaloneRenders: AdminStandaloneRenderWorkspace;
   readonly packRenders: AdminPackRenderWorkspace;
+  readonly packCaptureSessions: AdminPackCaptureSessionWorkspace;
   readonly threadProvisioning: AdminThreadProvisioningWorkspace;
   #state: LiveState;
   #packMutationLock: Promise<void> = Promise.resolve();
@@ -521,6 +529,7 @@ export class AdminService {
     packBuilder: AdminPackBuilderWorkspace,
     standaloneRenders: AdminStandaloneRenderWorkspace,
     packRenders: AdminPackRenderWorkspace,
+    packCaptureSessions: AdminPackCaptureSessionWorkspace,
     threadProvisioning: AdminThreadProvisioningWorkspace,
     state: LiveState,
     openDiscordForumSession?: AdminDiscordForumSessionFactory,
@@ -533,6 +542,7 @@ export class AdminService {
     this.packBuilder = packBuilder;
     this.standaloneRenders = standaloneRenders;
     this.packRenders = packRenders;
+    this.packCaptureSessions = packCaptureSessions;
     this.threadProvisioning = threadProvisioning;
     this.#state = state;
     this.#openDiscordForumSession = openDiscordForumSession;
@@ -550,6 +560,10 @@ export class AdminService {
     const packBuilder = await AdminPackBuilderWorkspace.open(workspace.root);
     const standaloneRenders = await AdminStandaloneRenderWorkspace.open(workspace.root);
     const packRenders = await AdminPackRenderWorkspace.open(workspace.root);
+    const packCaptureSessions = await AdminPackCaptureSessionWorkspace.open(
+      workspace.root,
+      options.chartDownloadsRoot,
+    );
     const threadProvisioning = await AdminThreadProvisioningWorkspace.open(workspace.root);
     const state = await AdminService.#loadState(repositoryRoot);
     return new AdminService(
@@ -560,6 +574,7 @@ export class AdminService {
       packBuilder,
       standaloneRenders,
       packRenders,
+      packCaptureSessions,
       threadProvisioning,
       state,
       options.openDiscordForumSession,
@@ -1431,6 +1446,124 @@ export class AdminService {
     return Object.freeze({ schemaVersion: 1, publishAvailable: false, packs: Object.freeze(packs) });
   }
 
+  async packCaptureSessionState(packId: string): Promise<PackCaptureSessionState> {
+    const pack = this.#state.byPackId.get(packId);
+    if (pack === undefined) {
+      throw new AdminError("pack_not_found", `Pack ${packId} was not found.`, 404, { packId });
+    }
+    return this.packCaptureSessions.state(pack);
+  }
+
+  async startPackCaptureSession(packId: string): Promise<Readonly<Record<string, unknown>>> {
+    return this.#withPackMutationLock(async () => {
+      await this.refresh();
+      const pack = this.#state.byPackId.get(packId);
+      if (pack === undefined) {
+        throw new AdminError("pack_not_found", `Pack ${packId} was not found.`, 404, { packId });
+      }
+      const prior = await this.packCaptureSessions.state(pack);
+      const session = await this.packCaptureSessions.start(pack);
+      await Promise.all(
+        prior.candidates
+          .filter((candidate) => candidate.state === "pending")
+          .map((candidate) => this.packRenders.discardPreview(candidate.previewId).catch(() => undefined)),
+      );
+      return Object.freeze({
+        schemaVersion: 1,
+        session,
+        effects: Object.freeze({
+          workspaceChanged: false,
+          stagingChanged: false,
+          released: false,
+          discordContacted: false,
+        }),
+      });
+    });
+  }
+
+  async scanPackCaptureSession(packId: string): Promise<Readonly<Record<string, unknown>>> {
+    return this.#withPackMutationLock(async () => {
+      await this.refresh();
+      const pack = this.#state.byPackId.get(packId);
+      if (pack === undefined) {
+        throw new AdminError("pack_not_found", `Pack ${packId} was not found.`, 404, { packId });
+      }
+      const registry = buildRegistry(
+        this.#state.rawRegistry as Record<string, Record<string, unknown>>,
+        this.#state.rawChannels as Record<string, unknown>,
+      );
+      const plan = await this.packCaptureSessions.planScan(pack, createResolver(registry));
+      const created: string[] = [];
+      const queued: QueuedPackCapture[] = [];
+      try {
+        for (const candidate of plan.queued) {
+          const preview = await this.previewPackWorkspaceChart({
+            packId: pack.id,
+            assetId: candidate.assetId,
+            sourceFilename: candidate.filename,
+            sourceBytes: candidate.sourceBytes,
+          });
+          const previewId = preview["previewId"];
+          if (typeof previewId !== "string" || !/^[a-f0-9]{32}$/u.test(previewId)) {
+            throw new AdminError("internal_error", "Pack scanner received an invalid preview identity.", 500);
+          }
+          created.push(previewId);
+          queued.push(Object.freeze({
+            assetId: candidate.assetId,
+            filename: candidate.filename,
+            sourceSha256: candidate.sourceSha256,
+            size: candidate.size,
+            modifiedAt: candidate.modifiedAt,
+            exportedAt: candidate.exportedAt,
+            previewId,
+          }));
+        }
+        const before = await this.packCaptureSessions.state(pack);
+        const session = await this.packCaptureSessions.commitScan(pack, plan.sessionId, queued);
+        const replacedPreviewIds = new Set(
+          queued
+            .map((item) => before.candidates.find((candidate) => candidate.assetId === item.assetId))
+            .filter((candidate) => candidate?.state === "pending")
+            .map((candidate) => candidate?.previewId)
+            .filter((previewId): previewId is string => previewId !== undefined),
+        );
+        for (const previewId of replacedPreviewIds) {
+          await this.packRenders.discardPreview(previewId).catch(() => undefined);
+        }
+        return Object.freeze({
+          schemaVersion: 1,
+          session,
+          scan: Object.freeze({
+            scannedAt: plan.scannedAt,
+            queued: Object.freeze(queued.map((item) => Object.freeze({
+              assetId: item.assetId,
+              filename: item.filename,
+              sourceSha256: item.sourceSha256,
+              exportedAt: item.exportedAt,
+              previewId: item.previewId,
+              publicationUrl: `/api/v1/pack-workspace/previews/${item.previewId}/publication.png`,
+              receiptUrl: `/api/v1/pack-workspace/previews/${item.previewId}/receipt.json`,
+            }))),
+            unchangedAssetIds: plan.unchangedAssetIds,
+            ignored: plan.ignored,
+          }),
+          effects: Object.freeze({
+            previewsQueued: queued.length,
+            workspaceChanged: false,
+            stagingChanged: false,
+            released: false,
+            discordContacted: false,
+          }),
+        });
+      } catch (error) {
+        await Promise.all(created.map((previewId) =>
+          this.packRenders.discardPreview(previewId).catch(() => undefined)
+        ));
+        throw error;
+      }
+    });
+  }
+
   async previewPackWorkspaceChart(input: {
     readonly packId: string;
     readonly assetId: string;
@@ -1505,8 +1638,11 @@ export class AdminService {
     return this.packRenders.readPreviewArtifact(previewId, artifact);
   }
 
-  discardPackWorkspacePreview(previewId: string): Promise<void> {
-    return this.packRenders.discardPreview(previewId);
+  async discardPackWorkspacePreview(previewId: string): Promise<void> {
+    return this.#withPackMutationLock(async () => {
+      await this.packCaptureSessions.removePendingPreview(previewId);
+      await this.packRenders.discardPreview(previewId);
+    });
   }
 
   async #withPackMutationLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -1559,7 +1695,10 @@ export class AdminService {
         await this.packRenders.releaseClaim(previewId);
         throw new AdminError("invalid_pack_render_preview", "Pack preview could not be accepted.", 400, { outcome: accepted.outcome });
       }
-      try { await this.packRenders.completeClaim(previewId); }
+      try {
+        await this.packRenders.completeClaim(previewId);
+        await this.packCaptureSessions.markAccepted(previewId, accepted.revisions);
+      }
       catch {
         throw new AdminError("pack_render_preview_state_conflict", "Pack capture succeeded but its evidence could not be finalized. Do not retry this preview.", 500);
       }

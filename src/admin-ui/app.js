@@ -12,6 +12,7 @@ const state = {
   renderSourceFile: null,
   renderBusy: false,
   packWorkspace: null,
+  packCaptureSession: null,
   packSourceFile: null,
   packPreview: null,
   packBusy: false,
@@ -1163,7 +1164,7 @@ async function runStandaloneRender() {
       headers: { "Content-Type": "image/png" },
       body: file,
     });
-    const downloadStem = `${result.asset.id}-${result.dataAsOf}-${result.timeframe}`.toLowerCase();
+    const downloadStem = `${file.name.replace(/\.png$/iu, "")}-VSX`;
     qs("#renderer-result").hidden = false;
     qs("#renderer-result-heading").textContent = `${result.asset.id.toUpperCase()} RENDER COMPLETE`;
     qs("#renderer-result-context").textContent = `${result.timeframe} · DATA AS OF ${result.dataAsOf}`;
@@ -1204,7 +1205,128 @@ function updateWorkspacePreviewButton() {
   qs("#workspace-accept").disabled = state.packBusy || state.packPreview === null;
   qs("#workspace-discard").disabled = state.packBusy || state.packPreview === null;
   qs("#workspace-reset-pack").hidden = locked || pack === null || pack.capturedCount === 0;
+  qs("#workspace-start-session").disabled = locked || pack === null || !state.packCaptureSession?.configured;
+  qs("#workspace-scan-session").disabled = locked || pack === null || !state.packCaptureSession?.active;
   qsa("[data-reset-workspace-asset]").forEach((button) => { button.hidden = locked; });
+}
+
+function captureSessionReason(session) {
+  const labels = {
+    downloads_folder_not_configured: "DOWNLOADS FOLDER NOT CONFIGURED",
+    session_not_started: "START A SESSION BEFORE DOWNLOADING",
+    assets_missing: `${session.missingAssetIds.length} ASSET${session.missingAssetIds.length === 1 ? "" : "S"} MISSING FROM THIS SESSION`,
+    previews_pending: `${session.pendingCount} PREVIEW${session.pendingCount === 1 ? "" : "S"} AWAITING ACCEPTANCE`,
+    export_window_exceeded: `EXPORT WINDOW ${session.exportSpanMinutes} MIN EXCEEDS ${session.maxSpanMinutes} MIN`,
+    ready: "ALL REQUIRED ASSETS ACCEPTED FROM ONE CURRENT SESSION",
+  };
+  return labels[session.readinessReason] ?? "SESSION BLOCKED";
+}
+
+function reviewQueuedCapture(assetId) {
+  const pack = selectedWorkspacePack();
+  const session = state.packCaptureSession;
+  const asset = pack?.assets.find((candidate) => candidate.id === assetId) ?? null;
+  const candidate = session?.candidates.find((item) => item.assetId === assetId && item.state === "pending") ?? null;
+  if (pack === null || asset === null || candidate === null || state.packBusy || state.packPreview !== null) return;
+  const dateMatch = /_(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}-\d{2}\.png$/iu.exec(candidate.filename);
+  state.packPreview = {
+    previewId: candidate.previewId,
+    packId: pack.id,
+    asset,
+    timeframe: pack.timeframe,
+    dataAsOf: dateMatch?.[1] ?? candidate.exportedAt.slice(0, 10),
+    sourceBasename: candidate.filename,
+    outputSha256: candidate.sourceSha256,
+    nextRevision: asset.revisions + 1,
+    publicationUrl: `/api/v1/pack-workspace/previews/${candidate.previewId}/publication.png`,
+    receiptUrl: `/api/v1/pack-workspace/previews/${candidate.previewId}/receipt.json`,
+  };
+  qs("#workspace-preview").hidden = false;
+  qs("#workspace-preview-heading").textContent = `${asset.id.toUpperCase()} REVISION ${asset.revisions + 1} READY`;
+  qs("#workspace-preview-context").textContent = `${pack.timeframe} · EXPORTED ${candidate.exportedAt}`;
+  qs("#workspace-preview-image").src = state.packPreview.publicationUrl;
+  qs("#workspace-preview-caption").textContent = `${asset.displayName} · ${candidate.filename} · SOURCE SHA-256 ${candidate.sourceSha256}`;
+  qs("#workspace-preview-receipt").href = state.packPreview.receiptUrl;
+  qs("#workspace-accept").textContent = `ACCEPT REVISION ${asset.revisions + 1}`;
+  qs("#workspace-review-state").textContent = "AWAITING ACCEPTANCE";
+  updateWorkspacePreviewButton();
+}
+
+function renderCaptureSession(session) {
+  state.packCaptureSession = session;
+  qs("#workspace-downloads-folder").textContent = session.downloadsFolder ?? "NOT CONFIGURED";
+  qs("#workspace-session-started").textContent = session.startedAt ?? "NOT STARTED";
+  qs("#workspace-session-progress").textContent = `${session.acceptedCount} ACCEPTED · ${session.pendingCount} PENDING`;
+  qs("#workspace-session-readiness").textContent = session.publishReady ? "READY" : "BLOCKED";
+  qs("#workspace-session-state").textContent = session.active ? `SESSION ${session.sessionId.slice(0, 8).toUpperCase()}` : "NO ACTIVE SESSION";
+  qs("#workspace-session-guidance").textContent = captureSessionReason(session);
+  const pending = session.candidates.filter((candidate) => candidate.state === "pending");
+  const results = qs("#workspace-scan-results");
+  results.hidden = pending.length === 0;
+  results.innerHTML = pending.length === 0 ? "" : `
+    <p>${pending.length} NEWEST CHART${pending.length === 1 ? "" : "S"} QUEUED FOR REVIEW</p>
+    <ul>${pending.map((candidate) => `<li><button class="outline-action" type="button" data-review-scanned-asset="${escapeAttribute(candidate.assetId)}">${escapeHtml(candidate.assetId.toUpperCase())} · REVIEW</button></li>`).join("")}</ul>
+  `;
+  qsa("[data-review-scanned-asset]").forEach((button) => {
+    button.addEventListener("click", () => reviewQueuedCapture(button.dataset.reviewScannedAsset));
+  });
+  updateWorkspacePreviewButton();
+}
+
+async function loadCaptureSession() {
+  const pack = selectedWorkspacePack();
+  if (pack === null) return;
+  const query = new URLSearchParams({ packId: pack.id });
+  renderCaptureSession(await api(`/api/v1/pack-workspace/capture-session?${query.toString()}`));
+}
+
+async function startCaptureSession() {
+  const pack = selectedWorkspacePack();
+  if (pack === null || state.packBusy || !state.packCaptureSession?.configured) return;
+  if (!window.confirm(`Start a new ${pack.displayName} capture session now? Only charts downloaded or changed after this baseline will be eligible.`)) return;
+  state.packBusy = true;
+  updateWorkspacePreviewButton();
+  try {
+    const result = await api("/api/v1/pack-workspace/capture-session/start", {
+      method: "POST",
+      body: JSON.stringify({ packId: pack.id }),
+    });
+    renderCaptureSession(result.session);
+    showMessage(`New ${pack.displayName} capture session started. Download the current TradingView charts, then scan the folder.`, false);
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    state.packBusy = false;
+    updateWorkspacePreviewButton();
+  }
+}
+
+async function scanCaptureSession() {
+  const pack = selectedWorkspacePack();
+  if (pack === null || state.packBusy || !state.packCaptureSession?.active) return;
+  state.packBusy = true;
+  qs("#workspace-session-state").textContent = "SCANNING & RENDERING";
+  updateWorkspacePreviewButton();
+  try {
+    const result = await api("/api/v1/pack-workspace/capture-session/scan", {
+      method: "POST",
+      body: JSON.stringify({ packId: pack.id }),
+    });
+    renderCaptureSession(result.session);
+    const queued = result.scan.queued.length;
+    showMessage(
+      queued === 0
+        ? "Scan complete. No newer chart exports were found, so no revisions were created."
+        : `Scan complete. ${queued} newest chart${queued === 1 ? "" : "s"} queued; unchanged assets were left untouched.`,
+      false,
+    );
+  } catch (error) {
+    showMessage(error.message);
+    await loadCaptureSession().catch(() => undefined);
+  } finally {
+    state.packBusy = false;
+    updateWorkspacePreviewButton();
+  }
 }
 
 function workspaceAssetStatus(asset) {
@@ -1285,6 +1407,7 @@ async function loadPackWorkspace() {
     ? selectedPackId
     : result.packs[0]?.id ?? "";
   renderPackWorkspace();
+  await loadCaptureSession();
 }
 
 function clearPackPreviewView() {
@@ -1480,10 +1603,12 @@ qs("#renderer-source").addEventListener("change", (event) => {
 });
 qs("#render-chart").addEventListener("click", () => void runStandaloneRender());
 qs("#workspace-pack").addEventListener("change", () => {
+  clearPackPreviewView();
   state.packSourceFile = null;
   qs("#workspace-source").value = "";
   qs("#workspace-file-state").textContent = "SELECT A TRADINGVIEW PNG EXPORT";
   renderPackWorkspace();
+  void loadCaptureSession().catch((error) => showMessage(error.message));
 });
 qs("#workspace-asset").addEventListener("change", renderPackWorkspace);
 qs("#workspace-source").addEventListener("change", (event) => {
@@ -1495,6 +1620,8 @@ qs("#workspace-source").addEventListener("change", (event) => {
   renderPackWorkspace();
 });
 qs("#workspace-preview-button").addEventListener("click", () => void runPackPreview());
+qs("#workspace-start-session").addEventListener("click", () => void startCaptureSession());
+qs("#workspace-scan-session").addEventListener("click", () => void scanCaptureSession());
 qs("#workspace-accept").addEventListener("click", () => void acceptPackPreview());
 qs("#workspace-discard").addEventListener("click", () => void discardPackPreview());
 qs("#workspace-reset-pack").addEventListener("click", () => void resetWorkspacePack());

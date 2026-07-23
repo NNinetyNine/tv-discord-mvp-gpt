@@ -45,6 +45,12 @@ qualified TradingView identity and canonical currency are complete, exposes the
 shared validated timeframe list, accepts one native TradingView PNG export, and
 returns an inline preview plus separate PNG and receipt downloads.
 
+Standalone downloads preserve the imported TradingView filename stem and
+append the VisionX marker. For example,
+`BTCUSD_2026-07-23_10-05-00.png` downloads as
+`BTCUSD_2026-07-23_10-05-00-VSX.png` with
+`BTCUSD_2026-07-23_10-05-00-VSX.receipt.json`.
+
 Each successful request receives a unique local render ID. The raw upload,
 rendered publication, and receipt remain under the administration workspace;
 the API exposes only the final publication and receipt. Failed renders are
@@ -104,6 +110,41 @@ to publish until storage is inspected.
 Publication remains unavailable in this UI milestone. Preview, acceptance, and
 discard and reset do not create a Release, resolve a Discord thread, or contact
 Discord.
+
+### Automated Pack capture
+
+Configure the folder containing TradingView PNG downloads when starting the
+loopback administration service:
+
+```bash
+npm run admin -- \
+  --repository-root "$PWD" \
+  --workspace-root "$HOME/Library/Application Support/VisionX" \
+  --chart-downloads-root "$HOME/Downloads"
+```
+
+In **Workspace → Automated Pack Capture**, select a Pack and start a new
+analysis session **before** downloading its charts. Starting records a
+SHA-256 baseline of the current folder. **Scan and Update Pack** then:
+
+- ignores every unchanged baseline file;
+- resolves eligible filenames through the Registry;
+- chooses the newest embedded TradingView export timestamp per Pack Asset;
+- rejects exports outside the current session clock window;
+- queues a new preview only when its source hash and export timestamp are newer
+  than the current candidate; and
+- leaves unchanged Assets untouched, so a repeat scan creates no artificial
+  revisions.
+
+Publication readiness requires one accepted candidate for every required Pack
+Asset from the same capture session. The earliest and latest embedded export
+timestamps must be no more than 60 minutes apart. The current release UI still
+keeps publication unavailable; this readiness result is the fail-closed gate
+for the later controlled publication milestone.
+
+The manual **Import & Review** surface remains available as a collapsible
+recovery path. Manual imports do not satisfy automated capture-session
+readiness because they carry no session baseline evidence.
 
 ### Pack capture and staging
 

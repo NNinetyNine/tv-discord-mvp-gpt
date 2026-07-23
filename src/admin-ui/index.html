@@ -53,11 +53,31 @@
         <p id="workspace-remaining" class="workspace-remaining">LOADING REQUIRED ASSETS</p>
       </section>
 
-      <section class="window workspace-import" aria-labelledby="workspace-import-heading">
+      <section class="window workspace-automation" aria-labelledby="workspace-automation-heading">
         <header class="window-header">
+          <div><p class="micro-label">PRIMARY WORKFLOW</p><h2 id="workspace-automation-heading">AUTOMATED PACK CAPTURE</h2></div>
+          <span id="workspace-session-state" class="context-fact">LOADING SESSION</span>
+        </header>
+        <p class="window-help">Start the session before downloading charts. Scans queue only new or genuinely newer TradingView exports; unchanged files never create revisions.</p>
+        <div class="workspace-session-grid">
+          <div class="derived-channel"><span>DOWNLOADS FOLDER</span><strong id="workspace-downloads-folder">—</strong></div>
+          <div class="derived-channel"><span>SESSION STARTED</span><strong id="workspace-session-started">—</strong></div>
+          <div class="derived-channel"><span>SESSION EVIDENCE</span><strong id="workspace-session-progress">0 / 0</strong></div>
+          <div class="derived-channel"><span>PUBLICATION GATE</span><strong id="workspace-session-readiness">BLOCKED</strong></div>
+        </div>
+        <div class="workspace-session-actions">
+          <button id="workspace-start-session" class="outline-action" type="button">START NEW SESSION</button>
+          <button id="workspace-scan-session" class="primary-action" type="button" disabled>SCAN AND UPDATE PACK</button>
+        </div>
+        <p id="workspace-session-guidance" class="workspace-remaining">CONFIGURE A CHART DOWNLOADS FOLDER WHEN STARTING THE ADMIN SERVICE</p>
+        <div id="workspace-scan-results" class="workspace-scan-results" hidden></div>
+      </section>
+
+      <details class="window workspace-import" open>
+        <summary class="window-header">
           <div><p class="micro-label">NEXT ANALYSIS</p><h2 id="workspace-import-heading">IMPORT &amp; REVIEW</h2></div>
           <span id="workspace-review-state" class="context-fact">SELECT AN ASSET</span>
-        </header>
+        </summary>
         <div class="workspace-import-fields">
           <label><span>PACK ASSET</span><select id="workspace-asset"><option value="">SELECT ASSET</option></select></label>
           <label class="renderer-file"><span>TRADINGVIEW PNG</span><input id="workspace-source" type="file" accept="image/png"></label>
@@ -67,7 +87,7 @@
           <span id="workspace-file-state">SELECT A TRADINGVIEW PNG EXPORT</span>
           <span>ACCEPTANCE STAGES THE RENDERED PUBLICATION · NO DISCORD ACTION</span>
         </div>
-      </section>
+      </details>
 
       <section id="workspace-preview" class="window renderer-result" hidden aria-live="polite">
         <header class="window-header">

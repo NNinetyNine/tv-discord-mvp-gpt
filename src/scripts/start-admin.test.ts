@@ -14,6 +14,21 @@ describe("start-admin CLI", () => {
     expect(parseStartAdminArguments(["node", "script", "--repository-root", "/repo", "--workspace-root", "/work", "--port", "0"]).port).toBe(0);
   });
 
+  it("accepts one explicit Chart Downloads folder", () => {
+    expect(parseStartAdminArguments([
+      "node",
+      "script",
+      "--repository-root",
+      "/repo",
+      "--workspace-root",
+      "/work",
+      "--chart-downloads-root",
+      "/Users/operator/Downloads/TradingView",
+    ])).toMatchObject({
+      chartDownloadsRoot: "/Users/operator/Downloads/TradingView",
+    });
+  });
+
   it("rejects positional arguments", () => {
     expect(() => parseStartAdminArguments(["node", "script", "/repo"])).toThrowError(expect.objectContaining({ code: "invalid_arguments" }));
   });
@@ -33,5 +48,6 @@ describe("start-admin CLI", () => {
   it("publishes concise usage text", () => {
     expect(START_ADMIN_USAGE).toContain("--repository-root");
     expect(START_ADMIN_USAGE).toContain("--workspace-root");
+    expect(START_ADMIN_USAGE).toContain("--chart-downloads-root");
   });
 });

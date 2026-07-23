@@ -54,6 +54,7 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(html).toContain("STANDALONE RENDERER");
     expect(html).toContain("This does not change a Pack, stage a publication, create a Release, or contact Discord.");
     expect(js).toContain('api(`/api/v1/standalone-renders?${query.toString()}`');
+    expect(js).toContain('file.name.replace(/\\.png$/iu, "")}-VSX`');
     expect(js).not.toContain("publishPack(");
     expect(js).not.toContain("capturePackChartFromFile(");
   });
@@ -72,6 +73,20 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(html).not.toMatch(/<button[^>]*>[^<]*(?:release|publish)[^<]*<\/button>/iu);
     expect(js).not.toContain("/publish");
     expect(js).not.toContain("publishPack(");
+  });
+
+  it("makes one-click folder synchronization primary while preserving collapsible manual import", async () => {
+    const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
+    const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
+
+    expect(html).toContain("AUTOMATED PACK CAPTURE");
+    expect(html).toContain("SCAN AND UPDATE PACK");
+    expect(html).toMatch(/<details class="window workspace-import" open>/u);
+    expect(html).toContain("IMPORT &amp; REVIEW");
+    expect(js).toContain('api("/api/v1/pack-workspace/capture-session/start"');
+    expect(js).toContain('api("/api/v1/pack-workspace/capture-session/scan"');
+    expect(js).toContain("No newer chart exports were found, so no revisions were created.");
+    expect(js).not.toContain("/publish");
   });
 
   it("keeps confirmed reset controls inside current Workspace custody", async () => {

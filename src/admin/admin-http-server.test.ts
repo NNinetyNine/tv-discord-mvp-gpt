@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,10 +16,16 @@ afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-async function start() {
+async function start(options: { readonly chartDownloadsRoot?: string } = {}) {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "visionx-admin-http-test-"));
   cleanup.push(workspaceRoot);
-  const service = await AdminService.create({ repositoryRoot: resolve("."), workspaceRoot });
+  const service = await AdminService.create({
+    repositoryRoot: resolve("."),
+    workspaceRoot,
+    ...(options.chartDownloadsRoot === undefined ? {} : {
+      chartDownloadsRoot: options.chartDownloadsRoot,
+    }),
+  });
   const server = await startAdminHttpServer({ service, host: "127.0.0.1", port: 0 });
   servers.push(server);
   return { service, server };
@@ -332,6 +338,53 @@ describe("Admin HTTP server", () => {
 
     const after = await Promise.all(canonicalPaths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
     expect(after).toEqual(before);
+  });
+
+  it("starts and scans one governed Pack capture session without creating no-op revisions", async () => {
+    const downloads = await mkdtemp(join(tmpdir(), "visionx-admin-downloads-test-"));
+    cleanup.push(downloads);
+    const { server } = await start({ chartDownloadsRoot: downloads });
+
+    const before = await jsonRequest(server.url, "/api/v1/pack-workspace/capture-session?packId=crypto");
+    expect(before.body.data).toMatchObject({
+      configured: true,
+      active: false,
+      readinessReason: "session_not_started",
+    });
+    const started = await jsonRequest(server.url, "/api/v1/pack-workspace/capture-session/start", {
+      method: "POST",
+      body: JSON.stringify({ packId: "crypto" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(started.response.status).toBe(201);
+    expect(started.body.data).toMatchObject({
+      session: { active: true, packId: "crypto", candidateCount: 0 },
+      effects: { workspaceChanged: false, stagingChanged: false, discordContacted: false },
+    });
+    const stamp = new Date();
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const filename = `BTCUSD_${stamp.getFullYear()}-${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())}_${pad(stamp.getHours())}-${pad(stamp.getMinutes())}-${pad(stamp.getSeconds())}.png`;
+    await writeFile(join(downloads, filename), await framedPng());
+
+    const scan = await jsonRequest(server.url, "/api/v1/pack-workspace/capture-session/scan", {
+      method: "POST",
+      body: JSON.stringify({ packId: "crypto" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(scan.body.data).toMatchObject({
+      scan: { queued: [{ assetId: "btc", filename }], unchangedAssetIds: [] },
+      effects: { previewsQueued: 1, workspaceChanged: false, stagingChanged: false, discordContacted: false },
+    });
+
+    const repeated = await jsonRequest(server.url, "/api/v1/pack-workspace/capture-session/scan", {
+      method: "POST",
+      body: JSON.stringify({ packId: "crypto" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(repeated.body.data).toMatchObject({
+      scan: { queued: [], unchangedAssetIds: ["btc"] },
+      effects: { previewsQueued: 0, workspaceChanged: false, stagingChanged: false, discordContacted: false },
+    });
   });
 
   it("discards a Pack preview without staging or changing Workspace progress", async () => {
