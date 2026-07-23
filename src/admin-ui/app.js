@@ -26,6 +26,10 @@ const state = {
   threadBusy: false,
   threadForumInspection: null,
   threadLogo: null,
+  serverConfiguration: null,
+  serverInspection: null,
+  serverPreview: null,
+  serverBusy: false,
   registryQuery: "",
   registryPackId: "",
   registryPacks: [],
@@ -2500,6 +2504,200 @@ async function resetWorkspacePack() {
   }
 }
 
+function serverRouteValues() {
+  return Object.fromEntries(qsa("[data-server-route]").map((input) => [input.dataset.serverRoute, input.value.trim()]));
+}
+
+function serverInspectionFor(logicalChannel) {
+  return state.serverInspection?.routes?.find((route) => route.logicalChannel === logicalChannel) ?? null;
+}
+
+function renderServerConfiguration() {
+  const configuration = state.serverConfiguration;
+  if (configuration === null) return;
+  qs("#server-credential").textContent = configuration.credential.configured ? "CONFIGURED · VALUE HIDDEN" : "NOT CONFIGURED";
+  qs("#server-webhooks").textContent = configuration.webhooks.used ? "IN USE" : "NOT USED";
+  qs("#server-readiness").textContent = state.serverInspection === null
+    ? configuration.connectionTestAvailable ? "READY FOR LIVE TEST" : "BOT TOKEN REQUIRED"
+    : state.serverInspection.operationallyReady ? "SERVER READY" : "SERVER BLOCKED";
+  qs("#server-test-current").disabled = state.serverBusy || !configuration.connectionTestAvailable;
+  qs("#server-review-configuration").disabled = state.serverBusy;
+  qs("#server-review-migration").disabled = state.serverBusy;
+  qs("#server-route-count").textContent = `${configuration.routes.length} ROUTE${configuration.routes.length === 1 ? "" : "S"}`;
+  qs("#server-guild").textContent = state.serverInspection?.guild?.name?.toUpperCase() ?? "NOT TESTED";
+  qs("#server-bot-identity").textContent = state.serverInspection === null
+    ? "BOT IDENTITY NOT TESTED"
+    : `${state.serverInspection.bot.username} · ${state.serverInspection.bot.userId}`;
+
+  const existing = serverRouteValues();
+  qs("#server-routes-body").innerHTML = configuration.routes.map((route) => {
+    const inspection = serverInspectionFor(route.logicalChannel);
+    const tagNames = inspection?.facts?.availableTags?.map((tag) => tag.name).join(", ") ?? "";
+    const testState = inspection === null
+      ? "NOT TESTED"
+      : inspection.state === "ready"
+        ? `${inspection.facts.channelName} · ${inspection.facts.availableTagCount} TAGS${tagNames.length === 0 ? "" : ` · ${tagNames}`}`
+        : inspection.issues.join(" ");
+    const testClass = inspection === null ? "pending" : inspection.state === "ready" ? "valid" : "blocked";
+    const value = Object.hasOwn(existing, route.logicalChannel) ? existing[route.logicalChannel] : route.channelId ?? "";
+    return `<tr>
+      <td><strong>${escapeHtml(route.logicalChannel.toUpperCase())}</strong></td>
+      <td><input data-server-route="${escapeAttribute(route.logicalChannel)}" inputmode="numeric" autocomplete="off" maxlength="20" value="${escapeAttribute(value)}" placeholder="DISCORD FORUM ID"></td>
+      <td>${route.packIds.length === 0 ? "—" : escapeHtml(route.packIds.map((id) => id.toUpperCase()).join(" · "))}</td>
+      <td>${route.registryAssetCount}</td>
+      <td>${route.boundThreadCount}</td>
+      <td><span class="workspace-status ${testClass}" title="${escapeAttribute(testState)}">${escapeHtml(testState)}</span></td>
+    </tr>`;
+  }).join("");
+  qsa("[data-server-route]").forEach((input) => input.addEventListener("input", () => {
+    state.serverInspection = null;
+    clearServerPreview();
+    qs("#server-guild").textContent = "NOT TESTED";
+    qs("#server-bot-identity").textContent = "BOT IDENTITY NOT TESTED";
+    qs("#server-readiness").textContent = configuration.connectionTestAvailable ? "READY FOR LIVE TEST" : "BOT TOKEN REQUIRED";
+    qsa("#server-routes-body .workspace-status").forEach((status) => {
+      status.className = "workspace-status pending";
+      status.textContent = "NOT TESTED";
+      status.title = "NOT TESTED";
+    });
+  }));
+}
+
+async function loadServerConfiguration() {
+  state.serverConfiguration = await api("/api/v1/server-configuration");
+  renderServerConfiguration();
+}
+
+async function testCurrentServer() {
+  if (state.serverBusy) return;
+  clearMessage();
+  state.serverBusy = true;
+  renderServerConfiguration();
+  qs("#server-readiness").textContent = "TESTING BOT, GUILD & FORUMS";
+  try {
+    state.serverInspection = await api("/api/v1/server-configuration/test", { method: "POST", body: "{}" });
+    qs("#server-readiness").textContent = state.serverInspection.operationallyReady ? "SERVER READY" : "SERVER BLOCKED";
+    showMessage(
+      state.serverInspection.operationallyReady
+        ? `Discord server test passed for ${state.serverInspection.routes.length} routes in ${state.serverInspection.guild.name}.`
+        : "Discord server test completed with route or permission blockers. Review the live-test column.",
+      !state.serverInspection.operationallyReady,
+    );
+  } catch (error) {
+    state.serverInspection = null;
+    showMessage(error.message);
+  } finally {
+    state.serverBusy = false;
+    renderServerConfiguration();
+  }
+}
+
+function clearServerPreview() {
+  state.serverPreview = null;
+  qs("#server-preview").hidden = true;
+  qs("#server-confirmation").value = "";
+  qs("#server-apply").disabled = true;
+}
+
+function renderServerPreview() {
+  const preview = state.serverPreview;
+  if (preview === null) {
+    clearServerPreview();
+    return;
+  }
+  qs("#server-preview").hidden = false;
+  qs("#server-preview-heading").textContent = preview.mode === "migration" ? "SERVER MIGRATION REVIEW" : "SERVER CONFIGURATION REVIEW";
+  qs("#server-preview-state").textContent = preview.valid ? "READY FOR CONFIRMATION" : "BLOCKED";
+  qs("#server-preview-state").className = `workspace-status ${preview.valid ? "valid" : "blocked"}`;
+  qs("#server-preview-summary").innerHTML = `<p><strong>${preview.changedRouteCount}</strong> ROUTE${preview.changedRouteCount === 1 ? "" : "S"} CHANGE · <strong>${preview.affectedPackIds.length}</strong> AFFECTED PACK${preview.affectedPackIds.length === 1 ? "" : "S"} · <strong>${preview.bindingsToReestablish}</strong> THREAD BINDING${preview.bindingsToReestablish === 1 ? "" : "S"} TO RE-ESTABLISH</p>
+    <p>${preview.mode === "migration" ? "Exact before-and-after installation evidence will be preserved before the rollback-protected route and binding transaction." : "No thread bindings may depend on a normal route change."}</p>`;
+  const issues = qs("#server-preview-issues");
+  issues.hidden = preview.issues.length === 0;
+  issues.innerHTML = preview.issues.length === 0 ? "" : `<ul>${preview.issues.map((issue) => `<li>${escapeHtml(issue.message)}</li>`).join("")}</ul>`;
+  qs("#server-preview-routes").innerHTML = preview.routes.map((route) => {
+    const inspection = route.inspection;
+    const facts = inspection?.facts;
+    const roles = facts?.roleNames?.length ? facts.roleNames.join(", ") : "NO BOT ROLES REPORTED";
+    const tags = facts?.availableTags?.length
+      ? facts.availableTags.map((tag) => `${tag.name}${tag.moderated ? " (MODERATED)" : ""}`).join(", ")
+      : "NO AVAILABLE TAGS";
+    const permission = inspection === null ? "NOT TESTED" : inspection.state === "ready" ? "PERMISSIONS READY" : inspection.issues.join(" ");
+    const permissionFacts = facts === undefined || facts === null
+      ? "REQUIRED PERMISSIONS NOT TESTED"
+      : Object.entries(facts.permissions).map(([name, allowed]) => `${name}: ${allowed ? "YES" : "NO"}`).join(" · ");
+    return `<article class="server-preview-route ${route.changed ? "changed" : ""}">
+      <header><strong>${escapeHtml(route.logicalChannel.toUpperCase())}</strong><span>${route.changed ? "CHANGED" : "UNCHANGED"}</span></header>
+      <p>${escapeHtml(route.currentChannelId ?? "UNCONFIGURED")} → ${escapeHtml(route.nextChannelId ?? "UNCONFIGURED")}</p>
+      <p>${facts === undefined || facts === null ? escapeHtml(permission) : `${escapeHtml(facts.guildName)} · ${escapeHtml(facts.channelName)} · ${facts.availableTagCount} TAGS · ${escapeHtml(permission)}`}</p>
+      <p>AVAILABLE TAGS · ${escapeHtml(tags)}</p>
+      <p>BOT ROLES · ${escapeHtml(roles)}</p>
+      <p>REQUIRED PERMISSIONS · ${escapeHtml(permissionFacts)}</p>
+    </article>`;
+  }).join("");
+  qs("#server-confirmation").placeholder = preview.confirmation;
+  qs("#server-apply").textContent = preview.mode === "migration" ? "APPLY SERVER MIGRATION" : "APPLY SERVER CONFIGURATION";
+  updateServerApplyButton();
+}
+
+function updateServerApplyButton() {
+  const preview = state.serverPreview;
+  qs("#server-apply").disabled = state.serverBusy || preview === null || !preview.valid || qs("#server-confirmation").value !== preview.confirmation;
+}
+
+async function reviewServerChange(mode) {
+  if (state.serverBusy) return;
+  clearMessage();
+  state.serverBusy = true;
+  state.serverInspection = null;
+  clearServerPreview();
+  renderServerConfiguration();
+  qs("#server-readiness").textContent = mode === "migration" ? "VALIDATING MIGRATION" : "VALIDATING CONFIGURATION";
+  try {
+    state.serverPreview = await api(mode === "migration" ? "/api/v1/server-migration/preview" : "/api/v1/server-configuration/preview", {
+      method: "POST",
+      body: JSON.stringify({ routes: serverRouteValues() }),
+    });
+    renderServerPreview();
+    if (!state.serverPreview.valid) showMessage("The server change is blocked. Review every issue before applying.");
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    state.serverBusy = false;
+    renderServerConfiguration();
+    updateServerApplyButton();
+  }
+}
+
+async function applyServerChange() {
+  const preview = state.serverPreview;
+  if (preview === null || !preview.valid || state.serverBusy || qs("#server-confirmation").value !== preview.confirmation) return;
+  clearMessage();
+  state.serverBusy = true;
+  renderServerConfiguration();
+  qs("#server-readiness").textContent = preview.mode === "migration" ? "APPLYING SERVER MIGRATION" : "APPLYING SERVER CONFIGURATION";
+  updateServerApplyButton();
+  try {
+    const result = await api(`/api/v1/server-configuration/previews/${encodeURIComponent(preview.previewId)}/apply`, {
+      method: "POST",
+      body: JSON.stringify({ confirmation: preview.confirmation }),
+    });
+    clearServerPreview();
+    state.serverInspection = null;
+    await loadServerConfiguration();
+    showMessage(
+      result.mode === "migration"
+        ? `Server migration applied. ${result.bindingsToReestablish} affected thread binding${result.bindingsToReestablish === 1 ? "" : "s"} must now be re-established. Backup identity: ${result.backupId}.`
+        : "Server configuration applied. No Discord content or credentials changed.",
+      false,
+    );
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    state.serverBusy = false;
+    renderServerConfiguration();
+  }
+}
+
 async function activateView(view) {
   qsa("[data-view]").forEach((item) => {
     if (item.dataset.view === view) item.setAttribute("aria-current", "page");
@@ -2508,6 +2706,7 @@ async function activateView(view) {
   qsa("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== view; });
   if (view === "workspace") await loadPackWorkspace();
   if (view === "threads") await loadThreadManagement();
+  if (view === "server") await loadServerConfiguration();
   if (view === "registry") {
     await loadRegistryPacks();
     await loadRegistry({ query: qs("#registry-search").value, offset: state.registryOffset });
@@ -2637,6 +2836,19 @@ qs("#thread-inspect-forum").addEventListener("click", () => void inspectThreadFo
 qs("#thread-title").addEventListener("input", updateThreadAdoptButton);
 qs("#thread-provision-button").addEventListener("click", () => void provisionNewThread());
 qs("#thread-verify-routing").addEventListener("click", () => void verifyPackRouting());
+qs("#server-test-current").addEventListener("click", () => void testCurrentServer());
+qs("#server-reset-routes").addEventListener("click", () => {
+  if (state.serverConfiguration === null) return;
+  qsa("[data-server-route]").forEach((input) => {
+    const route = state.serverConfiguration.routes.find((entry) => entry.logicalChannel === input.dataset.serverRoute);
+    input.value = route?.channelId ?? "";
+  });
+  clearServerPreview();
+});
+qs("#server-review-configuration").addEventListener("click", () => void reviewServerChange("configuration"));
+qs("#server-review-migration").addEventListener("click", () => void reviewServerChange("migration"));
+qs("#server-confirmation").addEventListener("input", updateServerApplyButton);
+qs("#server-apply").addEventListener("click", () => void applyServerChange());
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";

@@ -264,3 +264,20 @@ Administration-created Release custody lives below the configured workspace at
 repository-root CLI archive remains preserved as a separate legacy operator
 surface until server migration and archive consolidation are explicitly
 designed.
+
+
+## Administration server configuration and migration
+
+The Administration Server page is the product front door for
+installation-owned Discord routing. It edits only `config/channels.json` and,
+in explicit migration mode, the affected portions of
+`config/asset-threads.json`. Candidate routes are validated live through one
+bot session before application. Bot credentials remain process-environment
+secrets and are never serialized. The direct bot gateway is the only publisher
+transport; webhooks remain unused.
+
+Normal route changes refuse to invalidate persistent thread bindings. Migration
+mode preserves exact evidence under the Administration workspace, uses a
+rollback-protected route and binding transaction, and removes only bindings
+owned by Packs whose destination changed. Registry, Packs, Discord content,
+current staging, and Release archives are non-effects.

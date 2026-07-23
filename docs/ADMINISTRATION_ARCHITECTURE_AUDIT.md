@@ -185,3 +185,29 @@ Administration Release custody is installation-owned at
 repository root remains preserved pending server-configuration and migration
 work. That future work must define archive migration, backup, and consolidation
 before either custody location is retired.
+
+## Step 540 server-configuration and migration decision
+
+Administration now owns a governed UI for installation channel routes while
+preserving the existing domain-definition boundary. `config/channels.json`
+remains the logical-route to Discord-forum map and
+`config/asset-threads.json` remains Pack/Asset thread custody. Registry and
+Packs are not rewritten by server configuration.
+
+The bot credential remains process environment only. The UI exposes configured
+status but never the credential value. The current delivery transport is the
+Discord bot gateway; webhooks are explicitly reported as unused rather than
+introduced as a second secret source.
+
+A live server test verifies bot identity, one guild, forum type, available-tag
+count, bot roles, and the permissions required by current provisioning and
+publication. Normal route edits fail closed when existing thread bindings depend
+on a changed forum. Server Migration preserves exact before/after evidence in
+the Administration workspace, applies a rollback-protected route and binding
+transaction, and clears only affected Pack bindings so they can be deliberately
+re-established.
+Discord content is never deleted or modified by migration.
+
+Historical Release custody remains unchanged. Administration archive migration
+or consolidation is not implied by a Discord server move and remains a separate
+future workflow.

@@ -25,6 +25,7 @@
   <nav class="primary-nav" aria-label="Primary">
     <button type="button" data-view="workspace" aria-current="page">WORKSPACE</button>
     <button type="button" data-view="threads">THREADS</button>
+    <button type="button" data-view="server">SERVER</button>
     <button type="button" data-view="packs">PACKS</button>
     <button type="button" data-view="renderer">RENDER</button>
     <button type="button" data-view="registry">REGISTRY</button>
@@ -234,6 +235,75 @@
             <thead><tr><th>ASSET</th><th>STATUS</th><th>PERSISTENT THREAD ID</th><th>LIVE READINESS</th><th>ACTION</th></tr></thead>
             <tbody id="thread-members-body"></tbody>
           </table>
+        </div>
+      </section>
+    </section>
+
+    <section class="view" data-view-panel="server" hidden>
+      <section class="window server-overview" aria-labelledby="server-heading">
+        <header class="window-header">
+          <div><p class="micro-label">INSTALLATION-OWNED DISCORD PLUMBING</p><h1 id="server-heading">SERVER CONFIGURATION</h1></div>
+          <span id="server-readiness" class="context-fact">LOADING INSTALLATION</span>
+        </header>
+        <p class="window-help">Configure the logical VisionX routes used by Packs, verify the bot, guild, forums, roles, permissions, and available tags, then apply only a reviewed installation change. Credentials remain process-environment secrets and are never displayed or written by this page.</p>
+        <div class="server-fact-grid">
+          <div class="derived-channel"><span>BOT CREDENTIAL</span><strong id="server-credential">LOADING</strong></div>
+          <div class="derived-channel"><span>TRANSPORT</span><strong>BOT GATEWAY</strong></div>
+          <div class="derived-channel"><span>WEBHOOKS</span><strong id="server-webhooks">NOT USED</strong></div>
+          <div class="derived-channel"><span>GUILD</span><strong id="server-guild">NOT TESTED</strong></div>
+        </div>
+        <div class="server-overview-actions">
+          <button id="server-test-current" class="outline-action" type="button">TEST CURRENT SERVER</button>
+          <span id="server-bot-identity" class="context-fact">BOT IDENTITY NOT TESTED</span>
+        </div>
+      </section>
+
+      <section class="window server-routes" aria-labelledby="server-routes-heading">
+        <header class="window-header">
+          <div><p class="micro-label">LOGICAL ROUTES TO DISCORD FORUMS</p><h2 id="server-routes-heading">ROUTING &amp; DESTINATIONS</h2></div>
+          <span id="server-route-count" class="context-fact">0 ROUTES</span>
+        </header>
+        <p class="window-help">Every Pack resolves through its logical route. A normal configuration change is allowed only when no persistent thread bindings depend on a changed destination. Use Server Migration when bindings must be re-established on another Discord server or forum.</p>
+        <div class="table-wrap server-route-table-wrap">
+          <table>
+            <thead><tr><th>LOGICAL ROUTE</th><th>DISCORD FORUM ID</th><th>PACKS</th><th>REGISTRY ASSETS</th><th>THREAD BINDINGS</th><th>LIVE TEST</th></tr></thead>
+            <tbody id="server-routes-body"></tbody>
+          </table>
+        </div>
+        <div class="server-route-actions">
+          <button id="server-reset-routes" class="outline-action" type="button">RESTORE CURRENT VALUES</button>
+          <button id="server-review-configuration" class="primary-action" type="button">REVIEW CONFIGURATION</button>
+        </div>
+      </section>
+
+      <section class="window server-migration" aria-labelledby="server-migration-heading">
+        <header class="window-header">
+          <div><p class="micro-label">CONTROLLED INSTALLATION MOVE</p><h2 id="server-migration-heading">SERVER MIGRATION</h2></div>
+          <span class="context-fact">BACKUP BEFORE SOURCE CHANGE</span>
+        </header>
+        <p class="window-help">Migration validates every target forum in one guild, preserves exact before-and-after evidence in the Administration workspace, uses a rollback-protected source transaction, and removes only thread bindings owned by Packs whose destination changed. Discord posts are never deleted; affected routes must be rebound or provisioned afterward.</p>
+        <div class="server-migration-facts">
+          <div><strong>CREDENTIALS</strong><span>Remain outside repository files and are not copied.</span></div>
+          <div><strong>THREAD ROUTES</strong><span>Only changed Pack destinations are cleared; unaffected bindings are preserved.</span></div>
+          <div><strong>ARCHIVE</strong><span>Release custody remains unchanged and is not moved by server migration.</span></div>
+          <div><strong>DISCORD CONTENT</strong><span>No posts, tags, channels, roles, or webhooks are created or deleted.</span></div>
+        </div>
+        <div class="server-route-actions">
+          <button id="server-review-migration" class="danger-action" type="button">REVIEW AS SERVER MIGRATION</button>
+        </div>
+      </section>
+
+      <section id="server-preview" class="window server-preview" hidden aria-live="polite">
+        <header class="window-header">
+          <div><p class="micro-label">EXACT INSTALLATION PREFLIGHT</p><h2 id="server-preview-heading">SERVER CHANGE REVIEW</h2></div>
+          <span id="server-preview-state" class="workspace-status pending">AWAITING REVIEW</span>
+        </header>
+        <div id="server-preview-summary" class="server-preview-summary"></div>
+        <div id="server-preview-issues" class="server-preview-issues" hidden></div>
+        <div id="server-preview-routes" class="server-preview-routes"></div>
+        <div class="server-confirmation">
+          <label><span>TYPE EXACT CONFIRMATION</span><input id="server-confirmation" autocomplete="off" placeholder="REVIEW ROUTES FIRST"></label>
+          <button id="server-apply" class="primary-action" type="button" disabled>APPLY SERVER CHANGE</button>
         </div>
       </section>
     </section>

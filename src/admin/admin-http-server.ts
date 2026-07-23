@@ -427,6 +427,38 @@ async function routeApi(
   const method = request.method ?? "GET";
   if (pathname === "/api/v1/status" && method === "GET") return ok(response, service.status());
   if (pathname === "/api/v1/channels" && method === "GET") return ok(response, { schemaVersion: 1, logicalChannels: service.logicalChannels() });
+  if (pathname === "/api/v1/server-configuration") {
+    if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Server configuration request");
+    return ok(response, await service.serverConfigurationState());
+  }
+  if (pathname === "/api/v1/server-configuration/test") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Server connection test request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Server connection test body must be an object.");
+    exactFields(body, [], "Server connection test body");
+    return ok(response, await service.inspectServerConfiguration());
+  }
+  if (pathname === "/api/v1/server-configuration/preview" || pathname === "/api/v1/server-migration/preview") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Server configuration preview request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Server configuration preview body must be an object.");
+    exactFields(body, ["routes"], "Server configuration preview body");
+    return ok(response, pathname === "/api/v1/server-migration/preview"
+      ? await service.prepareServerMigration({ routes: body.routes })
+      : await service.prepareServerConfigurationChange({ routes: body.routes }), 201);
+  }
+  const serverConfigurationApply = /^\/api\/v1\/server-configuration\/previews\/([a-f0-9]{32})\/apply$/u.exec(pathname);
+  if (serverConfigurationApply !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Server configuration apply request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Server configuration apply body must be an object.");
+    exactFields(body, ["confirmation"], "Server configuration apply body");
+    return ok(response, await service.applyServerConfiguration(serverConfigurationApply[1] ?? "", body.confirmation));
+  }
   if (pathname === "/api/v1/thread-management") {
     if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     return ok(response, await service.threadManagementState());

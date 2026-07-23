@@ -24,7 +24,7 @@ source tree and is intentionally conservative. Nothing listed here is removed.
   reassign channel, reorder Packs, and delete Pack.
 - Registry alias maintenance through dedicated add/remove scripts.
 - Market-identity and export audits.
-- Installation status reporting through the status script.
+- Installation status reporting through the status script. Administration now exposes Discord installation readiness, while the script remains a recovery and non-UI surface.
 
 These are candidates for UI exposure or consolidation, not deletion.
 
@@ -49,9 +49,7 @@ must not be removed before reference and deployment analysis.
 
 ## UI gaps confirmed
 
-- No UI for channel-route creation, modification, validation, or removal.
-- No UI for Discord server migration, credentials, guilds, permissions, roles,
-  or connection testing.
+- Channel-route inspection, live Discord validation, governed modification, and controlled server migration are exposed in Administration. Credentials remain process-environment only; guild, forum, role, permission, and tag facts are read-only inspection evidence.
 - Publication and interrupted Release recovery are exposed in Workspace, but
   historical Release browsing and export remain absent.
 - No complete maintenance surface for existing Packs.

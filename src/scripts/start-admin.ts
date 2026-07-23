@@ -8,6 +8,7 @@ import { AdminService } from "../admin/admin-service.ts";
 import { startAdminHttpServer } from "../admin/admin-http-server.ts";
 import { openDiscordForumSession } from "../publish/discord-forum-session.ts";
 import { openPublisherSession } from "../publish/discord-session.ts";
+import { openDiscordServerAdministrationSession } from "../publish/discord-server-session.ts";
 
 export const START_ADMIN_USAGE = "Usage: npx tsx src/scripts/start-admin.ts --repository-root <path> --workspace-root <path> [--chart-downloads-root <path>] [--host 127.0.0.1] [--port 4173]";
 
@@ -70,6 +71,8 @@ export async function main(
         openDiscordForumSession,
         openDiscordForumProvisioningSession: openDiscordForumSession,
         openPublisherSession,
+        openDiscordServerSession: openDiscordServerAdministrationSession,
+        discordCredentialConfigured: true,
       } : {}),
     });
     const server = await startAdminHttpServer({ service, host: options.host, port: options.port });

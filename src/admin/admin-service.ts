@@ -164,11 +164,21 @@ import {
 import {
   AssetThreadsError,
   parseAssetThreadBindings,
+  serializeAssetThreadBindings,
   type AssetThreadBindings,
 } from "../wiring/asset-threads.ts";
 import { buildChannelResolver } from "../wiring/channels.ts";
 import { AdminThreadProvisioningWorkspace } from "./admin-thread-provisioning-workspace.ts";
 import { AdminPublicationWorkspace } from "./admin-publication-workspace.ts";
+import { AdminServerConfigurationWorkspace } from "./admin-server-configuration-workspace.ts";
+import {
+  applyServerConfigurationFile,
+  ServerConfigurationFileError,
+} from "../wiring/server-configuration-file.ts";
+import type {
+  DiscordServerAdministrationSession,
+  DiscordServerRouteFacts,
+} from "../publish/discord-server-session.ts";
 
 import {
   reviewPackSourceChange,
@@ -576,6 +586,119 @@ export interface AdminThreadAdoptionResult {
 
 export type AdminDiscordForumSessionFactory = () => Promise<DiscordForumSession>;
 export type AdminDiscordForumProvisioningSessionFactory = () => Promise<DiscordForumAdministrationSession>;
+export type AdminDiscordServerSessionFactory = () => Promise<DiscordServerAdministrationSession>;
+
+export interface AdminServerConfigurationRouteState {
+  readonly logicalChannel: string;
+  readonly channelId: string | null;
+  readonly configured: boolean;
+  readonly packIds: readonly string[];
+  readonly registryAssetCount: number;
+  readonly boundThreadCount: number;
+}
+
+export interface AdminServerConfigurationState {
+  readonly schemaVersion: 1;
+  readonly credential: {
+    readonly configured: boolean;
+    readonly source: "process_environment";
+    readonly editable: false;
+    readonly valueExposed: false;
+  };
+  readonly connectionTestAvailable: boolean;
+  readonly publisherTransport: "discord_bot_gateway";
+  readonly webhooks: {
+    readonly used: false;
+    readonly configured: false;
+    readonly explanation: string;
+  };
+  readonly channelsSourceSha256: string;
+  readonly threadBindingsSourceSha256: string;
+  readonly routes: readonly AdminServerConfigurationRouteState[];
+}
+
+export interface AdminServerRouteInspection {
+  readonly logicalChannel: string;
+  readonly channelId: string;
+  readonly state: "ready" | "blocked";
+  readonly facts: DiscordServerRouteFacts | null;
+  readonly issues: readonly string[];
+}
+
+export interface AdminServerConnectionInspection {
+  readonly schemaVersion: 1;
+  readonly operationallyReady: boolean;
+  readonly bot: { readonly userId: string; readonly username: string };
+  readonly guild: { readonly id: string; readonly name: string } | null;
+  readonly routes: readonly AdminServerRouteInspection[];
+  readonly sessionClosed: boolean;
+  readonly warnings: readonly ("discord_session_close_failed")[];
+  readonly effects: {
+    readonly discordInspected: true;
+    readonly discordContentChanged: false;
+    readonly configurationChanged: false;
+  };
+}
+
+export interface AdminServerConfigurationIssue {
+  readonly code:
+    | "route_missing"
+    | "route_unknown"
+    | "channel_id_invalid"
+    | "channel_id_duplicate"
+    | "pack_route_unconfigured"
+    | "binding_migration_required"
+    | "discord_unavailable"
+    | "discord_route_blocked"
+    | "cross_guild_routes"
+    | "no_route_changes";
+  readonly message: string;
+  readonly logicalChannel?: string;
+}
+
+export interface AdminServerConfigurationPreview {
+  readonly schemaVersion: 1;
+  readonly previewId: string;
+  readonly mode: "configuration" | "migration";
+  readonly valid: boolean;
+  readonly confirmation: string;
+  readonly changedRouteCount: number;
+  readonly affectedPackIds: readonly string[];
+  readonly bindingsToReestablish: number;
+  readonly issues: readonly AdminServerConfigurationIssue[];
+  readonly routes: readonly {
+    readonly logicalChannel: string;
+    readonly currentChannelId: string | null;
+    readonly nextChannelId: string | null;
+    readonly changed: boolean;
+    readonly packIds: readonly string[];
+    readonly boundThreadCount: number;
+    readonly inspection: AdminServerRouteInspection | null;
+  }[];
+  readonly sourceState: {
+    readonly registrySha256: string;
+    readonly packsSha256: string;
+    readonly channelsSha256: string;
+    readonly threadBindingsSha256: string;
+  };
+  readonly effects: {
+    readonly channelsChanged: boolean;
+    readonly threadBindingsRemoved: number;
+    readonly unaffectedThreadBindingsPreserved: true;
+    readonly credentialsChanged: false;
+    readonly webhooksChanged: false;
+    readonly discordContentChanged: false;
+    readonly backupRequired: boolean;
+  };
+}
+
+interface AdminServerConfigurationPreviewRecord {
+  readonly preview: AdminServerConfigurationPreview;
+  readonly channelsBeforeBytes: Buffer;
+  readonly threadBindingsBeforeBytes: Buffer;
+  readonly channelsAfterBytes: Buffer;
+  readonly threadBindingsAfterBytes: Buffer;
+}
 
 export interface AdminThreadForumInspectionResult {
   readonly schemaVersion: 1;
@@ -653,6 +776,8 @@ export interface AdminServiceOptions {
   readonly openDiscordForumSession?: AdminDiscordForumSessionFactory;
   readonly openDiscordForumProvisioningSession?: AdminDiscordForumProvisioningSessionFactory;
   readonly openPublisherSession?: () => Promise<PublisherSessionShape>;
+  readonly openDiscordServerSession?: AdminDiscordServerSessionFactory;
+  readonly discordCredentialConfigured?: boolean;
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -753,6 +878,7 @@ export class AdminService {
   readonly packRevisions: AdminPackRevisionWorkspace;
   readonly threadProvisioning: AdminThreadProvisioningWorkspace;
   readonly publication: AdminPublicationWorkspace;
+  readonly serverConfiguration: AdminServerConfigurationWorkspace;
   readonly releases: ReleaseStore;
   #state: LiveState;
   #packMutationLock: Promise<void> = Promise.resolve();
@@ -761,10 +887,13 @@ export class AdminService {
   #canonicalSourceMutationLock: Promise<void> = Promise.resolve();
   #registryCsvImports = new Map<string, AdminRegistryCsvImportRecord>();
   #publicationPreviews = new Map<string, AdminPackPublicationPreview>();
+  #serverConfigurationPreviews = new Map<string, AdminServerConfigurationPreviewRecord>();
   #publicationInProgress = false;
   readonly #openDiscordForumSession?: AdminDiscordForumSessionFactory;
   readonly #openDiscordForumProvisioningSession?: AdminDiscordForumProvisioningSessionFactory;
   readonly #openPublisherSession?: () => Promise<PublisherSessionShape>;
+  readonly #openDiscordServerSession?: AdminDiscordServerSessionFactory;
+  readonly #discordCredentialConfigured: boolean;
 
   private constructor(
     repositoryRoot: string,
@@ -778,11 +907,14 @@ export class AdminService {
     packRevisions: AdminPackRevisionWorkspace,
     threadProvisioning: AdminThreadProvisioningWorkspace,
     publication: AdminPublicationWorkspace,
+    serverConfiguration: AdminServerConfigurationWorkspace,
     releases: ReleaseStore,
     state: LiveState,
     openDiscordForumSession?: AdminDiscordForumSessionFactory,
     openDiscordForumProvisioningSession?: AdminDiscordForumProvisioningSessionFactory,
     openPublisherSession?: () => Promise<PublisherSessionShape>,
+    openDiscordServerSession?: AdminDiscordServerSessionFactory,
+    discordCredentialConfigured = false,
   ) {
     this.repositoryRoot = repositoryRoot;
     this.workspace = workspace;
@@ -795,11 +927,14 @@ export class AdminService {
     this.packRevisions = packRevisions;
     this.threadProvisioning = threadProvisioning;
     this.publication = publication;
+    this.serverConfiguration = serverConfiguration;
     this.releases = releases;
     this.#state = state;
     this.#openDiscordForumSession = openDiscordForumSession;
     this.#openDiscordForumProvisioningSession = openDiscordForumProvisioningSession;
     this.#openPublisherSession = openPublisherSession;
+    this.#openDiscordServerSession = openDiscordServerSession;
+    this.#discordCredentialConfigured = discordCredentialConfigured;
   }
 
   static async create(options: AdminServiceOptions): Promise<AdminService> {
@@ -820,6 +955,7 @@ export class AdminService {
     const packRevisions = await AdminPackRevisionWorkspace.open(workspace.root);
     const threadProvisioning = await AdminThreadProvisioningWorkspace.open(workspace.root);
     const publication = await AdminPublicationWorkspace.open(workspace.root);
+    const serverConfiguration = await AdminServerConfigurationWorkspace.open(workspace.root);
     const releases = createReleaseStore(publication.archiveRoot);
     const state = await AdminService.#loadState(repositoryRoot);
     return new AdminService(
@@ -834,11 +970,14 @@ export class AdminService {
       packRevisions,
       threadProvisioning,
       publication,
+      serverConfiguration,
       releases,
       state,
       options.openDiscordForumSession,
       options.openDiscordForumProvisioningSession,
       options.openPublisherSession,
+      options.openDiscordServerSession,
+      options.discordCredentialConfigured ?? options.openDiscordServerSession !== undefined,
     );
   }
 
@@ -958,6 +1097,521 @@ export class AdminService {
 
   logicalChannels(): readonly string[] {
     return Object.freeze(Object.keys(this.#state.rawChannels).sort((a, b) => a.localeCompare(b, "en")));
+  }
+
+  async serverConfigurationState(): Promise<AdminServerConfigurationState> {
+    const { file, bindings } = await this.#readThreadBindings();
+    const routes = this.logicalChannels().map((logicalChannel) => {
+      const raw = this.#state.rawChannels[logicalChannel];
+      const channelId = typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+      const packIds = this.#state.packs
+        .filter((pack) => pack.channel === logicalChannel)
+        .map((pack) => pack.id);
+      const boundThreadCount = packIds.reduce(
+        (sum, packId) => sum + Object.keys(bindings.packs[packId] ?? {}).length,
+        0,
+      );
+      return Object.freeze({
+        logicalChannel,
+        channelId,
+        configured: channelId !== null,
+        packIds: Object.freeze(packIds),
+        registryAssetCount: this.#state.assets.filter((asset) => asset.channel === logicalChannel).length,
+        boundThreadCount,
+      });
+    });
+    return Object.freeze({
+      schemaVersion: 1,
+      credential: Object.freeze({
+        configured: this.#discordCredentialConfigured,
+        source: "process_environment" as const,
+        editable: false as const,
+        valueExposed: false as const,
+      }),
+      connectionTestAvailable: this.#openDiscordServerSession !== undefined,
+      publisherTransport: "discord_bot_gateway" as const,
+      webhooks: Object.freeze({
+        used: false as const,
+        configured: false as const,
+        explanation: "VisionX publishes through the authenticated Discord bot gateway; no webhook secret is stored or required.",
+      }),
+      channelsSourceSha256: this.#state.channelsFile.sha256,
+      threadBindingsSourceSha256: file.sha256,
+      routes: Object.freeze(routes),
+    });
+  }
+
+  async #inspectServerRouteMap(
+    routes: Readonly<Record<string, string>>,
+  ): Promise<AdminServerConnectionInspection> {
+    if (this.#openDiscordServerSession === undefined) {
+      throw new AdminError(
+        "discord_operations_unavailable",
+        "Discord server inspection is unavailable until the Administration process is started with a bot credential.",
+        503,
+      );
+    }
+
+    let session: DiscordServerAdministrationSession;
+    try {
+      session = await this.#openDiscordServerSession();
+    } catch (error) {
+      throw new AdminError(
+        "server_connection_failed",
+        `Discord connection failed: ${error instanceof Error ? error.message : String(error)}`,
+        502,
+      );
+    }
+
+    const warnings: Array<"discord_session_close_failed"> = [];
+    let sessionClosed = false;
+    const inspections: AdminServerRouteInspection[] = [];
+    try {
+      for (const logicalChannel of Object.keys(routes).sort((left, right) => left.localeCompare(right, "en"))) {
+        const channelId = routes[logicalChannel] ?? "";
+        if (channelId.length === 0) {
+          inspections.push(Object.freeze({
+            logicalChannel,
+            channelId,
+            state: "blocked" as const,
+            facts: null,
+            issues: Object.freeze(["No Discord forum channel ID is configured."]),
+          }));
+          continue;
+        }
+        try {
+          const facts = await session.inspectForum(channelId);
+          const issues = facts.missingPermissions.map(
+            (permission) => `Missing required bot permission: ${permission}.`,
+          );
+          inspections.push(Object.freeze({
+            logicalChannel,
+            channelId,
+            state: issues.length === 0 ? "ready" as const : "blocked" as const,
+            facts,
+            issues: Object.freeze(issues),
+          }));
+        } catch (error) {
+          inspections.push(Object.freeze({
+            logicalChannel,
+            channelId,
+            state: "blocked" as const,
+            facts: null,
+            issues: Object.freeze([error instanceof Error ? error.message : String(error)]),
+          }));
+        }
+      }
+    } finally {
+      try {
+        await session.close();
+        sessionClosed = true;
+      } catch {
+        warnings.push("discord_session_close_failed");
+      }
+    }
+
+    const guilds = new Map<string, string>();
+    for (const route of inspections) {
+      if (route.facts !== null) guilds.set(route.facts.guildId, route.facts.guildName);
+    }
+    const crossGuild = guilds.size > 1;
+    const routesWithGuildIssues = crossGuild
+      ? inspections.map((route) => Object.freeze({
+          ...route,
+          state: "blocked" as const,
+          issues: Object.freeze([...route.issues, "Configured routes resolve to more than one Discord guild."]),
+        }))
+      : inspections;
+    const guildEntry = guilds.size === 1 ? [...guilds.entries()][0] : undefined;
+    return Object.freeze({
+      schemaVersion: 1,
+      operationallyReady:
+        routesWithGuildIssues.length > 0 &&
+        routesWithGuildIssues.every((route) => route.state === "ready") &&
+        guilds.size === 1,
+      bot: session.bot,
+      guild: guildEntry === undefined
+        ? null
+        : Object.freeze({ id: guildEntry[0], name: guildEntry[1] }),
+      routes: Object.freeze(routesWithGuildIssues),
+      sessionClosed,
+      warnings: Object.freeze(warnings),
+      effects: Object.freeze({
+        discordInspected: true as const,
+        discordContentChanged: false as const,
+        configurationChanged: false as const,
+      }),
+    });
+  }
+
+  async inspectServerConfiguration(): Promise<AdminServerConnectionInspection> {
+    const routes: Record<string, string> = {};
+    for (const logicalChannel of this.logicalChannels()) {
+      const value = this.#state.rawChannels[logicalChannel];
+      routes[logicalChannel] = typeof value === "string" ? value.trim() : "";
+    }
+    return this.#inspectServerRouteMap(routes);
+  }
+
+  async prepareServerConfiguration(
+    input: { readonly routes: unknown },
+    mode: "configuration" | "migration",
+  ): Promise<AdminServerConfigurationPreview> {
+    await this.refresh();
+    const issues: AdminServerConfigurationIssue[] = [];
+    if (!isRecord(input.routes)) {
+      throw new AdminError("invalid_request", "Server route configuration must be an object.");
+    }
+    const currentNames = this.logicalChannels();
+    const suppliedNames = Object.keys(input.routes);
+    for (const logicalChannel of currentNames) {
+      if (!Object.hasOwn(input.routes, logicalChannel)) {
+        issues.push(Object.freeze({
+          code: "route_missing" as const,
+          logicalChannel,
+          message: `Route ${logicalChannel} is missing from the reviewed configuration.`,
+        }));
+      }
+    }
+    for (const logicalChannel of suppliedNames) {
+      if (!currentNames.includes(logicalChannel)) {
+        issues.push(Object.freeze({
+          code: "route_unknown" as const,
+          logicalChannel,
+          message: `Unknown logical route ${logicalChannel} cannot be added by server migration.`,
+        }));
+      }
+    }
+
+    const nextRoutes: Record<string, string> = {};
+    const seenIds = new Map<string, string>();
+    for (const logicalChannel of currentNames) {
+      const raw = input.routes[logicalChannel];
+      if (typeof raw !== "string" || raw.trim() !== raw || (raw.length > 0 && !/^[0-9]{17,20}$/u.test(raw))) {
+        issues.push(Object.freeze({
+          code: "channel_id_invalid" as const,
+          logicalChannel,
+          message: `${logicalChannel} must be an empty value or one normalized Discord snowflake.`,
+        }));
+        nextRoutes[logicalChannel] = "";
+        continue;
+      }
+      nextRoutes[logicalChannel] = raw;
+      if (raw.length > 0) {
+        const prior = seenIds.get(raw);
+        if (prior !== undefined) {
+          issues.push(Object.freeze({
+            code: "channel_id_duplicate" as const,
+            logicalChannel,
+            message: `${logicalChannel} and ${prior} cannot resolve to the same Discord forum.`,
+          }));
+        } else {
+          seenIds.set(raw, logicalChannel);
+        }
+      }
+    }
+
+    for (const pack of this.#state.packs) {
+      if ((nextRoutes[pack.channel] ?? "").length === 0) {
+        issues.push(Object.freeze({
+          code: "pack_route_unconfigured" as const,
+          logicalChannel: pack.channel,
+          message: `Pack ${pack.id} requires route ${pack.channel} to remain configured.`,
+        }));
+      }
+    }
+
+    const { file: bindingsFile, bindings } = await this.#readThreadBindings();
+    const currentRoutes: Record<string, string> = {};
+    for (const logicalChannel of currentNames) {
+      const value = this.#state.rawChannels[logicalChannel];
+      currentRoutes[logicalChannel] = typeof value === "string" ? value.trim() : "";
+    }
+    const changedRoutes = currentNames.filter(
+      (logicalChannel) => currentRoutes[logicalChannel] !== nextRoutes[logicalChannel],
+    );
+    if (changedRoutes.length === 0) {
+      issues.push(Object.freeze({
+        code: "no_route_changes" as const,
+        message: "The candidate does not change any Discord route.",
+      }));
+    }
+    const affectedPackIds = this.#state.packs
+      .filter((pack) => changedRoutes.includes(pack.channel))
+      .map((pack) => pack.id);
+    const bindingsToReestablish = affectedPackIds.reduce(
+      (sum, packId) => sum + Object.keys(bindings.packs[packId] ?? {}).length,
+      0,
+    );
+    if (mode === "configuration" && bindingsToReestablish > 0) {
+      issues.push(Object.freeze({
+        code: "binding_migration_required" as const,
+        message: `${bindingsToReestablish} persistent thread binding${bindingsToReestablish === 1 ? "" : "s"} depend on changed routes. Use Server Migration so exact backups are preserved and affected bindings are cleared deliberately.`,
+      }));
+    }
+
+    let inspection: AdminServerConnectionInspection | null = null;
+    if (issues.length === 0) {
+      if (this.#openDiscordServerSession === undefined) {
+        issues.push(Object.freeze({
+          code: "discord_unavailable" as const,
+          message: "A live Discord connection test is required before channel configuration can be applied.",
+        }));
+      } else {
+        inspection = await this.#inspectServerRouteMap(nextRoutes);
+        if (!inspection.operationallyReady) {
+          const crossGuild = new Set(
+            inspection.routes.flatMap((route) => route.facts === null ? [] : [route.facts.guildId]),
+          ).size > 1;
+          if (crossGuild) {
+            issues.push(Object.freeze({
+              code: "cross_guild_routes" as const,
+              message: "All configured VisionX routes must belong to one Discord guild.",
+            }));
+          }
+          for (const route of inspection.routes.filter((entry) => entry.state === "blocked")) {
+            issues.push(Object.freeze({
+              code: "discord_route_blocked" as const,
+              logicalChannel: route.logicalChannel,
+              message: `${route.logicalChannel}: ${route.issues.join(" ")}`,
+            }));
+          }
+        }
+      }
+    }
+
+    const nextBindings: AssetThreadBindings = mode === "migration"
+      ? Object.freeze({
+          schemaVersion: 1 as const,
+          packs: Object.freeze(Object.fromEntries(
+            Object.entries(bindings.packs).filter(([packId]) => !affectedPackIds.includes(packId)),
+          )),
+        })
+      : bindings;
+    const channelsAfterBytes = Buffer.from(
+      `${JSON.stringify(Object.fromEntries(currentNames.map((name) => [name, nextRoutes[name] ?? ""])), null, 2)}\n`,
+      "utf8",
+    );
+    const threadBindingsAfterBytes = serializeAssetThreadBindings(nextBindings);
+    const sourceState = Object.freeze({
+      registrySha256: this.#state.registryFile.sha256,
+      packsSha256: this.#state.packsFile.sha256,
+      channelsSha256: this.#state.channelsFile.sha256,
+      threadBindingsSha256: bindingsFile.sha256,
+    });
+    const confirmation = mode === "migration"
+      ? `MIGRATE ${changedRoutes.length} ROUTE${changedRoutes.length === 1 ? "" : "S"}`
+      : "APPLY SERVER CONFIGURATION";
+    const previewId = createHash("sha256").update(JSON.stringify({
+      mode,
+      sourceState,
+      channelsAfterSha256: sha256(channelsAfterBytes),
+      threadBindingsAfterSha256: sha256(threadBindingsAfterBytes),
+    })).digest("hex").slice(0, 32);
+    const inspectionByRoute = new Map(
+      (inspection?.routes ?? []).map((route) => [route.logicalChannel, route] as const),
+    );
+    const preview: AdminServerConfigurationPreview = Object.freeze({
+      schemaVersion: 1,
+      previewId,
+      mode,
+      valid: issues.length === 0,
+      confirmation,
+      changedRouteCount: changedRoutes.length,
+      affectedPackIds: Object.freeze(affectedPackIds),
+      bindingsToReestablish,
+      issues: Object.freeze(issues),
+      routes: Object.freeze(currentNames.map((logicalChannel) => {
+        const packIds = this.#state.packs.filter((pack) => pack.channel === logicalChannel).map((pack) => pack.id);
+        return Object.freeze({
+          logicalChannel,
+          currentChannelId: currentRoutes[logicalChannel] || null,
+          nextChannelId: nextRoutes[logicalChannel] || null,
+          changed: changedRoutes.includes(logicalChannel),
+          packIds: Object.freeze(packIds),
+          boundThreadCount: packIds.reduce(
+            (sum, packId) => sum + Object.keys(bindings.packs[packId] ?? {}).length,
+            0,
+          ),
+          inspection: inspectionByRoute.get(logicalChannel) ?? null,
+        });
+      })),
+      sourceState,
+      effects: Object.freeze({
+        channelsChanged: changedRoutes.length > 0,
+        threadBindingsRemoved: mode === "migration" ? bindingsToReestablish : 0,
+        unaffectedThreadBindingsPreserved: true as const,
+        credentialsChanged: false as const,
+        webhooksChanged: false as const,
+        discordContentChanged: false as const,
+        backupRequired: mode === "migration",
+      }),
+    });
+    if (preview.valid) {
+      if (this.#serverConfigurationPreviews.size >= 20) {
+        const oldest = this.#serverConfigurationPreviews.keys().next().value as string | undefined;
+        if (oldest !== undefined) this.#serverConfigurationPreviews.delete(oldest);
+      }
+      this.#serverConfigurationPreviews.set(previewId, Object.freeze({
+        preview,
+        channelsBeforeBytes: Buffer.from(this.#state.channelsFile.bytes),
+        threadBindingsBeforeBytes: Buffer.from(bindingsFile.bytes),
+        channelsAfterBytes,
+        threadBindingsAfterBytes,
+      }));
+    }
+    return preview;
+  }
+
+  prepareServerConfigurationChange(input: { readonly routes: unknown }): Promise<AdminServerConfigurationPreview> {
+    return this.prepareServerConfiguration(input, "configuration");
+  }
+
+  prepareServerMigration(input: { readonly routes: unknown }): Promise<AdminServerConfigurationPreview> {
+    return this.prepareServerConfiguration(input, "migration");
+  }
+
+  async applyServerConfiguration(
+    previewId: string,
+    confirmation: unknown,
+  ): Promise<Readonly<Record<string, unknown>>> {
+    const record = this.#serverConfigurationPreviews.get(previewId);
+    if (record === undefined) {
+      throw new AdminError(
+        "server_configuration_preview_not_found",
+        "Server-configuration preview was not found or is no longer valid.",
+        404,
+      );
+    }
+    if (confirmation !== record.preview.confirmation) {
+      throw new AdminError(
+        "server_configuration_confirmation_invalid",
+        `Confirmation must equal ${record.preview.confirmation} exactly.`,
+      );
+    }
+    return this.#withCanonicalSourceMutationLock(async () => {
+      await this.refresh();
+      const { file: bindingsFile } = await this.#readThreadBindings();
+      if (
+        this.#state.registryFile.sha256 !== record.preview.sourceState.registrySha256 ||
+        this.#state.packsFile.sha256 !== record.preview.sourceState.packsSha256 ||
+        this.#state.channelsFile.sha256 !== record.preview.sourceState.channelsSha256 ||
+        bindingsFile.sha256 !== record.preview.sourceState.threadBindingsSha256
+      ) {
+        this.#serverConfigurationPreviews.delete(previewId);
+        throw new AdminError(
+          "server_configuration_state_changed",
+          "Registry, Pack, Channel, or thread-binding state changed after review.",
+          409,
+        );
+      }
+
+      const liveCandidateRoutes = Object.fromEntries(
+        record.preview.routes.map((route) => [route.logicalChannel, route.nextChannelId ?? ""]),
+      );
+      const liveRevalidation = await this.#inspectServerRouteMap(liveCandidateRoutes);
+      if (!liveRevalidation.operationallyReady) {
+        throw new AdminError(
+          "server_configuration_blocked",
+          "The reviewed Discord destination is no longer operationally ready. No source files were changed.",
+          409,
+          {
+            blockedRoutes: liveRevalidation.routes
+              .filter((route) => route.state === "blocked")
+              .map((route) => route.logicalChannel),
+          },
+        );
+      }
+
+      // A live Discord test may take long enough for canonical context to move.
+      // Recheck every reviewed source after the test and before preserving
+      // migration evidence or replacing either installation-owned file.
+      await this.refresh();
+      const { file: revalidatedBindingsFile } = await this.#readThreadBindings();
+      if (
+        this.#state.registryFile.sha256 !== record.preview.sourceState.registrySha256 ||
+        this.#state.packsFile.sha256 !== record.preview.sourceState.packsSha256 ||
+        this.#state.channelsFile.sha256 !== record.preview.sourceState.channelsSha256 ||
+        revalidatedBindingsFile.sha256 !== record.preview.sourceState.threadBindingsSha256
+      ) {
+        this.#serverConfigurationPreviews.delete(previewId);
+        throw new AdminError(
+          "server_configuration_state_changed",
+          "Registry, Pack, Channel, or thread-binding state changed during final Discord validation.",
+          409,
+        );
+      }
+
+      if (record.preview.mode === "migration") {
+        await this.serverConfiguration.stageMigrationEvidence({
+          migrationId: previewId,
+          channelsBefore: record.channelsBeforeBytes,
+          threadBindingsBefore: record.threadBindingsBeforeBytes,
+          channelsAfter: record.channelsAfterBytes,
+          threadBindingsAfter: record.threadBindingsAfterBytes,
+          preview: record.preview as unknown as Readonly<Record<string, unknown>>,
+        });
+      }
+
+      let applied;
+      try {
+        applied = await applyServerConfigurationFile({
+          repositoryRoot: this.repositoryRoot,
+          expectedChannelsSha256: record.preview.sourceState.channelsSha256,
+          expectedThreadBindingsSha256: record.preview.sourceState.threadBindingsSha256,
+          channelsAfterBytes: record.channelsAfterBytes,
+          threadBindingsAfterBytes: record.threadBindingsAfterBytes,
+        });
+      } catch (error) {
+        if (error instanceof ServerConfigurationFileError) {
+          const code = error.code === "stale_source_state"
+            ? "server_configuration_state_changed"
+            : error.code === "rollback_failed"
+              ? "rollback_failed"
+              : "source_write_failed";
+          throw new AdminError(code, error.message, code === "server_configuration_state_changed" ? 409 : 500);
+        }
+        throw error;
+      }
+
+      this.#serverConfigurationPreviews.delete(previewId);
+      await this.refresh();
+      const warnings: string[] = [];
+      if (record.preview.mode === "migration") {
+        try {
+          await this.serverConfiguration.completeMigration(previewId, Object.freeze({
+            schemaVersion: 1,
+            migrationId: previewId,
+            completedAt: new Date().toISOString(),
+            sourceState: applied,
+          }));
+        } catch {
+          warnings.push("migration_completion_receipt_write_failed");
+        }
+      }
+      return Object.freeze({
+        schemaVersion: 1,
+        previewId,
+        mode: record.preview.mode,
+        applied: true,
+        affectedPackIds: record.preview.affectedPackIds,
+        bindingsToReestablish: record.preview.bindingsToReestablish,
+        sourceState: applied,
+        backupId: record.preview.mode === "migration" ? previewId : null,
+        warnings: Object.freeze([
+          ...warnings,
+          ...liveRevalidation.warnings,
+        ]),
+        liveValidation: Object.freeze({
+          bot: liveRevalidation.bot,
+          guild: liveRevalidation.guild,
+          routeCount: liveRevalidation.routes.length,
+          operationallyReady: true as const,
+        }),
+        effects: record.preview.effects,
+        status: this.status(),
+      });
+    });
   }
 
   async #readThreadBindings(): Promise<{

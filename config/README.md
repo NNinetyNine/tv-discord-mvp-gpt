@@ -9,10 +9,12 @@ The domain-definition files (`registry.json`, `packs.json`) live in
 
 ## channels.json
 
-Maps each channel name to its Discord channel ID. IDs are intentionally left
-empty (`""`) until provisioned. Channel *names* are the universe that pack
-channel assignments are validated against; the *IDs* are environment
-provisioning, filled in as channels are wired.
+Maps each channel name to its Discord forum channel ID. Channel *names* are
+the universe that Pack and Registry channel assignments are validated against;
+the *IDs* are installation provisioning. Administration can live-test and
+govern these values. A normal edit refuses to invalidate persistent thread
+bindings; Server Migration preserves exact evidence and clears only affected
+Pack bindings. Bot credentials are never stored in this file.
 
 ## tickers.json
 
