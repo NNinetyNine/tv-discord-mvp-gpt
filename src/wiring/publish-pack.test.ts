@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
+  inspectPackPublishReadiness,
   publishPack,
   resumeInterruptedRelease,
   type PublishPackDeps,
@@ -107,6 +108,115 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(workDir, { recursive: true, force: true });
+});
+
+
+describe("readiness inspection", () => {
+  it("reports every local blocker without opening Discord or creating a Release", () => {
+    workspace.capture("btc", "t");
+    stageAsset("crypto", "btc");
+    const result = inspectPackPublishReadiness({
+      workspace,
+      staging,
+      releases,
+      resolveChannel: () => null,
+      resolveAssetThread: () => null,
+    }, "crypto");
+
+    expect(result).toEqual({
+      packId: "crypto",
+      ready: false,
+      capturedCount: 1,
+      totalCount: 2,
+      stagedCount: 1,
+      resolvedThreadCount: 0,
+      blockers: [
+        { code: "pack_incomplete", missingAssetIds: ["eth"] },
+        { code: "missing_staged_images", missingAssetIds: ["eth"] },
+        { code: "channel_unresolved" },
+        { code: "asset_threads_unresolved", missingAssetIds: ["btc", "eth"] },
+      ],
+    });
+    expect(releases.listReleases("crypto")).toEqual([]);
+  });
+
+  it("blocks a duplicate publish when a completed Release still matches an uncleared Pack workspace", () => {
+    captureAll("crypto");
+    const record = releases.createThreadedRelease({
+      packId: "crypto",
+      packDisplay: "Crypto",
+      forumChannelId: "forum-1",
+      startedAt: "2026-07-08T14:30:00.000Z",
+      analyses: workspace.capturedFor("crypto").map((capture) => ({
+        assetId: capture.assetId,
+        display: capture.assetId.toUpperCase(),
+        capturedAt: capture.capturedAt,
+        sourceImagePath: staging.get(capture.assetId)!.path,
+        threadId: `thread-${capture.assetId}`,
+      })),
+    });
+    for (const analysis of record.analyses) {
+      releases.recordPost("crypto", record.releaseId, analysis.assetId, `message-${analysis.assetId}`, "2026-07-08T14:31:00.000Z");
+    }
+    releases.markPublished("crypto", record.releaseId, "2026-07-08T14:32:00.000Z");
+
+    const readiness = inspectPackPublishReadiness({
+      workspace,
+      staging,
+      releases,
+      resolveChannel: () => "forum-1",
+      resolveAssetThread: (_packId, assetId) => `thread-${assetId}`,
+    }, "crypto");
+    expect(readiness.ready).toBe(false);
+    expect(readiness.blockers).toContainEqual({
+      code: "published_release_cleanup_required",
+      releaseId: record.releaseId,
+      publishedAt: "2026-07-08T14:32:00.000Z",
+    });
+  });
+
+  it("surfaces an interrupted Release and requires explicit supersession for a fresh publish", () => {
+    captureAll("crypto");
+    const record = releases.createThreadedRelease({
+      packId: "crypto",
+      packDisplay: "Crypto",
+      forumChannelId: "forum-1",
+      startedAt: "2026-07-08T14:30:00.000Z",
+      analyses: workspace.capturedFor("crypto").map((capture) => ({
+        assetId: capture.assetId,
+        display: capture.assetId.toUpperCase(),
+        capturedAt: capture.capturedAt,
+        sourceImagePath: staging.get(capture.assetId)!.path,
+        threadId: `thread-${capture.assetId}`,
+      })),
+    });
+
+    const blocked = inspectPackPublishReadiness({
+      workspace,
+      staging,
+      releases,
+      resolveChannel: () => "forum-1",
+      resolveAssetThread: (_packId, assetId) => `thread-${assetId}`,
+    }, "crypto");
+    expect(blocked.blockers).toContainEqual({
+      code: "interrupted_release_exists",
+      releaseId: record.releaseId,
+      startedAt: record.startedAt,
+      postedCount: 0,
+      totalCount: 2,
+    });
+    expect(blocked.ready).toBe(false);
+
+    const superseded = inspectPackPublishReadiness({
+      workspace,
+      staging,
+      releases,
+      resolveChannel: () => "forum-1",
+      resolveAssetThread: (_packId, assetId) => `thread-${assetId}`,
+    }, "crypto", { supersedeInterrupted: true });
+    expect(superseded.ready).toBe(true);
+    expect(superseded.blockers).toEqual([]);
+  });
 });
 
 describe("gates", () => {

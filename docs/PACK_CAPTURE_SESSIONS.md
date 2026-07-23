@@ -57,3 +57,14 @@ Release, contact Discord, or change Discord routing.
 Confirmed renders appear in Pack Progress as versioned Workspace revisions.
 See `docs/PACK_REVISION_HISTORY.md` for preview, confirmation,
 single-revision deletion, and current-revision restoration behavior.
+
+## Publication completion
+
+A successful Administration publication resets only the published Pack, clears
+its accepted capture-session candidates, and removes its Workspace revision
+history after Release custody has been secured. Other Packs and their sessions
+remain untouched. Staging, capture-session, or revision-history cleanup failures
+are reported as warnings without concealing successful Discord delivery. A Pack
+workspace reset failure is treated as a blocking publication result because the
+active captures still exist; the completed Release is then used to prevent a
+second external delivery until local custody is repaired.

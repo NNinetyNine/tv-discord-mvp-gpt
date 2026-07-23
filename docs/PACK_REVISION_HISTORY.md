@@ -46,3 +46,12 @@ On first load after this feature is installed, retained accepted previews are
 reconciled into revision history only when they exactly match the active
 Workspace revision count. Older accepted evidence from a prior reset is not
 invented into the current instance.
+
+## Publication boundary
+
+Once a Pack is fully published and archived, its current Workspace instance has
+ended. Administration clears that Pack's revision history together with its
+accepted capture-session candidates. This does not remove immutable Release
+artifacts. Staging or evidence cleanup failure is reported separately from
+publication truth. A workspace reset failure remains blocking and the matching
+completed Release prevents accidental duplicate publication.

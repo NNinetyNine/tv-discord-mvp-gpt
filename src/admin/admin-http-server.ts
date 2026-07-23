@@ -612,6 +612,41 @@ async function routeApi(
     if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     return ok(response, await service.packWorkspaceState());
   }
+  if (pathname === "/api/v1/pack-workspace/publication/preview") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Publication preview request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Publication preview body must be an object.");
+    exactFields(body, ["packIds", "supersedePackIds"], "Publication preview body");
+    if (!Array.isArray(body.packIds) || !body.packIds.every((value) => typeof value === "string")) {
+      throw new AdminError("invalid_request", "Publication preview packIds must be an array of Pack IDs.");
+    }
+    if (!Array.isArray(body.supersedePackIds) || !body.supersedePackIds.every((value) => typeof value === "string")) {
+      throw new AdminError("invalid_request", "Publication preview supersedePackIds must be an array of Pack IDs.");
+    }
+    return ok(response, await service.preparePackPublication({
+      packIds: body.packIds,
+      supersedePackIds: body.supersedePackIds,
+    }), 201);
+  }
+  if (pathname === "/api/v1/pack-workspace/publication/resume") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Release resume request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Release resume body must be an object.");
+    exactFields(body, ["packId", "confirmation"], "Release resume body");
+    if (typeof body.packId !== "string") throw new AdminError("invalid_request", "Release resume packId must be a string.");
+    return ok(response, await service.resumePackPublication(body.packId, body.confirmation));
+  }
+  const publicationApply = /^\/api\/v1\/pack-workspace\/publication\/([a-f0-9]{32})$/u.exec(pathname);
+  if (publicationApply !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Publication apply request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Publication confirmation body must be an object.");
+    exactFields(body, ["confirmation"], "Publication confirmation body");
+    return ok(response, await service.applyPackPublication(publicationApply[1] ?? "", body.confirmation));
+  }
   if (pathname === "/api/v1/pack-workspace/capture-session") {
     if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     exactSearchParameters(url, ["packId"], "Pack capture-session state request");

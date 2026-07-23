@@ -39,15 +39,15 @@ describe("AdminService", () => {
       registryAssetCount: 131,
       packCount: 5,
       packMembershipCount: 131,
-      registryFingerprint: "cc326744ab56e49260e0979e0cd8475552d9fd48e024c87a84a6ed613e26981a",
-      auditGapCount: 230,
+      registryFingerprint: "c14ce6323248229f1d5dd4e8ab1fe1d3d499f392830be77dd90b82e2de3266ed",
+      auditGapCount: 228,
     });
   });
 
   it("reports exact canonical source hashes", async () => {
     const service = await createService();
     expect(service.status()).toMatchObject({
-      registrySourceSha256: "922bd65da2b222d6bfae647e155829c2c4de9b2767c7d57795530fef821b66b2",
+      registrySourceSha256: "b0c8199752db046cd69372cd10a150c134e6ca8e1e0725220bebd6d661345d34",
       packSourceSha256: "29a8284033f1c67466f7a50b54a64d208e72e8dcce25e1cd897a650bdbc3c0b4",
       channelConfigurationSha256: "11bda2d95b9a93497c673f400bd78fd0215df18a02b2915089e397c13e5b0aad",
     });
@@ -108,14 +108,15 @@ describe("AdminService", () => {
     expect(options.assets).toContainEqual({
       id: "aapl",
       displayName: "Apple",
-      tradingViewSymbol: "AAPL",
+      tradingViewSymbol: "NASDAQ:AAPL",
       logicalChannel: "stocks",
-      renderReady: false,
-      reconciliationIssues: ["unqualified_market_symbol", "missing_publication_currency"],
+      currency: "USD",
+      renderReady: true,
+      reconciliationIssues: [],
     });
     expect(options.assets).toHaveLength(131);
-    expect(options.renderableAssetCount).toBe(16);
-    expect(options.reconciliationRequiredCount).toBe(115);
+    expect(options.renderableAssetCount).toBe(17);
+    expect(options.reconciliationRequiredCount).toBe(114);
     expect(options.unavailableAssetCount).toBe(options.reconciliationRequiredCount);
     expect(options.assets.filter((asset) => asset.renderReady)).toHaveLength(options.renderableAssetCount);
   });

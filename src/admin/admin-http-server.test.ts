@@ -94,8 +94,8 @@ describe("Admin HTTP server", () => {
       registryAssetCount: 131,
       packCount: 5,
       packMembershipCount: 131,
-      auditGapCount: 230,
-      registrySourceSha256: "922bd65da2b222d6bfae647e155829c2c4de9b2767c7d57795530fef821b66b2",
+      auditGapCount: 228,
+      registrySourceSha256: "b0c8199752db046cd69372cd10a150c134e6ca8e1e0725220bebd6d661345d34",
     });
   });
 
@@ -223,6 +223,48 @@ describe("Admin HTTP server", () => {
     expect(invalidUtf8.body.error).toMatchObject({ code: "invalid_request" });
   });
 
+  it("serves strict multi-Pack publication preview and apply routes without contacting Discord when disabled", async () => {
+    const { server } = await start();
+    const workspace = await jsonRequest(server.url, "/api/v1/pack-workspace");
+    expect(workspace.body.data.publishAvailable).toBe(false);
+    expect(workspace.body.data.packs.find((pack: { id: string }) => pack.id === "crypto")?.publication.blockers)
+      .toContainEqual({ code: "discord_unavailable" });
+
+    const preview = await jsonRequest(server.url, "/api/v1/pack-workspace/publication/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ packIds: ["crypto"], supersedePackIds: [] }),
+    });
+    expect(preview.response.status).toBe(201);
+    expect(preview.body.data).toMatchObject({
+      valid: false,
+      confirmation: "PUBLISH 1 PACK",
+      selectedPackIds: ["crypto"],
+    });
+    expect(preview.body.data.packs[0].publication.blockers)
+      .toContainEqual({ code: "discord_unavailable" });
+
+    const apply = await jsonRequest(
+      server.url,
+      `/api/v1/pack-workspace/publication/${preview.body.data.previewId}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: preview.body.data.confirmation }),
+      },
+    );
+    expect(apply.response.status).toBe(503);
+    expect(apply.body.error).toMatchObject({ code: "discord_operations_unavailable" });
+
+    const unknown = await jsonRequest(server.url, "/api/v1/pack-workspace/publication/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ packIds: ["crypto"], supersedePackIds: [], publishNow: true }),
+    });
+    expect(unknown.response.status).toBe(400);
+    expect(unknown.body.error).toMatchObject({ code: "invalid_request" });
+  });
+
   it("renders and downloads a standalone publication without canonical source mutation", async () => {
     const { service, server } = await start();
     const canonicalPaths = ["definitions/registry.json", "definitions/packs.json", "config/channels.json"].map((path) => resolve(path));
@@ -231,9 +273,9 @@ describe("Admin HTTP server", () => {
     const options = await jsonRequest(server.url, "/api/v1/standalone-render/options");
     expect(options.body.data.timeframes).toContain("4D");
     expect(options.body.data.assets).toHaveLength(131);
-    expect(options.body.data).toMatchObject({ renderableAssetCount: 16, reconciliationRequiredCount: 115 });
+    expect(options.body.data).toMatchObject({ renderableAssetCount: 17, reconciliationRequiredCount: 114 });
     expect(options.body.data.assets).toContainEqual(expect.objectContaining({ id: "btc", tradingViewSymbol: "CRYPTO:BTCUSD", currency: "USD", renderReady: true }));
-    expect(options.body.data.assets).toContainEqual(expect.objectContaining({ id: "aapl", tradingViewSymbol: "AAPL", renderReady: false }));
+    expect(options.body.data.assets).toContainEqual(expect.objectContaining({ id: "aapl", tradingViewSymbol: "NASDAQ:AAPL", currency: "USD", renderReady: true }));
 
     const query = new URLSearchParams({
       assetId: "btc",
@@ -284,9 +326,9 @@ describe("Admin HTTP server", () => {
     expect((await invalid.json() as any).error.code).toBe("invalid_standalone_render");
 
     const unreconciledAsset = new URLSearchParams({
-      assetId: "aapl",
+      assetId: "msft",
       timeframe: "1D",
-      filename: "AAPL_2026-07-22_18-58-01.png",
+      filename: "MSFT_2026-07-22_18-58-01.png",
     });
     const blocked = await fetch(`${server.url}/api/v1/standalone-renders?${unreconciledAsset.toString()}`, {
       method: "POST",
@@ -298,7 +340,7 @@ describe("Admin HTTP server", () => {
       error: {
         code: "invalid_standalone_render",
         details: {
-          assetId: "aapl",
+          assetId: "msft",
           reconciliationIssues: ["unqualified_market_symbol", "missing_publication_currency"],
         },
       },
@@ -703,7 +745,7 @@ describe("Admin HTTP server", () => {
     expect(html).toContain("REMOVE BINDING");
     expect(html).toContain("CREATE NEW FORUM POST");
     expect(html).toContain("EXPLICIT CONFIRMATION REQUIRED");
-    expect(html).toContain("PUBLISH UNAVAILABLE");
+    expect(html).toContain("PUBLICATION QUEUE");
     expect(html).toContain("CANONICAL ASSET CUSTODY");
     expect(html).toContain("ADD ASSET");
     expect(html).toContain("REFRESH CANONICAL STATE");

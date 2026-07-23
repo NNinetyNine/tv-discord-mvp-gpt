@@ -335,3 +335,40 @@ body.registry-editor-open { overflow: hidden; }
   .pack-role-grid { grid-template-columns: 1fr 1fr; }
   .registry-pack-filter-bar { align-items: flex-start; flex-direction: column; }
 }
+
+/* Deliberate multi-Pack publication */
+.workspace-publication { border-color: rgba(207, 173, 82, .24); }
+.publication-pack-pills { display: flex; flex-wrap: wrap; gap: .55rem; padding: 1rem 1.1rem .75rem; }
+.publication-pack-item { display: inline-flex; align-items: center; gap: .35rem; }
+.publication-pack-pill { width: auto; min-height: 2rem; padding: .28rem .72rem; border-radius: 999px; color: var(--text-muted); background: rgba(18, 19, 15, .7); }
+.publication-pack-pill strong { color: inherit; }
+.publication-pack-pill span { margin-left: .35rem; color: var(--text-faint); font-size: .52rem; }
+.publication-pack-pill.ready { border-color: rgba(134, 201, 151, .38); }
+.publication-pack-pill.blocked { border-color: rgba(233, 141, 134, .3); }
+.publication-pack-pill.interrupted { border-color: rgba(214, 183, 108, .42); }
+.publication-pack-pill.selected { color: var(--gold-strong); border-color: rgba(225, 195, 108, .78); background: rgba(207, 173, 82, .09); box-shadow: 0 0 18px rgba(207, 173, 82, .08); }
+.publication-policy-pill { width: auto; min-height: 1.8rem; padding: .18rem .5rem; border-radius: 999px; color: var(--warning); border-color: rgba(214, 183, 108, .34); background: rgba(98, 70, 18, .13); font-size: .5rem; }
+.publication-policy-pill.selected { color: var(--gold-strong); border-color: var(--gold); background: rgba(207, 173, 82, .11); }
+.publication-resume-pill { width: auto; min-height: 1.8rem; padding: .18rem .5rem; border-radius: 999px; color: var(--success); border-color: rgba(134, 201, 151, .34); background: rgba(23, 78, 38, .12); font-size: .5rem; }
+.publication-queue-actions { display: flex; justify-content: flex-end; gap: .55rem; padding: 0 1.1rem .75rem; }
+.publication-queue-actions .primary-action { margin-left: auto; }
+.publication-preview { margin: 0 1.1rem 1.1rem; border: 1px solid var(--border); border-radius: .8rem; overflow: hidden; background: rgba(8, 9, 7, .36); }
+.publication-preview > header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem .85rem; border-bottom: 1px solid rgba(231, 216, 168, .07); }
+.publication-preview h3 { margin: 0; font-size: .75rem; letter-spacing: .13em; }
+.publication-preview-packs { display: grid; gap: .55rem; padding: .8rem; }
+.publication-preview-card { display: grid; grid-template-columns: minmax(12rem, 1fr) auto; gap: .75rem; align-items: start; padding: .65rem .75rem; border: 1px solid var(--border); border-radius: .6rem; background: rgba(22, 23, 18, .62); }
+.publication-preview-card.ready { border-color: rgba(134, 201, 151, .3); }
+.publication-preview-card.blocked { border-color: rgba(233, 141, 134, .28); }
+.publication-preview-card h4 { margin: 0 0 .25rem; font-size: .72rem; letter-spacing: .09em; }
+.publication-preview-card p { margin: 0; color: var(--text-faint); font-size: .61rem; }
+.publication-blockers { display: grid; gap: .22rem; margin: .45rem 0 0; padding: 0; list-style: none; color: var(--danger); font-size: .59rem; }
+.publication-caveat { margin: 0; padding: .7rem .85rem; color: var(--text-faint); border-top: 1px solid rgba(231, 216, 168, .07); font-size: .63rem; line-height: 1.55; }
+.publication-confirmation { display: grid; grid-template-columns: minmax(16rem, 1fr) auto; gap: .75rem; align-items: end; padding: .8rem .85rem; border-top: 1px solid rgba(231, 216, 168, .07); }
+.publication-result { margin: 0 1.1rem 1.1rem; padding: .8rem .9rem; border: 1px solid rgba(134, 201, 151, .28); border-radius: .65rem; background: rgba(25, 74, 38, .14); color: var(--text-muted); }
+.publication-result.error { border-color: rgba(233, 141, 134, .34); background: rgba(80, 22, 20, .18); }
+.publication-result h3 { margin: 0 0 .4rem; color: var(--text); font-size: .76rem; letter-spacing: .1em; }
+.publication-result p { margin: .25rem 0; font-size: .66rem; }
+@media (max-width: 1100px) {
+  .publication-confirmation { grid-template-columns: 1fr; }
+  .publication-preview-card { grid-template-columns: 1fr; }
+}

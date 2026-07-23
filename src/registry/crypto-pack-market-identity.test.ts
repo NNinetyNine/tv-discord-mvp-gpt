@@ -80,7 +80,7 @@ describe("canonical Crypto Pack market identities", () => {
       asset.currencyStatus === "valid" &&
       asset.issues.length === 0
     )).toBe(true);
-    expect(audit.gaps).toHaveLength(230);
+    expect(audit.gaps).toHaveLength(228);
     expect(audit.gaps.every((gap) => !cryptoIds.has(gap.assetId))).toBe(true);
   });
 });

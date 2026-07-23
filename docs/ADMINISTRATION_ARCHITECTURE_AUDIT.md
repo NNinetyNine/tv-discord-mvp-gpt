@@ -166,3 +166,22 @@ onboarding may optionally place each newly registered Asset into one existing
 Pack, but the current global-disjointness invariant is enforced and documented.
 The import does not resolve the separate Asset-channel versus Pack-channel route
 ownership question; both values continue to be validated and preserved.
+
+## Step 539 multi-Pack publication decision
+
+Administration now exposes the existing Pack publisher rather than creating a
+parallel delivery path. Packs remain the independent publication and Release
+unit. A UI operation may select several Packs, but readiness is evaluated for
+every selected Pack before the first Discord action and delivery then proceeds
+in canonical Pack order.
+
+This is **selected-set atomic readiness**, not externally atomic delivery.
+Discord messages cannot be rolled back. If a later Pack fails, earlier Packs
+remain truthfully published, the failing Pack retains an interrupted resumable
+Release when applicable, and later Packs remain unattempted.
+
+Administration Release custody is installation-owned at
+`<workspace-root>/publication/archive`. The legacy CLI archive under the
+repository root remains preserved pending server-configuration and migration
+work. That future work must define archive migration, backup, and consolidation
+before either custody location is retired.

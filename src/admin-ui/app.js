@@ -17,6 +17,10 @@ const state = {
   packPreview: null,
   packBusy: false,
   expandedWorkspaceAssets: new Set(),
+  publicationSelectedPackIds: new Set(),
+  publicationSupersedePackIds: new Set(),
+  publicationPreview: null,
+  publicationBusy: false,
   threadManagement: null,
   threadVerification: null,
   threadBusy: false,
@@ -1754,6 +1758,241 @@ async function runStandaloneRender() {
   }
 }
 
+function publicationBlockerLabel(blocker) {
+  switch (blocker.code) {
+    case "pack_incomplete":
+      return `MISSING ${blocker.missingAssetIds.map((id) => id.toUpperCase()).join(", ")}`;
+    case "missing_staged_images":
+      return `STAGING MISSING FOR ${blocker.missingAssetIds.map((id) => id.toUpperCase()).join(", ")}`;
+    case "channel_unresolved":
+      return "PACK FORUM CHANNEL IS NOT CONFIGURED";
+    case "asset_threads_unresolved":
+      return `THREAD ROUTES MISSING FOR ${blocker.missingAssetIds.map((id) => id.toUpperCase()).join(", ")}`;
+    case "interrupted_release_exists":
+      return `INTERRUPTED RELEASE ${blocker.releaseId} · ${blocker.postedCount}/${blocker.totalCount} POSTED`;
+    case "published_release_cleanup_required":
+      return `PUBLISHED RELEASE ${blocker.releaseId} STILL MATCHES THE ACTIVE PACK WORKSPACE · LOCAL RESET REPAIR REQUIRED`;
+    case "capture_session_not_ready": {
+      const reasons = {
+        downloads_folder_not_configured: "DOWNLOADS FOLDER IS NOT CONFIGURED",
+        session_not_started: "ANALYSIS SESSION HAS NOT BEEN STARTED",
+        assets_missing: `SESSION MISSING ${blocker.missingAssetIds.map((id) => id.toUpperCase()).join(", ")}`,
+        previews_pending: `${blocker.pendingCount} SESSION PREVIEW${blocker.pendingCount === 1 ? "" : "S"} AWAITING ACCEPTANCE`,
+        export_window_exceeded: `SESSION EXPORT WINDOW ${blocker.exportSpanMinutes} MIN EXCEEDS ${blocker.maxSpanMinutes} MIN`,
+        ready: "CAPTURE SESSION STATE CHANGED",
+      };
+      return reasons[blocker.reason] ?? "CAPTURE SESSION IS NOT PUBLICATION READY";
+    }
+    case "discord_unavailable":
+      return "DISCORD BOT TOKEN IS NOT AVAILABLE TO THIS ADMINISTRATION PROCESS";
+    default:
+      return "UNKNOWN PUBLICATION BLOCKER";
+  }
+}
+
+function publicationPackLabel(pack) {
+  if (pack.publication.state === "interrupted") return "INTERRUPTED";
+  return pack.publication.ready ? "READY" : "BLOCKED";
+}
+
+function clearPublicationPreview() {
+  state.publicationPreview = null;
+  qs("#publication-preview").hidden = true;
+  qs("#publication-preview-packs").innerHTML = "";
+  qs("#publication-confirmation").value = "";
+  qs("#publication-confirmation").placeholder = "REVIEW PACKS FIRST";
+  qs("#publication-apply").disabled = true;
+}
+
+function updatePublicationApplyButton() {
+  const preview = state.publicationPreview;
+  qs("#publication-apply").disabled = state.publicationBusy || preview === null || !preview.valid ||
+    qs("#publication-confirmation").value !== preview.confirmation;
+}
+
+function renderPublicationQueue() {
+  const workspace = state.packWorkspace;
+  if (workspace === null) return;
+  const currentIds = new Set(workspace.packs.map((pack) => pack.id));
+  state.publicationSelectedPackIds = new Set([...state.publicationSelectedPackIds].filter((id) => currentIds.has(id)));
+  state.publicationSupersedePackIds = new Set([...state.publicationSupersedePackIds].filter((id) => currentIds.has(id)));
+
+  qs("#workspace-publish-state").textContent = workspace.publicationInProgress
+    ? "PUBLICATION IN PROGRESS"
+    : workspace.publishAvailable
+      ? "PUBLICATION AVAILABLE"
+      : "DISCORD DISABLED";
+  qs("#publication-pack-pills").innerHTML = workspace.packs.map((pack) => {
+    const selected = state.publicationSelectedPackIds.has(pack.id);
+    const supersede = state.publicationSupersedePackIds.has(pack.id);
+    const interrupted = pack.publication.interruptedRelease !== null;
+    return `<span class="publication-pack-item">
+      <button class="publication-pack-pill ${pack.publication.state}${selected ? " selected" : ""}" type="button" data-publication-pack="${escapeAttribute(pack.id)}" aria-pressed="${selected}"${state.publicationBusy ? " disabled" : ""}>
+        <strong>${escapeHtml(pack.displayName.toUpperCase())}</strong><span>${escapeHtml(publicationPackLabel(pack))}</span>
+      </button>
+      ${interrupted ? `<button class="publication-policy-pill${supersede ? " selected" : ""}" type="button" data-publication-supersede="${escapeAttribute(pack.id)}" aria-pressed="${supersede}"${state.publicationBusy ? " disabled" : ""}>${supersede ? "SUPERSEDE SELECTED" : "ALLOW SUPERSEDE"}</button>
+      <button class="publication-resume-pill" type="button" data-publication-resume="${escapeAttribute(pack.id)}"${state.publicationBusy ? " disabled" : ""}>RESUME</button>` : ""}
+    </span>`;
+  }).join("");
+
+  const selectedPacks = workspace.packs.filter((pack) => state.publicationSelectedPackIds.has(pack.id));
+  const readySelected = selectedPacks.filter((pack) => pack.publication.ready || state.publicationSupersedePackIds.has(pack.id));
+  qs("#publication-selection-state").textContent = selectedPacks.length === 0
+    ? "NO PACKS SELECTED"
+    : `${selectedPacks.length} SELECTED · ${readySelected.length} POTENTIALLY READY`;
+  qs("#publication-guidance").textContent = !workspace.publishAvailable
+    ? "START ADMINISTRATION WITH A DISCORD BOT TOKEN TO ENABLE PUBLISHING"
+    : selectedPacks.length === 0
+      ? "SELECT PACKS TO BUILD ONE GOVERNED PUBLICATION OPERATION"
+      : `${selectedPacks.map((pack) => pack.displayName.toUpperCase()).join(" · ")} · REVIEW ALL TOGETHER BEFORE DISCORD`;
+  qs("#publication-review").disabled = state.publicationBusy || selectedPacks.length === 0;
+  qs("#publication-select-ready").disabled = state.publicationBusy;
+  qs("#publication-clear").disabled = state.publicationBusy || selectedPacks.length === 0;
+
+  qsa("[data-publication-pack]").forEach((button) => button.addEventListener("click", () => {
+    const packId = button.dataset.publicationPack;
+    if (state.publicationSelectedPackIds.has(packId)) {
+      state.publicationSelectedPackIds.delete(packId);
+      state.publicationSupersedePackIds.delete(packId);
+    } else {
+      state.publicationSelectedPackIds.add(packId);
+    }
+    clearPublicationPreview();
+    renderPublicationQueue();
+  }));
+  qsa("[data-publication-supersede]").forEach((button) => button.addEventListener("click", () => {
+    const packId = button.dataset.publicationSupersede;
+    state.publicationSelectedPackIds.add(packId);
+    if (state.publicationSupersedePackIds.has(packId)) state.publicationSupersedePackIds.delete(packId);
+    else state.publicationSupersedePackIds.add(packId);
+    clearPublicationPreview();
+    renderPublicationQueue();
+  }));
+  qsa("[data-publication-resume]").forEach((button) => button.addEventListener("click", () => {
+    void resumeInterruptedPublication(button.dataset.publicationResume);
+  }));
+  updatePublicationApplyButton();
+}
+
+function renderPublicationPreview(preview) {
+  state.publicationPreview = preview;
+  qs("#publication-preview").hidden = false;
+  qs("#publication-preview-heading").textContent = `${preview.selectedPackIds.length} PACK${preview.selectedPackIds.length === 1 ? "" : "S"} REVIEWED`;
+  qs("#publication-preview-state").className = `workspace-status ${preview.valid ? "valid" : "blocked"}`;
+  qs("#publication-preview-state").textContent = preview.valid ? "READY TO CONFIRM" : "BLOCKED";
+  qs("#publication-preview-packs").innerHTML = preview.packs.map((pack) => {
+    const blockers = pack.publication.blockers;
+    return `<article class="publication-preview-card ${pack.publication.ready ? "ready" : "blocked"}">
+      <div><h4>${escapeHtml(pack.displayName.toUpperCase())} · ${pack.action === "supersede" ? "FRESH SUPERSESSION" : "PUBLISH"}</h4>
+      <p>${pack.publication.capturedCount}/${pack.publication.totalCount} CAPTURED · ${pack.publication.stagedCount}/${pack.publication.totalCount} STAGED · ${pack.publication.resolvedThreadCount}/${pack.publication.totalCount} ROUTED</p>
+      ${blockers.length === 0 ? "" : `<ul class="publication-blockers">${blockers.map((blocker) => `<li>${escapeHtml(publicationBlockerLabel(blocker))}</li>`).join("")}</ul>`}</div>
+      <span class="workspace-status ${pack.publication.ready ? "valid" : "blocked"}">${pack.publication.ready ? "READY" : "BLOCKED"}</span>
+    </article>`;
+  }).join("");
+  qs("#publication-confirmation").value = "";
+  qs("#publication-confirmation").placeholder = preview.valid ? preview.confirmation : "RESOLVE EVERY BLOCKER";
+  qs("#publication-confirmation").disabled = !preview.valid || state.publicationBusy;
+  updatePublicationApplyButton();
+}
+
+async function reviewPackPublication() {
+  if (state.publicationBusy || state.publicationSelectedPackIds.size === 0) return;
+  clearMessage();
+  state.publicationBusy = true;
+  renderPublicationQueue();
+  qs("#publication-guidance").textContent = "REVALIDATING EVERY SELECTED PACK";
+  try {
+    const preview = await api("/api/v1/pack-workspace/publication/preview", {
+      method: "POST",
+      body: JSON.stringify({
+        packIds: [...state.publicationSelectedPackIds],
+        supersedePackIds: [...state.publicationSupersedePackIds],
+      }),
+    });
+    renderPublicationPreview(preview);
+    qs("#publication-guidance").textContent = preview.valid
+      ? `TYPE ${preview.confirmation} TO ENABLE THE ONE PUBLICATION ACTION`
+      : "PUBLICATION REMAINS DISABLED UNTIL EVERY SELECTED PACK BLOCKER IS RESOLVED";
+  } catch (error) {
+    clearPublicationPreview();
+    showMessage(error.message);
+  } finally {
+    state.publicationBusy = false;
+    renderPublicationQueue();
+  }
+}
+
+async function applyPackPublication() {
+  const preview = state.publicationPreview;
+  if (preview === null || !preview.valid || state.publicationBusy || qs("#publication-confirmation").value !== preview.confirmation) return;
+  clearMessage();
+  state.publicationBusy = true;
+  qs("#publication-result").hidden = true;
+  renderPublicationQueue();
+  updatePublicationApplyButton();
+  try {
+    const result = await api(`/api/v1/pack-workspace/publication/${encodeURIComponent(preview.previewId)}`, {
+      method: "POST",
+      body: JSON.stringify({ confirmation: preview.confirmation }),
+    });
+    const publishedNames = result.published.map((item) => item.packId.toUpperCase());
+    const resultPanel = qs("#publication-result");
+    resultPanel.hidden = false;
+    resultPanel.className = `publication-result${result.outcome === "published" ? "" : " error"}`;
+    resultPanel.innerHTML = `<h3>${escapeHtml(result.outcome.replaceAll("_", " ").toUpperCase())}</h3>
+      <p>${publishedNames.length === 0 ? "NO PACKS COMPLETED" : `PUBLISHED: ${escapeHtml(publishedNames.join(" · "))}`}</p>
+      ${result.failed === null ? "" : `<p>FAILED AT ${escapeHtml(result.failed.packId.toUpperCase())}: ${escapeHtml(result.failed.outcome.replaceAll("_", " ").toUpperCase())}${typeof result.failed.detail === "string" ? ` · ${escapeHtml(result.failed.detail)}` : ""}</p>`}
+      ${result.notAttemptedPackIds.length === 0 ? "" : `<p>NOT ATTEMPTED: ${escapeHtml(result.notAttemptedPackIds.map((id) => id.toUpperCase()).join(" · "))}</p>`}
+      ${result.cleanupWarnings.length === 0 ? "" : `<p>LOCAL CLEANUP WARNINGS: ${escapeHtml(result.cleanupWarnings.map((warning) => `${warning.packId.toUpperCase()} ${warning.code.replaceAll("_", " ").toUpperCase()}`).join(" · "))}</p>`}`;
+    state.publicationSelectedPackIds.clear();
+    state.publicationSupersedePackIds.clear();
+    clearPublicationPreview();
+    await loadPackWorkspace();
+    showMessage(
+      result.outcome === "published"
+        ? `${result.published.length} selected Pack${result.published.length === 1 ? " was" : "s were"} published and archived. Unselected Packs were untouched.`
+        : "The combined operation did not fully complete. Review the exact published, failed, and unattempted Pack results before retrying.",
+      result.outcome !== "published",
+    );
+  } catch (error) {
+    showMessage(error.message);
+    await loadPackWorkspace().catch(() => undefined);
+  } finally {
+    state.publicationBusy = false;
+    renderPublicationQueue();
+  }
+}
+
+async function resumeInterruptedPublication(packId) {
+  if (!packId || state.publicationBusy) return;
+  const confirmation = `RESUME ${packId.toUpperCase()}`;
+  if (!window.confirm(`Resume the interrupted ${packId.toUpperCase()} Release?\n\nVisionX will post only analyses that do not already have a recorded Discord message, using archive custody. It will never duplicate recorded posts.`)) return;
+  state.publicationBusy = true;
+  renderPublicationQueue();
+  try {
+    const response = await api("/api/v1/pack-workspace/publication/resume", {
+      method: "POST",
+      body: JSON.stringify({ packId, confirmation }),
+    });
+    if (!response.result.ok) {
+      showMessage(`Resume did not complete: ${response.result.outcome.replaceAll("_", " ")}.`);
+    } else if (response.cleanupWarnings.length > 0) {
+      showMessage(`${packId.toUpperCase()} Release ${response.result.releaseId} completed, but local staging, capture-session, or revision cleanup needs review.`);
+    } else {
+      showMessage(`${packId.toUpperCase()} Release ${response.result.releaseId} was completed without duplicating recorded posts.`, false);
+    }
+    state.publicationSelectedPackIds.delete(packId);
+    state.publicationSupersedePackIds.delete(packId);
+    clearPublicationPreview();
+    await loadPackWorkspace();
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    state.publicationBusy = false;
+    renderPublicationQueue();
+  }
+}
+
 function selectedWorkspacePack() {
   return state.packWorkspace?.packs.find((pack) => pack.id === qs("#workspace-pack").value) ?? null;
 }
@@ -2089,6 +2328,7 @@ async function loadPackWorkspace() {
     ? selectedPackId
     : result.packs[0]?.id ?? "";
   renderPackWorkspace();
+  renderPublicationQueue();
   await loadCaptureSession();
 }
 
@@ -2340,6 +2580,21 @@ qs("#renderer-source").addEventListener("change", (event) => {
   resetStandaloneResult();
 });
 qs("#render-chart").addEventListener("click", () => void runStandaloneRender());
+qs("#publication-select-ready").addEventListener("click", () => {
+  state.publicationSelectedPackIds = new Set((state.packWorkspace?.packs ?? []).filter((pack) => pack.publication.ready).map((pack) => pack.id));
+  state.publicationSupersedePackIds.clear();
+  clearPublicationPreview();
+  renderPublicationQueue();
+});
+qs("#publication-clear").addEventListener("click", () => {
+  state.publicationSelectedPackIds.clear();
+  state.publicationSupersedePackIds.clear();
+  clearPublicationPreview();
+  renderPublicationQueue();
+});
+qs("#publication-review").addEventListener("click", () => void reviewPackPublication());
+qs("#publication-confirmation").addEventListener("input", updatePublicationApplyButton);
+qs("#publication-apply").addEventListener("click", () => void applyPackPublication());
 qs("#workspace-pack").addEventListener("change", () => {
   clearPackPreviewView();
   state.packSourceFile = null;

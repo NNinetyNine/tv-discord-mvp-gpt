@@ -426,7 +426,7 @@ describe("Asset registration source-change generation", () => {
     const fixture = sourceFixture(undefined, (text) => text
       .split("\n")
       .map((line) => line.trimStart().startsWith('"aapl":')
-        ? line.replace('"channel": "stocks"', '"currency": "EUR", "channel": "stocks"')
+        ? line.replace(/"currency": "[^"]+"/u, '"currency": "EUR"')
         : line)
       .join("\n"));
     const value = artifacts({ operation: "update_identity", assetId: "aapl", fixture, proposedCurrency: "GBP" });

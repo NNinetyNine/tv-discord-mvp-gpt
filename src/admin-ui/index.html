@@ -38,7 +38,7 @@
         <header class="window-header">
           <div><p class="micro-label">GOVERNED PACK CAPTURE</p><h1 id="workspace-heading">PACK WORKSPACE</h1></div>
           <div class="window-header-actions">
-            <span class="context-fact">PUBLISH UNAVAILABLE</span>
+            <span id="workspace-publish-state" class="context-fact">LOADING PUBLICATION</span>
             <button id="workspace-reset-pack" class="danger-action" type="button" hidden>RESET PACK</button>
           </div>
         </header>
@@ -51,6 +51,34 @@
         </div>
         <div class="workspace-progress-track" aria-hidden="true"><span id="workspace-progress-fill"></span></div>
         <p id="workspace-remaining" class="workspace-remaining">LOADING REQUIRED ASSETS</p>
+      </section>
+
+      <section class="window workspace-publication" aria-labelledby="workspace-publication-heading">
+        <header class="window-header">
+          <div><p class="micro-label">DELIBERATE MULTI-PACK RELEASE</p><h2 id="workspace-publication-heading">PUBLICATION QUEUE</h2></div>
+          <span id="publication-selection-state" class="context-fact">NO PACKS SELECTED</span>
+        </header>
+        <p class="window-help">Select one or more Packs. VisionX reviews every selected Pack together and enables one publication confirmation only when all are complete, staged, within the accepted capture session, fully routed, and free from unresolved Release blockers.</p>
+        <div id="publication-pack-pills" class="publication-pack-pills" role="group" aria-label="Packs selected for publication"></div>
+        <div class="publication-queue-actions">
+          <button id="publication-select-ready" class="outline-action" type="button">SELECT ALL READY</button>
+          <button id="publication-clear" class="outline-action" type="button">CLEAR</button>
+          <button id="publication-review" class="primary-action" type="button" disabled>REVIEW PUBLICATION</button>
+        </div>
+        <p id="publication-guidance" class="workspace-remaining">SELECT PACKS TO BUILD ONE GOVERNED PUBLICATION OPERATION</p>
+        <section id="publication-preview" class="publication-preview" hidden aria-live="polite">
+          <header>
+            <div><p class="micro-label">EXACT PRE-FLIGHT</p><h3 id="publication-preview-heading">PUBLICATION REVIEW</h3></div>
+            <span id="publication-preview-state" class="workspace-status pending">AWAITING REVIEW</span>
+          </header>
+          <div id="publication-preview-packs" class="publication-preview-packs"></div>
+          <p class="publication-caveat">All selected Packs are revalidated immediately before the first Discord action. Delivery then proceeds in canonical Pack order; a later external failure can leave earlier Packs published and the remaining Packs unattempted, which VisionX reports explicitly.</p>
+          <div class="publication-confirmation">
+            <label><span>TYPE EXACT CONFIRMATION</span><input id="publication-confirmation" autocomplete="off" placeholder="REVIEW PACKS FIRST"></label>
+            <button id="publication-apply" class="primary-action" type="button" disabled>PUBLISH SELECTED PACKS</button>
+          </div>
+        </section>
+        <section id="publication-result" class="publication-result" hidden aria-live="polite"></section>
       </section>
 
       <section class="window workspace-automation" aria-labelledby="workspace-automation-heading">

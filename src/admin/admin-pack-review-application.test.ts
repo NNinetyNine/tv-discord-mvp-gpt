@@ -9,17 +9,18 @@ import { makePackSourceReviewApplicationFixture } from "../packs/pack-source-rev
 describe("Administration Pack review/application UI boundary", () => {
   it("uses Create Pack as the primary operator workflow and hides legacy custody stages", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
+    const packsView = html.match(/<section class="view" data-view-panel="packs" hidden>([\s\S]*?)<section class="view" data-view-panel="renderer" hidden>/u)?.[1] ?? "";
 
-    expect(html).toContain("PACK BUILDER");
-    expect(html).toContain("CREATE PACK");
-    expect(html).toContain("TECHNICAL DETAILS");
-    expect(html).toContain("Nothing will be rendered, published, released, or sent to Discord.");
+    expect(packsView).toContain("PACK BUILDER");
+    expect(packsView).toContain("CREATE PACK");
+    expect(packsView).toContain("TECHNICAL DETAILS");
+    expect(packsView).toContain("Nothing will be rendered, published, released, or sent to Discord.");
 
-    expect(html).not.toContain("Review prepared Pack source change");
-    expect(html).not.toContain("Authorize Pack source application");
-    expect(html).not.toContain("Apply authorized Pack source change");
-    expect(html).not.toContain("APPLY PACK SOURCE CHANGE");
-    expect(html).not.toMatch(/<button[^>]*>[^<]*(?:release|publish)[^<]*<\/button>/iu);
+    expect(packsView).not.toContain("Review prepared Pack source change");
+    expect(packsView).not.toContain("Authorize Pack source application");
+    expect(packsView).not.toContain("Apply authorized Pack source change");
+    expect(packsView).not.toContain("APPLY PACK SOURCE CHANGE");
+    expect(packsView).not.toMatch(/<button[^>]*>[^<]*(?:release|publish)[^<]*<\/button>/iu);
   });
 
   it("creates from a validated preview without a confirmation phrase or browser-supplied custody authority", async () => {
@@ -59,19 +60,21 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(js).not.toContain("capturePackChartFromFile(");
   });
 
-  it("requires explicit Pack preview acceptance while keeping publication unavailable", async () => {
+  it("requires explicit Pack preview acceptance while publication remains separately governed", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
 
     expect(html).toContain("PACK WORKSPACE");
     expect(html).toContain("CURRENT ANALYSES &amp; REMAINING REQUIRED");
-    expect(html).toContain("PUBLISH UNAVAILABLE");
+    expect(html).toContain("PUBLICATION QUEUE");
+    expect(html).toContain("REVIEW PUBLICATION");
+    expect(html).toContain("PUBLISH SELECTED PACKS");
     expect(html).toContain("ACCEPT REVISION");
     expect(js).toContain('api(`/api/v1/pack-workspace/previews?${query.toString()}`');
     expect(js).toContain('api(`/api/v1/pack-workspace/previews/${encodeURIComponent(preview.previewId)}/accept`');
+    expect(js).toContain('api("/api/v1/pack-workspace/publication/preview"');
+    expect(js).toContain('api(`/api/v1/pack-workspace/publication/${encodeURIComponent(preview.previewId)}`');
     expect(js).toContain('method: "DELETE"');
-    expect(html).not.toMatch(/<button[^>]*>[^<]*(?:release|publish)[^<]*<\/button>/iu);
-    expect(js).not.toContain("/publish");
     expect(js).not.toContain("publishPack(");
   });
 

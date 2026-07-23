@@ -251,3 +251,16 @@ Registry and optional Pack membership. It validates the complete candidate with
 the same Registry and Pack loaders used at startup, binds review to exact source
 hashes, and replaces both files through rollback-protected writes. It never
 performs chart, Release, thread, or Discord work.
+
+### Administration publication composition
+
+The Administration composition root injects the existing Discord publisher into
+`AdminService` only when a bot token is present. Multi-Pack selection is a UI
+and service orchestration over `wiring/publish-pack.ts`; the Pack publisher and
+Release resume policy remain the single delivery implementation.
+
+Administration-created Release custody lives below the configured workspace at
+`publication/archive`. This is installation state, not repository source. The
+repository-root CLI archive remains preserved as a separate legacy operator
+surface until server migration and archive consolidation are explicitly
+designed.

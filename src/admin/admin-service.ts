@@ -120,6 +120,16 @@ import {
 } from "../application/verify-pack-discord-thread-routing.ts";
 import { createPersistentWorkspace } from "../packs/persistence.ts";
 import { createStagingStore } from "../wiring/staging.ts";
+import { createReleaseStore, type ReleaseStore } from "../release/release-store.ts";
+import {
+  inspectPackPublishReadiness,
+  publishPack,
+  resumeInterruptedRelease,
+  type PackPublishBlocker,
+  type PublisherSessionShape,
+  type PublishPackResult,
+  type ResumePackResult,
+} from "../wiring/publish-pack.ts";
 import { DEFAULT_VALIDATION_POLICY, validateImage } from "../validation/validate-image.ts";
 import {
   AdminPackRenderWorkspace,
@@ -158,6 +168,7 @@ import {
 } from "../wiring/asset-threads.ts";
 import { buildChannelResolver } from "../wiring/channels.ts";
 import { AdminThreadProvisioningWorkspace } from "./admin-thread-provisioning-workspace.ts";
+import { AdminPublicationWorkspace } from "./admin-publication-workspace.ts";
 
 import {
   reviewPackSourceChange,
@@ -186,6 +197,11 @@ interface CanonicalFile {
   readonly canonicalPath: string;
   readonly bytes: Buffer;
   readonly sha256: string;
+}
+
+interface AdminPackRuntime {
+  readonly workspace: ReturnType<typeof createPersistentWorkspace>;
+  readonly staging: ReturnType<typeof createStagingStore>;
 }
 
 interface LiveState {
@@ -393,6 +409,27 @@ export interface AdminPackWorkspaceRevisionState {
   readonly receiptUrl: string;
 }
 
+export type AdminPackPublicationBlocker =
+  | PackPublishBlocker
+  | { readonly code: "capture_session_not_ready"; readonly reason: PackCaptureSessionState["readinessReason"]; readonly missingAssetIds: readonly string[]; readonly pendingCount: number; readonly exportSpanMinutes: number | null; readonly maxSpanMinutes: number }
+  | { readonly code: "discord_unavailable" };
+
+export interface AdminPackPublicationState {
+  readonly state: "ready" | "blocked" | "interrupted";
+  readonly ready: boolean;
+  readonly capturedCount: number;
+  readonly totalCount: number;
+  readonly stagedCount: number;
+  readonly resolvedThreadCount: number;
+  readonly blockers: readonly AdminPackPublicationBlocker[];
+  readonly interruptedRelease: null | {
+    readonly releaseId: string;
+    readonly startedAt: string;
+    readonly postedCount: number;
+    readonly totalCount: number;
+  };
+}
+
 export interface AdminPackWorkspacePackState {
   readonly id: string;
   readonly displayName: string;
@@ -401,13 +438,85 @@ export interface AdminPackWorkspacePackState {
   readonly capturedCount: number;
   readonly totalCount: number;
   readonly remainingRequiredAssetIds: readonly string[];
+  readonly publication: AdminPackPublicationState;
   readonly assets: readonly AdminPackWorkspaceAssetState[];
 }
 
 export interface AdminPackWorkspaceState {
   readonly schemaVersion: 1;
-  readonly publishAvailable: false;
+  readonly publishAvailable: boolean;
+  readonly publicationInProgress: boolean;
   readonly packs: readonly AdminPackWorkspacePackState[];
+}
+
+export interface AdminPackPublicationPreview {
+  readonly schemaVersion: 1;
+  readonly previewId: string;
+  readonly valid: boolean;
+  readonly confirmation: string;
+  readonly selectedPackIds: readonly string[];
+  readonly supersedePackIds: readonly string[];
+  readonly packs: readonly {
+    readonly id: string;
+    readonly displayName: string;
+    readonly action: "publish" | "supersede";
+    readonly publication: AdminPackPublicationState;
+  }[];
+  readonly sourceState: {
+    readonly registrySha256: string;
+    readonly packsSha256: string;
+    readonly channelsSha256: string;
+    readonly threadBindingsSha256: string;
+    readonly workspaceFingerprint: string;
+  };
+  readonly effects: {
+    readonly releasesCreated: number;
+    readonly discordPostsPlanned: number;
+    readonly selectedPacksResetOnSuccess: true;
+    readonly unselectedPacksChanged: false;
+  };
+}
+
+export type AdminPackPublicationFailure =
+  | Exclude<PublishPackResult, { readonly ok: true }>
+  | {
+      readonly ok: false;
+      readonly outcome: "publication_failed";
+      readonly packId: string;
+      readonly releaseId: string | null;
+      readonly publishedAssetIds: readonly string[];
+      readonly detail: string;
+    };
+
+export type AdminPackPublicationCleanupWarning = {
+  readonly packId: string;
+  readonly code:
+    | "workspace_reset_failed"
+    | "staging_cleanup_failed"
+    | "capture_session_cleanup_failed"
+    | "revision_history_cleanup_failed";
+};
+
+export interface AdminPackPublicationResult {
+  readonly schemaVersion: 1;
+  readonly outcome: "published" | "partially_published" | "failed";
+  readonly previewId: string;
+  readonly selectedPackIds: readonly string[];
+  readonly published: readonly Extract<PublishPackResult, { readonly ok: true }>[];
+  readonly failed: AdminPackPublicationFailure | null;
+  readonly notAttemptedPackIds: readonly string[];
+  readonly cleanupWarnings: readonly AdminPackPublicationCleanupWarning[];
+  readonly effects: {
+    readonly discordContacted: boolean;
+    readonly releasesCreated: number;
+    readonly packsReset: readonly string[];
+  };
+}
+
+export interface AdminPackResumeResult {
+  readonly schemaVersion: 1;
+  readonly result: ResumePackResult;
+  readonly cleanupWarnings: readonly AdminPackPublicationCleanupWarning[];
 }
 
 export interface AdminThreadManagementAssetState {
@@ -543,6 +652,7 @@ export interface AdminServiceOptions {
   readonly chartDownloadsRoot?: string;
   readonly openDiscordForumSession?: AdminDiscordForumSessionFactory;
   readonly openDiscordForumProvisioningSession?: AdminDiscordForumProvisioningSessionFactory;
+  readonly openPublisherSession?: () => Promise<PublisherSessionShape>;
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -642,14 +752,19 @@ export class AdminService {
   readonly packCaptureSessions: AdminPackCaptureSessionWorkspace;
   readonly packRevisions: AdminPackRevisionWorkspace;
   readonly threadProvisioning: AdminThreadProvisioningWorkspace;
+  readonly publication: AdminPublicationWorkspace;
+  readonly releases: ReleaseStore;
   #state: LiveState;
   #packMutationLock: Promise<void> = Promise.resolve();
   #threadMutationLock: Promise<void> = Promise.resolve();
   #registryLogoMutationLock: Promise<void> = Promise.resolve();
   #canonicalSourceMutationLock: Promise<void> = Promise.resolve();
   #registryCsvImports = new Map<string, AdminRegistryCsvImportRecord>();
+  #publicationPreviews = new Map<string, AdminPackPublicationPreview>();
+  #publicationInProgress = false;
   readonly #openDiscordForumSession?: AdminDiscordForumSessionFactory;
   readonly #openDiscordForumProvisioningSession?: AdminDiscordForumProvisioningSessionFactory;
+  readonly #openPublisherSession?: () => Promise<PublisherSessionShape>;
 
   private constructor(
     repositoryRoot: string,
@@ -662,9 +777,12 @@ export class AdminService {
     packCaptureSessions: AdminPackCaptureSessionWorkspace,
     packRevisions: AdminPackRevisionWorkspace,
     threadProvisioning: AdminThreadProvisioningWorkspace,
+    publication: AdminPublicationWorkspace,
+    releases: ReleaseStore,
     state: LiveState,
     openDiscordForumSession?: AdminDiscordForumSessionFactory,
     openDiscordForumProvisioningSession?: AdminDiscordForumProvisioningSessionFactory,
+    openPublisherSession?: () => Promise<PublisherSessionShape>,
   ) {
     this.repositoryRoot = repositoryRoot;
     this.workspace = workspace;
@@ -676,9 +794,12 @@ export class AdminService {
     this.packCaptureSessions = packCaptureSessions;
     this.packRevisions = packRevisions;
     this.threadProvisioning = threadProvisioning;
+    this.publication = publication;
+    this.releases = releases;
     this.#state = state;
     this.#openDiscordForumSession = openDiscordForumSession;
     this.#openDiscordForumProvisioningSession = openDiscordForumProvisioningSession;
+    this.#openPublisherSession = openPublisherSession;
   }
 
   static async create(options: AdminServiceOptions): Promise<AdminService> {
@@ -698,6 +819,8 @@ export class AdminService {
     );
     const packRevisions = await AdminPackRevisionWorkspace.open(workspace.root);
     const threadProvisioning = await AdminThreadProvisioningWorkspace.open(workspace.root);
+    const publication = await AdminPublicationWorkspace.open(workspace.root);
+    const releases = createReleaseStore(publication.archiveRoot);
     const state = await AdminService.#loadState(repositoryRoot);
     return new AdminService(
       repositoryRoot,
@@ -710,9 +833,12 @@ export class AdminService {
       packCaptureSessions,
       packRevisions,
       threadProvisioning,
+      publication,
+      releases,
       state,
       options.openDiscordForumSession,
       options.openDiscordForumProvisioningSession,
+      options.openPublisherSession,
     );
   }
 
@@ -1876,7 +2002,7 @@ export class AdminService {
     return this.standaloneRenders.readArtifact(renderId, artifact);
   }
 
-  #packRuntime() {
+  #packRuntime(): AdminPackRuntime {
     return Object.freeze({
       workspace: createPersistentWorkspace({
         packs: this.#state.packs,
@@ -1886,9 +2012,79 @@ export class AdminService {
     });
   }
 
+  #publicationDependencies(
+    runtime: AdminPackRuntime,
+    bindings: AssetThreadBindings,
+  ) {
+    const resolveChannel = buildChannelResolver(this.#state.rawChannels as Record<string, unknown>);
+    return Object.freeze({
+      workspace: runtime.workspace,
+      staging: runtime.staging,
+      releases: this.releases,
+      resolveChannel,
+      resolveAssetThread: (packId: string, assetId: string): string | null =>
+        bindings.packs[packId]?.[assetId] ?? null,
+    });
+  }
+
+  async #packPublicationState(
+    pack: Pack,
+    runtime: AdminPackRuntime,
+    bindings: AssetThreadBindings,
+    supersedeInterrupted: boolean,
+  ): Promise<AdminPackPublicationState> {
+    const dependencies = this.#publicationDependencies(runtime, bindings);
+    const ordinary = inspectPackPublishReadiness(dependencies, pack.id, {
+      supersedeInterrupted,
+    });
+    const withoutSupersession = supersedeInterrupted
+      ? inspectPackPublishReadiness(dependencies, pack.id, { supersedeInterrupted: false })
+      : ordinary;
+    const interruptedBlocker = withoutSupersession.blockers.find(
+      (blocker): blocker is Extract<PackPublishBlocker, { readonly code: "interrupted_release_exists" }> =>
+        blocker.code === "interrupted_release_exists",
+    ) ?? null;
+    const captureSession = await this.packCaptureSessions.state(pack);
+    const blockers: AdminPackPublicationBlocker[] = [...ordinary.blockers];
+    if (!captureSession.publishReady) {
+      blockers.push(Object.freeze({
+        code: "capture_session_not_ready" as const,
+        reason: captureSession.readinessReason,
+        missingAssetIds: captureSession.missingAssetIds,
+        pendingCount: captureSession.pendingCount,
+        exportSpanMinutes: captureSession.exportSpanMinutes,
+        maxSpanMinutes: captureSession.maxSpanMinutes,
+      }));
+    }
+    if (this.#openPublisherSession === undefined) {
+      blockers.push(Object.freeze({ code: "discord_unavailable" as const }));
+    }
+    const interruptedRelease = interruptedBlocker === null ? null : Object.freeze({
+      releaseId: interruptedBlocker.releaseId,
+      startedAt: interruptedBlocker.startedAt,
+      postedCount: interruptedBlocker.postedCount,
+      totalCount: interruptedBlocker.totalCount,
+    });
+    return Object.freeze({
+      state: interruptedRelease !== null && !supersedeInterrupted
+        ? "interrupted" as const
+        : blockers.length === 0
+          ? "ready" as const
+          : "blocked" as const,
+      ready: blockers.length === 0,
+      capturedCount: ordinary.capturedCount,
+      totalCount: ordinary.totalCount,
+      stagedCount: ordinary.stagedCount,
+      resolvedThreadCount: ordinary.resolvedThreadCount,
+      blockers: Object.freeze(blockers),
+      interruptedRelease,
+    });
+  }
+
   async packWorkspaceState(): Promise<AdminPackWorkspaceState> {
     const runtime = this.#packRuntime();
     await this.packRevisions.reconcile(runtime.workspace, await this.packRenders.listAcceptedPreviews());
+    const { bindings } = await this.#readThreadBindings();
     const packs = await Promise.all(this.#state.packs.map(async (pack) => {
       const assets = await Promise.all(pack.assets.map(async (assetId) => {
         const asset = this.#state.byAssetId.get(assetId);
@@ -1929,10 +2125,372 @@ export class AdminService {
         capturedCount: pack.assets.length - remainingRequiredAssetIds.length,
         totalCount: pack.assets.length,
         remainingRequiredAssetIds,
+        publication: await this.#packPublicationState(pack, runtime, bindings, false),
         assets: Object.freeze(assets),
       });
     }));
-    return Object.freeze({ schemaVersion: 1, publishAvailable: false, packs: Object.freeze(packs) });
+    return Object.freeze({
+      schemaVersion: 1,
+      publishAvailable: this.#openPublisherSession !== undefined,
+      publicationInProgress: this.#publicationInProgress,
+      packs: Object.freeze(packs),
+    });
+  }
+
+  async #publicationWorkspaceFingerprint(
+    packIds: readonly string[],
+    runtime: AdminPackRuntime,
+  ): Promise<string> {
+    const packEvidence = [];
+    for (const packId of packIds) {
+      const pack = this.#state.byPackId.get(packId);
+      if (pack === undefined) throw new AdminError("pack_not_found", `Pack ${packId} was not found.`, 404);
+      const assets = [];
+      for (const assetId of pack.assets) {
+        const capture = runtime.workspace.captureOf(assetId);
+        const staged = runtime.staging.get(assetId);
+        let stagedSha256: string | null = null;
+        if (staged !== null) {
+          try { stagedSha256 = sha256(await readFile(staged.path)); }
+          catch { stagedSha256 = "unreadable"; }
+        }
+        assets.push(Object.freeze({
+          assetId,
+          capture: capture === null ? null : Object.freeze({
+            capturedAt: capture.capturedAt,
+            revisions: capture.revisions,
+          }),
+          stagedSha256,
+        }));
+      }
+      const session = await this.packCaptureSessions.state(pack);
+      const releases = this.releases.listReleases(pack.id)
+        .map((release) => Object.freeze({
+          releaseId: release.releaseId,
+          startedAt: release.startedAt,
+          publishedAt: release.publishedAt,
+          postedAssetIds: Object.freeze(release.analyses
+            .filter((analysis) => analysis.discordMessageId !== null)
+            .map((analysis) => analysis.assetId)),
+        }))
+        .sort((left, right) => left.startedAt.localeCompare(right.startedAt) || left.releaseId.localeCompare(right.releaseId));
+      packEvidence.push(Object.freeze({
+        packId,
+        session: Object.freeze({
+          sessionId: session.sessionId,
+          publishReady: session.publishReady,
+          readinessReason: session.readinessReason,
+          acceptedCount: session.acceptedCount,
+          pendingCount: session.pendingCount,
+          missingAssetIds: session.missingAssetIds,
+          exportSpanMinutes: session.exportSpanMinutes,
+        }),
+        assets: Object.freeze(assets),
+        releases: Object.freeze(releases),
+      }));
+    }
+    return sha256(Buffer.from(JSON.stringify(packEvidence), "utf8"));
+  }
+
+  async #buildPackPublicationPreview(
+    packIds: readonly string[],
+    supersedePackIds: readonly string[],
+    previewId: string,
+  ): Promise<AdminPackPublicationPreview> {
+    if (packIds.length === 0) {
+      throw new AdminError("invalid_request", "Select at least one Pack for publication.");
+    }
+    if (new Set(packIds).size !== packIds.length || new Set(supersedePackIds).size !== supersedePackIds.length) {
+      throw new AdminError("invalid_request", "Pack publication selections must not contain duplicates.");
+    }
+    const selected = new Set(packIds);
+    const supersede = new Set(supersedePackIds);
+    if ([...supersede].some((packId) => !selected.has(packId))) {
+      throw new AdminError("invalid_request", "A superseded Pack must also be selected for publication.");
+    }
+    for (const packId of selected) {
+      if (!this.#state.byPackId.has(packId)) {
+        throw new AdminError("pack_not_found", `Pack ${packId} was not found.`, 404, { packId });
+      }
+    }
+
+    const canonicalPackIds = this.#state.packs.filter((pack) => selected.has(pack.id)).map((pack) => pack.id);
+    const canonicalSupersedePackIds = canonicalPackIds.filter((packId) => supersede.has(packId));
+    const runtime = this.#packRuntime();
+    await this.packRevisions.reconcile(runtime.workspace, await this.packRenders.listAcceptedPreviews());
+    const { file: bindingsFile, bindings } = await this.#readThreadBindings();
+    const packs = await Promise.all(canonicalPackIds.map(async (packId) => {
+      const pack = this.#state.byPackId.get(packId);
+      if (pack === undefined) throw new AdminError("pack_not_found", `Pack ${packId} was not found.`, 404);
+      return Object.freeze({
+        id: pack.id,
+        displayName: pack.display,
+        action: supersede.has(pack.id) ? "supersede" as const : "publish" as const,
+        publication: await this.#packPublicationState(pack, runtime, bindings, supersede.has(pack.id)),
+      });
+    }));
+    const workspaceFingerprint = await this.#publicationWorkspaceFingerprint(canonicalPackIds, runtime);
+    const confirmation = `PUBLISH ${canonicalPackIds.length} PACK${canonicalPackIds.length === 1 ? "" : "S"}`;
+    return Object.freeze({
+      schemaVersion: 1,
+      previewId,
+      valid: packs.every((pack) => pack.publication.ready),
+      confirmation,
+      selectedPackIds: Object.freeze(canonicalPackIds),
+      supersedePackIds: Object.freeze(canonicalSupersedePackIds),
+      packs: Object.freeze(packs),
+      sourceState: Object.freeze({
+        registrySha256: this.#state.registryFile.sha256,
+        packsSha256: this.#state.packsFile.sha256,
+        channelsSha256: this.#state.channelsFile.sha256,
+        threadBindingsSha256: bindingsFile.sha256,
+        workspaceFingerprint,
+      }),
+      effects: Object.freeze({
+        releasesCreated: canonicalPackIds.length,
+        discordPostsPlanned: packs.reduce((sum, pack) => sum + pack.publication.totalCount, 0),
+        selectedPacksResetOnSuccess: true as const,
+        unselectedPacksChanged: false as const,
+      }),
+    });
+  }
+
+  async preparePackPublication(input: {
+    readonly packIds: readonly string[];
+    readonly supersedePackIds?: readonly string[];
+  }): Promise<AdminPackPublicationPreview> {
+    await this.refresh();
+    const previewId = randomBytes(16).toString("hex");
+    const preview = await this.#buildPackPublicationPreview(
+      input.packIds,
+      input.supersedePackIds ?? [],
+      previewId,
+    );
+    this.#publicationPreviews.set(previewId, preview);
+    return preview;
+  }
+
+  async applyPackPublication(
+    previewId: string,
+    confirmation: unknown,
+  ): Promise<AdminPackPublicationResult> {
+    return this.#withPackMutationLock(async () => {
+      const preview = this.#publicationPreviews.get(previewId);
+      if (preview === undefined) {
+        throw new AdminError("pack_publication_preview_not_found", "Publication preview was not found or was already used.", 404);
+      }
+      if (confirmation !== preview.confirmation) {
+        throw new AdminError(
+          "pack_publication_confirmation_invalid",
+          `Publication requires the exact confirmation ${preview.confirmation}.`,
+        );
+      }
+      if (this.#publicationInProgress) {
+        throw new AdminError("pack_publication_in_progress", "Another publication operation is already running.", 409);
+      }
+      if (this.#openPublisherSession === undefined) {
+        throw new AdminError("discord_operations_unavailable", "Publishing is unavailable until the Administration process has a Discord bot token.", 503);
+      }
+
+      this.#publicationInProgress = true;
+      try {
+        await this.refresh();
+        const current = await this.#buildPackPublicationPreview(
+          preview.selectedPackIds,
+          preview.supersedePackIds,
+          preview.previewId,
+        );
+        const sameState =
+          current.sourceState.registrySha256 === preview.sourceState.registrySha256 &&
+          current.sourceState.packsSha256 === preview.sourceState.packsSha256 &&
+          current.sourceState.channelsSha256 === preview.sourceState.channelsSha256 &&
+          current.sourceState.threadBindingsSha256 === preview.sourceState.threadBindingsSha256 &&
+          current.sourceState.workspaceFingerprint === preview.sourceState.workspaceFingerprint;
+        if (!sameState) {
+          this.#publicationPreviews.delete(previewId);
+          throw new AdminError(
+            "pack_publication_state_changed",
+            "Pack, capture-session, staging, route, or Release state changed after review. Create a new publication preview.",
+            409,
+          );
+        }
+        if (!current.valid) {
+          this.#publicationPreviews.delete(previewId);
+          throw new AdminError(
+            "pack_publication_blocked",
+            "Every selected Pack must be complete, staged, session-valid, routed, and free from unresolved Release blockers.",
+            409,
+            { packs: current.packs },
+          );
+        }
+
+        this.#publicationPreviews.delete(previewId);
+        const runtime = this.#packRuntime();
+        const { bindings } = await this.#readThreadBindings();
+        const baseDependencies = this.#publicationDependencies(runtime, bindings);
+        const published: Extract<PublishPackResult, { readonly ok: true }>[] = [];
+        let failed: AdminPackPublicationFailure | null = null;
+        const notAttemptedPackIds: string[] = [];
+        const cleanupWarnings: AdminPackPublicationCleanupWarning[] = [];
+
+        for (let index = 0; index < current.selectedPackIds.length; index += 1) {
+          const packId = current.selectedPackIds[index];
+          if (packId === undefined) continue;
+          let result: Extract<PublishPackResult, { readonly ok: true }> | AdminPackPublicationFailure;
+          const releaseIdsBefore = new Set(this.releases.listReleases(packId).map((release) => release.releaseId));
+          try {
+            result = await publishPack({
+              ...baseDependencies,
+              openPublisher: this.#openPublisherSession,
+              assetDisplay: (assetId) => this.#state.byAssetId.get(assetId)?.display ?? assetId,
+              now: () => new Date().toISOString(),
+            }, packId, {
+              supersedeInterrupted: current.supersedePackIds.includes(packId),
+            });
+          } catch (error) {
+            const createdRelease = this.releases.listReleases(packId)
+              .filter((release) => !releaseIdsBefore.has(release.releaseId))
+              .sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0] ?? null;
+            if (createdRelease !== null && createdRelease.publishedAt !== null) {
+              let workspaceReset = true;
+              let stagingCleared = true;
+              try { runtime.workspace.resetPack(packId); }
+              catch {
+                workspaceReset = false;
+                cleanupWarnings.push(Object.freeze({ packId, code: "workspace_reset_failed" as const }));
+              }
+              try { runtime.staging.clear(createdRelease.analyses.map((analysis) => analysis.assetId)); }
+              catch {
+                stagingCleared = false;
+                cleanupWarnings.push(Object.freeze({ packId, code: "staging_cleanup_failed" as const }));
+              }
+              if (!workspaceReset) {
+                result = Object.freeze({
+                  ok: false,
+                  outcome: "publication_failed",
+                  packId,
+                  releaseId: createdRelease.releaseId,
+                  publishedAssetIds: Object.freeze(createdRelease.analyses.map((analysis) => analysis.assetId)),
+                  detail: `Discord publication completed, but the Pack workspace could not be reset: ${error instanceof Error ? error.message : String(error)}`,
+                });
+              } else {
+                result = Object.freeze({
+                  ok: true,
+                  outcome: "published",
+                  packId,
+                  releaseId: createdRelease.releaseId,
+                  publishedAssetIds: Object.freeze(createdRelease.analyses.map((analysis) => analysis.assetId)),
+                  cleared: stagingCleared,
+                });
+              }
+            } else {
+              result = Object.freeze({
+                ok: false,
+                outcome: "publication_failed",
+                packId,
+                releaseId: createdRelease?.releaseId ?? null,
+                publishedAssetIds: Object.freeze(createdRelease?.analyses
+                  .filter((analysis) => analysis.discordMessageId !== null)
+                  .map((analysis) => analysis.assetId) ?? []),
+                detail: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+          if (!result.ok) {
+            failed = result;
+            notAttemptedPackIds.push(...current.selectedPackIds.slice(index + 1));
+            break;
+          }
+          if (!result.cleared) {
+            cleanupWarnings.push(Object.freeze({ packId, code: "staging_cleanup_failed" as const }));
+          }
+          published.push(result);
+          const pack = this.#state.byPackId.get(packId);
+          if (pack !== undefined) {
+            try { await this.packCaptureSessions.clearAcceptedAssets(packId, pack.assets); }
+            catch { cleanupWarnings.push(Object.freeze({ packId, code: "capture_session_cleanup_failed" as const })); }
+            try { await this.packRevisions.clearPack(pack); }
+            catch { cleanupWarnings.push(Object.freeze({ packId, code: "revision_history_cleanup_failed" as const })); }
+          }
+        }
+
+        return Object.freeze({
+          schemaVersion: 1,
+          outcome: failed === null
+            ? "published" as const
+            : published.length === 0
+              ? "failed" as const
+              : "partially_published" as const,
+          previewId,
+          selectedPackIds: current.selectedPackIds,
+          published: Object.freeze(published),
+          failed,
+          notAttemptedPackIds: Object.freeze(notAttemptedPackIds),
+          cleanupWarnings: Object.freeze(cleanupWarnings),
+          effects: Object.freeze({
+            discordContacted: published.length > 0 ||
+              failed?.outcome === "publish_interrupted" ||
+              (failed?.outcome === "publication_failed" && failed.publishedAssetIds.length > 0),
+            releasesCreated: published.length + (
+              failed?.outcome === "publish_interrupted" ||
+              (failed?.outcome === "publication_failed" && failed.releaseId !== null)
+                ? 1
+                : 0
+            ),
+            packsReset: Object.freeze(published.map((result) => result.packId)),
+          }),
+        });
+      } finally {
+        this.#publicationInProgress = false;
+      }
+    });
+  }
+
+  async resumePackPublication(
+    packId: string,
+    confirmation: unknown,
+  ): Promise<AdminPackResumeResult> {
+    return this.#withPackMutationLock(async () => {
+      if (confirmation !== `RESUME ${packId.toUpperCase()}`) {
+        throw new AdminError(
+          "pack_publication_confirmation_invalid",
+          `Resume requires the exact confirmation RESUME ${packId.toUpperCase()}.`,
+        );
+      }
+      if (this.#openPublisherSession === undefined) {
+        throw new AdminError("discord_operations_unavailable", "Release resume is unavailable until the Administration process has a Discord bot token.", 503);
+      }
+      if (this.#publicationInProgress) {
+        throw new AdminError("pack_publication_in_progress", "Another publication operation is already running.", 409);
+      }
+      this.#publicationInProgress = true;
+      try {
+        await this.refresh();
+        const pack = this.#state.byPackId.get(packId);
+        if (pack === undefined) throw new AdminError("pack_not_found", `Pack ${packId} was not found.`, 404);
+        const runtime = this.#packRuntime();
+        const result = await resumeInterruptedRelease({
+          workspace: runtime.workspace,
+          staging: runtime.staging,
+          releases: this.releases,
+          openPublisher: this.#openPublisherSession,
+          now: () => new Date().toISOString(),
+        }, packId);
+        const cleanupWarnings: AdminPackPublicationCleanupWarning[] = [];
+        if (result.ok) {
+          if (!result.cleared) {
+            cleanupWarnings.push(Object.freeze({ packId, code: "staging_cleanup_failed" as const }));
+          }
+          try { await this.packCaptureSessions.clearAcceptedAssets(packId, pack.assets); }
+          catch { cleanupWarnings.push(Object.freeze({ packId, code: "capture_session_cleanup_failed" as const })); }
+          try { await this.packRevisions.clearPack(pack); }
+          catch { cleanupWarnings.push(Object.freeze({ packId, code: "revision_history_cleanup_failed" as const })); }
+        }
+        return Object.freeze({ schemaVersion: 1, result, cleanupWarnings: Object.freeze(cleanupWarnings) });
+      } finally {
+        this.#publicationInProgress = false;
+      }
+    });
   }
 
   async packCaptureSessionState(packId: string): Promise<PackCaptureSessionState> {

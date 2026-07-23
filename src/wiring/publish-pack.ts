@@ -87,6 +87,33 @@ export interface ResumePackDeps {
   readonly now: () => string;
 }
 
+
+export interface InspectPackPublishReadinessDeps {
+  readonly workspace: Workspace;
+  readonly staging: StagingStore;
+  readonly releases: ReleaseStore;
+  readonly resolveChannel: ChannelResolver;
+  readonly resolveAssetThread: AssetThreadResolver;
+}
+
+export type PackPublishBlocker =
+  | { readonly code: "pack_incomplete"; readonly missingAssetIds: readonly string[] }
+  | { readonly code: "interrupted_release_exists"; readonly releaseId: string; readonly startedAt: string; readonly postedCount: number; readonly totalCount: number }
+  | { readonly code: "published_release_cleanup_required"; readonly releaseId: string; readonly publishedAt: string }
+  | { readonly code: "missing_staged_images"; readonly missingAssetIds: readonly string[] }
+  | { readonly code: "channel_unresolved" }
+  | { readonly code: "asset_threads_unresolved"; readonly missingAssetIds: readonly string[] };
+
+export interface PackPublishReadiness {
+  readonly packId: string;
+  readonly ready: boolean;
+  readonly capturedCount: number;
+  readonly totalCount: number;
+  readonly stagedCount: number;
+  readonly resolvedThreadCount: number;
+  readonly blockers: readonly PackPublishBlocker[];
+}
+
 export interface PublishOptions {
   /** Operator's explicit decision to publish fresh past an interrupted release. */
   readonly supersedeInterrupted: boolean;
@@ -117,6 +144,13 @@ export type PublishPackResult =
       readonly startedAt: string;
       readonly postedCount: number;
       readonly totalCount: number;
+    }
+  | {
+      readonly ok: false;
+      readonly outcome: "published_release_cleanup_required";
+      readonly packId: string;
+      readonly releaseId: string;
+      readonly publishedAt: string;
     }
   | { readonly ok: false; readonly outcome: "missing_staged_images"; readonly packId: string; readonly missing: readonly string[] }
   | { readonly ok: false; readonly outcome: "channel_unresolved"; readonly packId: string }
@@ -179,12 +213,214 @@ function errMsg(e: unknown): string {
  * started after it. startedAt is read as an ordering FACT (metadata), never
  * as identity.
  */
-function findUnsupersededInterrupted(records: readonly ReleaseRecord[]): ReleaseRecord | null {
+function findNewestRelease(records: readonly ReleaseRecord[]): ReleaseRecord | null {
   let newest: ReleaseRecord | null = null;
-  for (const r of records) {
-    if (newest === null || r.startedAt > newest.startedAt) newest = r;
+  for (const record of records) {
+    if (
+      newest === null ||
+      record.startedAt > newest.startedAt ||
+      (record.startedAt === newest.startedAt && record.releaseId > newest.releaseId)
+    ) {
+      newest = record;
+    }
   }
+  return newest;
+}
+
+function findUnsupersededInterrupted(records: readonly ReleaseRecord[]): ReleaseRecord | null {
+  const newest = findNewestRelease(records);
   return newest !== null && newest.publishedAt === null ? newest : null;
+}
+
+function findPublishedReleaseAwaitingWorkspaceCleanup(
+  records: readonly ReleaseRecord[],
+  captures: readonly AssetCapture[],
+): ReleaseRecord | null {
+  const newest = findNewestRelease(records);
+  if (newest === null || newest.publishedAt === null || newest.analyses.length !== captures.length) {
+    return null;
+  }
+  return newest.analyses.every((analysis, index) => {
+    const capture = captures[index];
+    return capture !== undefined &&
+      capture.assetId === analysis.assetId &&
+      capture.capturedAt === analysis.capturedAt;
+  }) ? newest : null;
+}
+
+
+type PreparedPackPublication = {
+  readonly pack: NonNullable<ReturnType<Workspace["pack"]>>;
+  readonly toPublish: readonly AssetCapture[];
+  readonly stagedPaths: ReadonlyMap<string, string>;
+  readonly forumChannelId: string;
+  readonly threadIds: ReadonlyMap<string, string>;
+};
+
+type PackPublicationPreparation =
+  | { readonly ok: true; readonly plan: PreparedPackPublication }
+  | { readonly ok: false; readonly result: Exclude<PublishPackResult, { readonly ok: true }> };
+
+function preparePackPublication(
+  deps: InspectPackPublishReadinessDeps,
+  packId: string,
+  options: PublishOptions,
+): PackPublicationPreparation {
+  const { workspace, staging, releases, resolveChannel, resolveAssetThread } = deps;
+  const pack = workspace.pack(packId);
+  if (pack === null) {
+    throw new Error(`internal: unknown pack "${packId}" — callers validate operator input`);
+  }
+
+  const missingAssetIds = workspace.pendingAssets(packId);
+  if (missingAssetIds.length > 0) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        outcome: "pack_incomplete",
+        packId,
+        captured: pack.assets.length - missingAssetIds.length,
+        total: pack.assets.length,
+        missingAssetIds,
+      },
+    };
+  }
+
+  const toPublish = workspace.capturedFor(packId);
+  const releaseRecords = releases.listReleases(packId);
+  const publishedAwaitingCleanup = findPublishedReleaseAwaitingWorkspaceCleanup(releaseRecords, toPublish);
+  if (publishedAwaitingCleanup !== null) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        outcome: "published_release_cleanup_required",
+        packId,
+        releaseId: publishedAwaitingCleanup.releaseId,
+        publishedAt: publishedAwaitingCleanup.publishedAt!,
+      },
+    };
+  }
+  const interrupted = findUnsupersededInterrupted(releaseRecords);
+  if (interrupted !== null && !options.supersedeInterrupted) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        outcome: "interrupted_release_exists",
+        packId,
+        releaseId: interrupted.releaseId,
+        startedAt: interrupted.startedAt,
+        postedCount: interrupted.analyses.filter((analysis) => analysis.discordMessageId !== null).length,
+        totalCount: interrupted.analyses.length,
+      },
+    };
+  }
+
+  const stagedPaths = new Map<string, string>();
+  const missingStagedAssetIds: string[] = [];
+  for (const capture of toPublish) {
+    const staged = staging.get(capture.assetId);
+    if (staged === null) missingStagedAssetIds.push(capture.assetId);
+    else stagedPaths.set(capture.assetId, staged.path);
+  }
+  if (missingStagedAssetIds.length > 0) {
+    return {
+      ok: false,
+      result: { ok: false, outcome: "missing_staged_images", packId, missing: missingStagedAssetIds },
+    };
+  }
+
+  const forumChannelId = resolveChannel(pack.channel);
+  if (forumChannelId === null) {
+    return { ok: false, result: { ok: false, outcome: "channel_unresolved", packId } };
+  }
+
+  const threadIds = new Map<string, string>();
+  const missingThreadAssetIds: string[] = [];
+  for (const capture of toPublish) {
+    const resolved = resolveAssetThread(packId, capture.assetId);
+    if (resolved === null) missingThreadAssetIds.push(capture.assetId);
+    else threadIds.set(capture.assetId, resolved);
+  }
+  if (missingThreadAssetIds.length > 0) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        outcome: "asset_threads_unresolved",
+        packId,
+        missingAssetIds: missingThreadAssetIds,
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    plan: { pack, toPublish, stagedPaths, forumChannelId, threadIds },
+  };
+}
+
+export function inspectPackPublishReadiness(
+  deps: InspectPackPublishReadinessDeps,
+  packId: string,
+  options: PublishOptions = { supersedeInterrupted: false },
+): PackPublishReadiness {
+  const pack = deps.workspace.pack(packId);
+  if (pack === null) throw new Error(`internal: unknown pack "${packId}" — callers validate operator input`);
+
+  const missingAssetIds = deps.workspace.pendingAssets(packId);
+  const capturedCount = pack.assets.length - missingAssetIds.length;
+  const missingStagedAssetIds = pack.assets.filter((assetId) => !deps.staging.has(assetId));
+  const missingThreadAssetIds = pack.assets.filter(
+    (assetId) => deps.resolveAssetThread(packId, assetId) === null,
+  );
+  const releaseRecords = deps.releases.listReleases(packId);
+  const interrupted = findUnsupersededInterrupted(releaseRecords);
+  const publishedAwaitingCleanup = missingAssetIds.length === 0
+    ? findPublishedReleaseAwaitingWorkspaceCleanup(releaseRecords, deps.workspace.capturedFor(packId))
+    : null;
+  const blockers: PackPublishBlocker[] = [];
+
+  if (missingAssetIds.length > 0) {
+    blockers.push({ code: "pack_incomplete", missingAssetIds });
+  }
+  if (publishedAwaitingCleanup !== null) {
+    blockers.push({
+      code: "published_release_cleanup_required",
+      releaseId: publishedAwaitingCleanup.releaseId,
+      publishedAt: publishedAwaitingCleanup.publishedAt!,
+    });
+  }
+  if (interrupted !== null && !options.supersedeInterrupted) {
+    blockers.push({
+      code: "interrupted_release_exists",
+      releaseId: interrupted.releaseId,
+      startedAt: interrupted.startedAt,
+      postedCount: interrupted.analyses.filter((analysis) => analysis.discordMessageId !== null).length,
+      totalCount: interrupted.analyses.length,
+    });
+  }
+  if (missingStagedAssetIds.length > 0) {
+    blockers.push({ code: "missing_staged_images", missingAssetIds: missingStagedAssetIds });
+  }
+  if (deps.resolveChannel(pack.channel) === null) {
+    blockers.push({ code: "channel_unresolved" });
+  }
+  if (missingThreadAssetIds.length > 0) {
+    blockers.push({ code: "asset_threads_unresolved", missingAssetIds: missingThreadAssetIds });
+  }
+
+  return Object.freeze({
+    packId,
+    ready: blockers.length === 0,
+    capturedCount,
+    totalCount: pack.assets.length,
+    stagedCount: pack.assets.length - missingStagedAssetIds.length,
+    resolvedThreadCount: pack.assets.length - missingThreadAssetIds.length,
+    blockers: Object.freeze(blockers),
+  });
 }
 
 export async function publishPack(
@@ -196,108 +432,24 @@ export async function publishPack(
     workspace,
     staging,
     releases,
-    resolveChannel,
-    resolveAssetThread,
     openPublisher,
     assetDisplay,
     now,
   } = deps;
 
-  // 1. The pack definition. Unknown packId = programming fault, fail loud.
-  const pack = workspace.pack(packId);
-  if (pack === null) {
-    throw new Error(`internal: unknown pack "${packId}" — callers validate operator input`);
-  }
+  const prepared = preparePackPublication(deps, packId, options);
+  if (!prepared.ok) return prepared.result;
 
-  // 2. COMPLETE-ONLY gate. An incomplete pack is not a publishable thing.
-  const missingAssetIds = workspace.pendingAssets(packId);
-  if (missingAssetIds.length > 0) {
-    return {
-      ok: false,
-      outcome: "pack_incomplete",
-      packId,
-      captured: pack.assets.length - missingAssetIds.length,
-      total: pack.assets.length,
-      missingAssetIds,
-    };
-  }
+  const { pack, toPublish, stagedPaths, forumChannelId, threadIds } = prepared.plan;
 
-  // Complete pack -> the plan is the pack's captures in canonical order.
-  const toPublish: readonly AssetCapture[] = workspace.capturedFor(packId);
-
-  // 3. Unsuperseded interrupted release? Refuse unless the operator supersedes.
-  const interrupted = findUnsupersededInterrupted(releases.listReleases(packId));
-  if (interrupted !== null && !options.supersedeInterrupted) {
-    return {
-      ok: false,
-      outcome: "interrupted_release_exists",
-      packId,
-      releaseId: interrupted.releaseId,
-      startedAt: interrupted.startedAt,
-      postedCount: interrupted.analyses.filter((a) => a.discordMessageId !== null).length,
-      totalCount: interrupted.analyses.length,
-    };
-  }
-
-  // 4. Resolve every staged image ONCE into assetId -> path (fail closed).
-  //    Custody is asset-keyed; membership/order came from the plan above.
-  const stagedPaths = new Map<string, string>();
-  const missing: string[] = [];
-  for (const rec of toPublish) {
-    const staged = staging.get(rec.assetId);
-    if (staged === null) missing.push(rec.assetId);
-    else stagedPaths.set(rec.assetId, staged.path);
-  }
-  if (missing.length > 0) {
-    return { ok: false, outcome: "missing_staged_images", packId, missing };
-  }
-
-  /** The one lookup of the truth resolved in step 4; absence here is a bug. */
   const stagedPath = (assetId: string): string => {
     const path = stagedPaths.get(assetId);
-    if (path === undefined) {
-      throw new Error(`internal: no staged path resolved for "${assetId}"`);
-    }
+    if (path === undefined) throw new Error(`internal: no staged path resolved for "${assetId}"`);
     return path;
   };
-
-  // 5. Forum channel: the Pack owns its assignment (a channel NAME); the
-  //    resolver maps that name to the installation-provisioned forum ID.
-  const forumChannelId = resolveChannel(pack.channel);
-  if (forumChannelId === null) {
-    return { ok: false, outcome: "channel_unresolved", packId };
-  }
-
-  // Every Analysis must have a persistent Asset thread before any durable or
-  // external effect. Partial destination resolution is not publishable.
-  const threadIds = new Map<string, string>();
-  const missingThreadAssetIds: string[] = [];
-
-  for (const analysis of toPublish) {
-    const resolved = resolveAssetThread(packId, analysis.assetId);
-    if (resolved === null) {
-      missingThreadAssetIds.push(analysis.assetId);
-    } else {
-      threadIds.set(analysis.assetId, resolved);
-    }
-  }
-
-  if (missingThreadAssetIds.length > 0) {
-    return {
-      ok: false,
-      outcome: "asset_threads_unresolved",
-      packId,
-      missingAssetIds: missingThreadAssetIds,
-    };
-  }
-
   const threadId = (assetId: string): string => {
     const resolved = threadIds.get(assetId);
-    if (resolved === undefined) {
-      throw new Error(
-        `internal: no Discord thread resolved for "${packId}/${assetId}"`,
-      );
-    }
+    if (resolved === undefined) throw new Error(`internal: no Discord thread resolved for "${packId}/${assetId}"`);
     return resolved;
   };
 

@@ -11,15 +11,15 @@ source tree and is intentionally conservative. Nothing listed here is removed.
 - Registry-only selection when creating a Pack.
 - Pack capture sessions, Downloads-folder scanning, manual import/review,
   accepted revisions, individual revision deletion, and Pack reset.
+- Selected or all-ready Pack publication with combined preflight, exact
+  confirmation, interrupted Release resume, and explicit supersession.
 - Standalone chart rendering and local artifact download.
 - Existing-thread adoption, current-binding verification, replacement, local
   unbinding, new post provisioning, canonical logo reuse, and Pack-route checks.
 
 ## Implemented but not fully exposed
 
-- Publishing a complete Pack through `publishPack()`.
-- Resuming an interrupted Release and explicitly superseding one.
-- Historical Release listing and archived chart custody.
+- Historical Release listing and archive browsing.
 - Existing Pack maintenance: rename, reorder members, add/remove members,
   reassign channel, reorder Packs, and delete Pack.
 - Registry alias maintenance through dedicated add/remove scripts.
@@ -52,8 +52,8 @@ must not be removed before reference and deployment analysis.
 - No UI for channel-route creation, modification, validation, or removal.
 - No UI for Discord server migration, credentials, guilds, permissions, roles,
   or connection testing.
-- No UI for publishing, multi-Pack selection, interrupted Release recovery, or
-  Release history.
+- Publication and interrupted Release recovery are exposed in Workspace, but
+  historical Release browsing and export remain absent.
 - No complete maintenance surface for existing Packs.
 - CSV onboarding can set aliases for new Assets, but there is still no governed UI for editing aliases on existing Assets.
 - Missing-metadata Assets were hidden from the renderer before Step 537.

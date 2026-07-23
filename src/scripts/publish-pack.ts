@@ -136,6 +136,12 @@ function report(app: App, result: PublishPackResult): number {
       console.error("  record is kept as honest history; clean up its live messages manually).");
       return 1;
 
+    case "published_release_cleanup_required":
+      console.error(`✗ Pack "${result.packId}" already has a published Release matching the active workspace.`);
+      console.error(`  Release ${result.releaseId} was published at ${result.publishedAt}.`);
+      console.error("  Discord delivery will not be repeated. Repair or reset the local Pack workspace before publishing again.");
+      return 1;
+
     case "missing_staged_images": {
       console.error(`✗ Cannot publish "${result.packId}": some assets have no staged image on disk.`);
       for (const assetId of result.missing) {
