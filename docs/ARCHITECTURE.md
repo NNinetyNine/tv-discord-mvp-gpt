@@ -242,3 +242,12 @@ The current Administration ownership and workflow findings are recorded in
 inventory is recorded in `docs/EXISTING_FUNCTIONALITY_AUDIT.md`. These documents
 must be consulted before changing Pack, channel, publishing, server-migration,
 or stable Asset-ID architecture.
+
+
+## Registry bulk onboarding boundary
+
+The Administration CSV importer is an additions-only transaction over canonical
+Registry and optional Pack membership. It validates the complete candidate with
+the same Registry and Pack loaders used at startup, binds review to exact source
+hashes, and replaces both files through rollback-protected writes. It never
+performs chart, Release, thread, or Discord work.

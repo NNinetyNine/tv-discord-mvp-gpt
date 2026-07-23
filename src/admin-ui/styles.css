@@ -308,3 +308,30 @@ body.registry-editor-open { overflow: hidden; }
   .registry-editor { animation: registry-panel-in .18s ease-out; }
   @keyframes registry-panel-in { from { transform: translateX(2rem); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 }
+
+/* Step 538 — Pack role, Registry Pack filters, and governed CSV import */
+.pack-role-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; padding: 0 1.1rem 1.1rem; }
+.pack-role-grid > div { display: grid; gap: .35rem; min-height: 6.2rem; align-content: start; padding: .85rem; border: 1px solid var(--border); border-radius: .72rem; background: rgba(12, 13, 10, .42); }
+.pack-role-grid strong { color: var(--gold-strong); font-size: .64rem; letter-spacing: .12em; }
+.pack-role-grid span { color: var(--text-faint); font-size: .62rem; line-height: 1.55; }
+.registry-pack-filter-bar { display: flex; align-items: center; gap: .85rem; padding: 0 1.1rem .9rem; }
+.registry-pack-filter-bar > span { flex: 0 0 auto; color: var(--text-faint); font-size: .55rem; font-weight: 800; letter-spacing: .13em; }
+.registry-pack-filters { display: flex; flex-wrap: wrap; gap: .42rem; }
+.registry-pack-filter { width: auto; min-height: 1.9rem; padding: .22rem .7rem; border-radius: 999px; color: var(--text-faint); background: rgba(207, 173, 82, .025); font-size: .56rem; letter-spacing: .1em; }
+.registry-pack-filter[aria-pressed="true"] { color: #18160f; border-color: var(--gold-strong); background: linear-gradient(135deg, var(--gold-strong), #aa8b3e); box-shadow: 0 0 20px rgba(207, 173, 82, .16); }
+.registry-import-fields { display: grid; gap: .8rem; padding: 1rem 1.1rem; }
+.registry-import-fields > p { margin: 0; color: var(--text-faint); font-size: .62rem; letter-spacing: .06em; }
+.registry-import-fields code { color: var(--gold-strong); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .62rem; }
+.registry-import-dialog { width: min(64rem, 96vw); }
+.registry-import-preview { display: grid; }
+.registry-import-preview > div { padding: .8rem; }
+.registry-import-preview .registry-import-issues { padding-top: 0; }
+.registry-import-issues ul { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
+.registry-import-issues li { padding: .5rem .6rem; border: 1px solid rgba(233, 141, 134, .28); border-radius: .5rem; color: var(--danger); background: rgba(233, 141, 134, .04); font-size: .62rem; line-height: 1.45; }
+.registry-import-table-wrap { max-height: 18rem; border-top: 1px solid var(--border); }
+.registry-import-table-wrap th, .registry-import-table-wrap td { padding: .48rem .65rem; font-size: .61rem; }
+.registry-import-dialog .registry-editor-actions { flex-wrap: wrap; }
+@media (max-width: 1100px) {
+  .pack-role-grid { grid-template-columns: 1fr 1fr; }
+  .registry-pack-filter-bar { align-items: flex-start; flex-direction: column; }
+}

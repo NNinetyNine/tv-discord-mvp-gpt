@@ -153,3 +153,16 @@ selected-Pack atomic readiness, and server permission validation.
 - Build server configuration around installation-owned channel IDs, thread
   bindings, credentials, and permission checks.
 - Reuse the existing publish/resume implementation for multi-Pack delivery.
+
+## Step 538 Pack decision and Registry onboarding
+
+The Pack role is now surfaced directly in the Packs page. Packs are retained as
+the ordered publication-batch, readiness, Release-history, forum-route, and
+Pack/Asset thread-ownership layer. They remain references to Registry Asset IDs,
+not a second source of Asset metadata.
+
+Registry Pack filters read that canonical membership without changing it. CSV
+onboarding may optionally place each newly registered Asset into one existing
+Pack, but the current global-disjointness invariant is enforced and documented.
+The import does not resolve the separate Asset-channel versus Pack-channel route
+ownership question; both values continue to be validated and preserved.

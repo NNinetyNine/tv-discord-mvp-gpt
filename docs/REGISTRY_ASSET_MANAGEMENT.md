@@ -94,3 +94,15 @@ and removal remain separate explicit operations.
 
 Discord forums may expose up to 20 available tags, while a forum post may apply at most
 five. The UI displays that distinction and continues to enforce the applied-tag limit.
+
+## Pack filters and bulk CSV onboarding
+
+Step 538 adds Pack pills to Registry search. A selected pill filters by exact
+canonical Pack membership and continues to combine with the existing multi-term
+text query. Filtering is read-only.
+
+The additions-only CSV importer validates the whole file before application and
+supports optional aliases and one current Pack placement per new Asset. Valid
+imports replace Registry and Packs through one rollback-protected transaction;
+invalid rows never partially modify canonical source. See
+`docs/REGISTRY_CSV_IMPORT.md` for the exact format and safeguards.

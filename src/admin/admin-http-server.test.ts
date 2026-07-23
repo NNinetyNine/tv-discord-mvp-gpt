@@ -108,6 +108,16 @@ describe("Admin HTTP server", () => {
     expect(ids).toEqual([...ids].sort((a, b) => a.localeCompare(b, "en")));
   });
 
+  it("filters Registry results by an exact Pack parameter", async () => {
+    const { server } = await start();
+    const stocks = await jsonRequest(server.url, "/api/v1/assets?pack=stocks&q=Apple&limit=25");
+    expect(stocks.body.data).toMatchObject({ packId: "stocks", total: 1 });
+    expect(stocks.body.data.assets.map((asset: { id: string }) => asset.id)).toEqual(["aapl"]);
+    const missing = await jsonRequest(server.url, "/api/v1/assets?pack=missing");
+    expect(missing.response.status).toBe(404);
+    expect(missing.body.error).toMatchObject({ code: "pack_not_found" });
+  });
+
   it("rejects misspelled, legacy, or duplicate Registry search parameters instead of silently ignoring them", async () => {
     const { server } = await start();
     const legacy = await jsonRequest(server.url, "/api/v1/assets?query=Apple&limit=5");
@@ -170,6 +180,47 @@ describe("Admin HTTP server", () => {
       body: JSON.stringify({ previewId: retirement.body.data.previewId, confirmation: "RETIRE HTTP_ASSET" }),
     });
     expect(retired.body.data).toMatchObject({ retired: true, canonicalLogoRetained: true });
+  });
+
+  it("previews and applies one atomic Registry CSV import through text/csv routes", async () => {
+    const repositoryRoot = await mutableRepository();
+    const { server } = await start({ repositoryRoot });
+    const csv = [
+      "id,display_name,tradingview_symbol,currency,channel,aliases,pack_ids",
+      "http_csv,HTTP CSV Asset,NASDAQ:HTCSV,USD,stocks,HT_CSV,stocks",
+    ].join("\n");
+    const preview = await jsonRequest(server.url, "/api/v1/registry/csv-import/preview?filename=assets.csv", {
+      method: "POST",
+      headers: { "Content-Type": "text/csv" },
+      body: csv,
+    });
+    expect(preview.response.status).toBe(201);
+    expect(preview.body.data).toMatchObject({ valid: true, additionCount: 1, packMembershipCount: 1 });
+
+    const applied = await jsonRequest(server.url, `/api/v1/registry/csv-import/${preview.body.data.previewId}/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation: "APPLY REGISTRY CSV IMPORT" }),
+    });
+    expect(applied.response.status).toBe(200);
+    expect(applied.body.data).toMatchObject({ importedAssetCount: 1, packMembershipCount: 1 });
+    expect((await jsonRequest(server.url, "/api/v1/assets/http_csv")).body.data).toMatchObject({ packIds: ["stocks"] });
+
+    const invalidType = await jsonRequest(server.url, "/api/v1/registry/csv-import/preview?filename=assets.csv", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ csv }),
+    });
+    expect(invalidType.response.status).toBe(415);
+    expect(invalidType.body.error).toMatchObject({ code: "invalid_content_type" });
+
+    const invalidUtf8 = await jsonRequest(server.url, "/api/v1/registry/csv-import/preview?filename=assets.csv", {
+      method: "POST",
+      headers: { "Content-Type": "text/csv" },
+      body: Buffer.from([0xff]),
+    });
+    expect(invalidUtf8.response.status).toBe(400);
+    expect(invalidUtf8.body.error).toMatchObject({ code: "invalid_request" });
   });
 
   it("renders and downloads a standalone publication without canonical source mutation", async () => {

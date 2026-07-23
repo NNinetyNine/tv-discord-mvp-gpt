@@ -70,6 +70,15 @@ describe("AdminService", () => {
     expect(service.searchAssets({ query: "Apple crypto", limit: 100 }).assets).toEqual([]);
   });
 
+  it("filters Registry search by exact current Pack while preserving text search", async () => {
+    const service = await createService();
+    const stocks = service.searchAssets({ packId: "stocks", query: "Apple", limit: 100 });
+    expect(stocks.packId).toBe("stocks");
+    expect(stocks.assets.map((asset) => asset.id)).toEqual(["aapl"]);
+    expect(service.searchAssets({ packId: "crypto", query: "Apple", limit: 100 }).assets).toEqual([]);
+    expect(() => service.searchAssets({ packId: "missing" })).toThrowError(expect.objectContaining({ code: "pack_not_found" }));
+  });
+
   it("paginates one deterministic Registry search without overlapping Assets", async () => {
     const service = await createService();
     const first = service.searchAssets({ query: "stocks", offset: 0, limit: 3 });
@@ -170,6 +179,65 @@ describe("AdminService", () => {
       logicalChannel: "crypto",
       packIds: [],
     });
+  });
+
+  it("previews and atomically applies a valid Registry CSV import with optional Pack membership", async () => {
+    const root = await mutableRepository();
+    const service = await createService(root);
+    const preview = service.prepareRegistryCsvImport({
+      fileName: "assets.csv",
+      csvText: [
+        "id,display_name,tradingview_symbol,currency,channel,aliases,pack_ids",
+        "qa_csv,QA CSV Asset,NASDAQ:QACSV,USD,stocks,QA_CSV|QAASSET,stocks",
+      ].join("\n"),
+    });
+    expect(preview).toMatchObject({
+      valid: true,
+      additionCount: 1,
+      packMembershipCount: 1,
+      effects: { registryChanged: true, packMembershipChanged: true, discordContacted: false },
+    });
+    const applied = await service.applyRegistryCsvImport(preview.previewId, "APPLY REGISTRY CSV IMPORT");
+    expect(applied).toMatchObject({ importedAssetCount: 1, packMembershipCount: 1 });
+    expect(service.getAsset("qa_csv")).toMatchObject({
+      displayName: "QA CSV Asset",
+      tradingViewAliases: ["QA_CSV", "QAASSET"],
+      packIds: ["stocks"],
+    });
+  });
+
+
+  it("serializes canonical CSV source application and rejects a second stale preview", async () => {
+    const root = await mutableRepository();
+    const service = await createService(root);
+    const first = service.prepareRegistryCsvImport({
+      fileName: "first.csv",
+      csvText: "id,display_name,tradingview_symbol,currency,channel\ncsv_first,CSV First,NASDAQ:CSVFIRST,USD,stocks",
+    });
+    const second = service.prepareRegistryCsvImport({
+      fileName: "second.csv",
+      csvText: "id,display_name,tradingview_symbol,currency,channel\ncsv_second,CSV Second,NASDAQ:CSVSECOND,USD,stocks",
+    });
+
+    const [firstResult, secondResult] = await Promise.allSettled([
+      service.applyRegistryCsvImport(first.previewId, "APPLY REGISTRY CSV IMPORT"),
+      service.applyRegistryCsvImport(second.previewId, "APPLY REGISTRY CSV IMPORT"),
+    ]);
+    expect(firstResult.status).toBe("fulfilled");
+    expect(secondResult).toMatchObject({ status: "rejected", reason: { code: "stale_registry_state" } });
+    expect(service.getAsset("csv_first")).toMatchObject({ displayName: "CSV First" });
+    expect(() => service.getAsset("csv_second")).toThrowError(expect.objectContaining({ code: "asset_not_found" }));
+  });
+
+  it("returns a reviewable invalid CSV preview and refuses unknown preview application", async () => {
+    const service = await createService();
+    const preview = service.prepareRegistryCsvImport({
+      fileName: "invalid.csv",
+      csvText: "id,display_name,tradingview_symbol,currency,channel,pack_ids\naapl,Apple,NASDAQ:AAPL,USD,missing,unknown",
+    });
+    expect(preview.valid).toBe(false);
+    expect(preview.issues.map((entry) => entry.code)).toEqual(expect.arrayContaining(["asset_id_conflict", "unknown_channel", "unknown_pack"]));
+    await expect(service.applyRegistryCsvImport(preview.previewId, "APPLY REGISTRY CSV IMPORT")).rejects.toMatchObject({ code: "registry_csv_import_not_found" });
   });
 
   it("stores canonical Registry logos with exact-current hash protection", async () => {

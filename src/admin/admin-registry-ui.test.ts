@@ -9,10 +9,26 @@ describe("Operational Registry UI", () => {
     for (const id of ["registry-search", "registry-previous", "registry-next", "registry-page-state", "registry-refresh"]) {
       expect(html).toContain(`id="${id}"`);
     }
-    expect(js).toContain("/api/v1/assets?q=${encodeURIComponent(query)}&offset=${offset}&limit=${state.registryLimit}");
+    expect(js).toContain("parameters.set(\"pack\", state.registryPackId)");
+    expect(js).toContain("/api/v1/assets?${parameters.toString()}");
     expect(js).not.toContain("/api/v1/assets?query=");
     expect(js).toContain("registrySearchGeneration");
     expect(js).toContain("generation !== state.registrySearchGeneration");
+  });
+
+  it("offers Pack pills that combine with text search and governed CSV review before application", async () => {
+    const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
+    const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
+    for (const id of [
+      "registry-pack-filters", "registry-import-csv", "registry-import-dialog", "registry-import-file",
+      "registry-review-import", "registry-apply-import", "registry-import-issues", "registry-download-template",
+    ]) expect(html).toContain(`id="${id}"`);
+    expect(js).toContain("renderRegistryPackFilters");
+    expect(js).toContain("state.registryPackId");
+    expect(js).toContain("/api/v1/registry/csv-import/preview?filename=");
+    expect(js).toContain('"Content-Type": "text/csv"');
+    expect(js).toContain('confirmation: "APPLY REGISTRY CSV IMPORT"');
+    expect(html).toContain("Current architecture permits at most one Pack membership per Asset");
   });
 
   it("revalidates exact Asset IDs and exposes the most important canonical metadata", async () => {

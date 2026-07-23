@@ -31,6 +31,8 @@ export type AdminErrorCode =
   | "display_conflict"
   | "pack_builder_transaction_failed"
   | "invalid_asset_registration_input"
+  | "invalid_registry_csv_import"
+  | "registry_csv_import_not_found"
   | "invalid_asset_registration_proposal"
   | "invalid_asset_registration_planning_authorization"
   | "invalid_asset_registration_application_plan"

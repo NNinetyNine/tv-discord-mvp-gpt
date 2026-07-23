@@ -211,6 +211,20 @@
     </section>
 
     <section class="view" data-view-panel="packs" hidden>
+      <section class="window pack-role-window" aria-labelledby="pack-role-heading">
+        <header class="window-header">
+          <div><p class="micro-label">CONFIRMED OPERATIONAL LAYER</p><h1 id="pack-role-heading">WHAT A PACK DOES</h1></div>
+          <span class="context-fact">NOT ASSET METADATA</span>
+        </header>
+        <p class="window-help">A Pack is an ordered publication batch. It defines capture scope, completeness, review order, Release history, the configured forum route, and persistent Pack/Asset thread ownership. Registry remains the source of Asset identity.</p>
+        <div class="pack-role-grid">
+          <div><strong>ORDERED BATCH</strong><span>Defines which Registry Assets belong together and their workflow order.</span></div>
+          <div><strong>READINESS GATE</strong><span>All required members must be captured, accepted, staged, and valid before publication.</span></div>
+          <div><strong>RELEASE BOUNDARY</strong><span>Archive custody, interrupted Release recovery, and publication history are recorded per Pack.</span></div>
+          <div><strong>FORUM ROUTE</strong><span>The Pack logical channel resolves the Discord forum; each Pack/Asset pair owns one persistent thread binding.</span></div>
+        </div>
+      </section>
+
       <section class="window pack-controls" aria-labelledby="pack-controls-heading">
         <header class="window-header">
           <div><p class="micro-label">PACK BUILDER</p><h1 id="pack-controls-heading">PACK IDENTITY</h1></div>
@@ -310,6 +324,7 @@
           <div><p class="micro-label">CANONICAL ASSET CUSTODY</p><h1 id="registry-heading">REGISTRY</h1></div>
           <div class="window-header-actions">
             <span id="registry-context" class="context-fact">LOADING ASSETS</span>
+            <button id="registry-import-csv" class="outline-action" type="button">IMPORT CSV</button>
             <button id="registry-add-asset" class="primary-action" type="button">ADD ASSET</button>
           </div>
         </header>
@@ -317,6 +332,10 @@
         <div class="registry-toolbar">
           <label class="registry-search"><span>SEARCH ASSETS</span><input id="registry-search" type="search" placeholder="Display name, TradingView, currency, channel, Pack, alias, or ID"></label>
           <button id="registry-refresh" class="outline-action" type="button">REFRESH CANONICAL STATE</button>
+        </div>
+        <div class="registry-pack-filter-bar" aria-labelledby="registry-pack-filter-label">
+          <span id="registry-pack-filter-label">FILTER BY PACK</span>
+          <div id="registry-pack-filters" class="registry-pack-filters" role="group" aria-label="Registry Pack filters"></div>
         </div>
         <div class="registry-layout">
           <div class="registry-results">
@@ -392,6 +411,41 @@
       <button id="registry-editor-cancel" class="outline-action" type="button">CANCEL</button>
       <button id="registry-review-change" class="outline-action" type="button">REVIEW CHANGE</button>
       <button id="registry-apply-change" class="primary-action" type="button" disabled>APPLY REGISTRY CHANGE</button>
+    </div>
+  </aside>
+
+  <button id="registry-import-backdrop" class="registry-editor-backdrop" type="button" aria-label="Close Registry CSV import" hidden></button>
+  <aside id="registry-import-dialog" class="registry-editor registry-import-dialog" role="dialog" aria-modal="true" aria-labelledby="registry-import-heading" aria-describedby="registry-import-guidance" tabindex="-1" hidden>
+    <header class="window-header">
+      <div><p class="micro-label">VALIDATE BEFORE WRITE</p><h2 id="registry-import-heading">IMPORT REGISTRY CSV</h2></div>
+      <button id="registry-import-close" class="icon-action" type="button" aria-label="Close Registry CSV import">×</button>
+    </header>
+    <p id="registry-import-guidance" class="window-help">Import new Assets only. VisionX validates every row, all identifiers, channels, optional aliases, and optional Pack membership before one atomic Registry transaction is available.</p>
+    <div class="registry-import-fields">
+      <label><span>CSV FILE</span><input id="registry-import-file" type="file" accept=".csv,text/csv"></label>
+      <p id="registry-import-file-state">SELECT A UTF-8 CSV FILE</p>
+      <details class="technical-details">
+        <summary>CSV FORMAT</summary>
+        <p class="window-help">Required headers: <code>id,display_name,tradingview_symbol,currency,channel</code>. Optional: <code>aliases,pack_ids</code>. Separate aliases or Pack IDs with <code>|</code>. Current architecture permits at most one Pack membership per Asset.</p>
+        <button id="registry-download-template" class="outline-action compact-action" type="button">DOWNLOAD TEMPLATE</button>
+      </details>
+    </div>
+    <section id="registry-import-preview" class="registry-change-preview registry-import-preview" hidden>
+      <h3 id="registry-import-preview-title">CSV REVIEW</h3>
+      <div id="registry-import-summary"></div>
+      <div id="registry-import-issues" class="registry-import-issues" hidden></div>
+      <div class="table-wrap registry-import-table-wrap">
+        <table>
+          <thead><tr><th>ROW</th><th>DISPLAY NAME</th><th>TRADINGVIEW</th><th>CURRENCY</th><th>CHANNEL</th><th>PACK</th><th>ID</th></tr></thead>
+          <tbody id="registry-import-body"></tbody>
+        </table>
+      </div>
+      <details class="technical-details"><summary>TECHNICAL EVIDENCE</summary><pre id="registry-import-technical"></pre></details>
+    </section>
+    <div class="registry-editor-actions">
+      <button id="registry-import-cancel" class="outline-action" type="button">CANCEL</button>
+      <button id="registry-review-import" class="outline-action" type="button" disabled>REVIEW CSV</button>
+      <button id="registry-apply-import" class="primary-action" type="button" disabled>APPLY CSV IMPORT</button>
     </div>
   </aside>
 

@@ -6,8 +6,8 @@ source tree and is intentionally conservative. Nothing listed here is removed.
 ## Exposed and working in Administration
 
 - Canonical status and source-integrity summary.
-- Registry search, exact-ID inspection, governed create/update/retire, and
-  canonical logo custody.
+- Registry search, Pack-filter pills, exact-ID inspection, governed create/update/retire,
+  validated additions-only CSV import, and canonical logo custody.
 - Registry-only selection when creating a Pack.
 - Pack capture sessions, Downloads-folder scanning, manual import/review,
   accepted revisions, individual revision deletion, and Pack reset.
@@ -55,9 +55,7 @@ must not be removed before reference and deployment analysis.
 - No UI for publishing, multi-Pack selection, interrupted Release recovery, or
   Release history.
 - No complete maintenance surface for existing Packs.
-- No CSV Registry import.
-- No Registry Pack-filter pills.
-- No UI for aliases despite canonical support.
+- CSV onboarding can set aliases for new Assets, but there is still no governed UI for editing aliases on existing Assets.
 - Missing-metadata Assets were hidden from the renderer before Step 537.
 - Registry Add/Edit was inaccessible because of the stacking-context defect
   fixed in Step 537.

@@ -26,6 +26,15 @@ import { applyCreatePackWithMissingAssetsFile } from "../application/create-pack
 import type { Pack } from "../packs/packs.ts";
 import { buildPacks } from "../packs/packs.ts";
 import { buildRegistry, retireAsset, RegistryError } from "../registry/registry.ts";
+import {
+  previewRegistryCsvImport,
+  type RegistryCsvImportIssue,
+  type RegistryCsvImportRow,
+} from "../registry/registry-csv-import.ts";
+import {
+  applyRegistryCsvImportFile,
+  RegistryCsvImportFileError,
+} from "../registry/registry-csv-import-file.ts";
 import { createResolver } from "../resolver/index.ts";
 import {
   auditAssetMarketIdentity,
@@ -224,6 +233,7 @@ export interface AdminAssetSummary {
 export interface AdminAssetSearchResult {
   readonly schemaVersion: 1;
   readonly query: string;
+  readonly packId: string | null;
   readonly offset: number;
   readonly limit: number;
   readonly total: number;
@@ -247,6 +257,34 @@ export interface AdminRegistryAssetChangePreview {
     readonly logoChanged: false;
     readonly discordContacted: false;
   };
+}
+
+export interface AdminRegistryCsvImportPreview {
+  readonly schemaVersion: 1;
+  readonly previewId: string;
+  readonly fileName: string;
+  readonly valid: boolean;
+  readonly rowCount: number;
+  readonly additionCount: number;
+  readonly packMembershipCount: number;
+  readonly rows: readonly RegistryCsvImportRow[];
+  readonly issues: readonly RegistryCsvImportIssue[];
+  readonly sourceState: {
+    readonly registrySha256: string;
+    readonly packsSha256: string;
+    readonly channelsSha256: string;
+  };
+  readonly effects: {
+    readonly registryChanged: boolean;
+    readonly packMembershipChanged: boolean;
+    readonly discordContacted: false;
+  };
+}
+
+interface AdminRegistryCsvImportRecord {
+  readonly preview: AdminRegistryCsvImportPreview;
+  readonly registryAfterBytes: Buffer;
+  readonly packsAfterBytes: Buffer;
 }
 
 export interface AdminRegistryAssetRetirementPreview {
@@ -608,6 +646,8 @@ export class AdminService {
   #packMutationLock: Promise<void> = Promise.resolve();
   #threadMutationLock: Promise<void> = Promise.resolve();
   #registryLogoMutationLock: Promise<void> = Promise.resolve();
+  #canonicalSourceMutationLock: Promise<void> = Promise.resolve();
+  #registryCsvImports = new Map<string, AdminRegistryCsvImportRecord>();
   readonly #openDiscordForumSession?: AdminDiscordForumSessionFactory;
   readonly #openDiscordForumProvisioningSession?: AdminDiscordForumProvisioningSessionFactory;
 
@@ -1010,6 +1050,15 @@ export class AdminService {
     const prior = this.#registryLogoMutationLock;
     let release!: () => void;
     this.#registryLogoMutationLock = new Promise<void>((resolvePromise) => { release = resolvePromise; });
+    await prior;
+    try { return await operation(); }
+    finally { release(); }
+  }
+
+  async #withCanonicalSourceMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const prior = this.#canonicalSourceMutationLock;
+    let release!: () => void;
+    this.#canonicalSourceMutationLock = new Promise<void>((resolvePromise) => { release = resolvePromise; });
     await prior;
     try { return await operation(); }
     finally { release(); }
@@ -2571,6 +2620,8 @@ export class AdminService {
       );
     }
 
+    return this.#withCanonicalSourceMutationLock(async () => {
+      await this.refresh();
     const state =
       await this.packBuilder.readState(packId);
 
@@ -2719,6 +2770,7 @@ export class AdminService {
       receipt: applied.receipt,
       status: this.status(),
     });
+    });
   }
 
   async packCreationState(packId: string): Promise<Readonly<Record<string, unknown>>> {
@@ -2732,8 +2784,12 @@ export class AdminService {
     return Object.freeze({ draft, bytes });
   }
 
-  searchAssets(options: { readonly query?: string; readonly offset?: number; readonly limit?: number } = {}): AdminAssetSearchResult {
+  searchAssets(options: { readonly query?: string; readonly packId?: string; readonly offset?: number; readonly limit?: number } = {}): AdminAssetSearchResult {
     const query = options.query?.trim() ?? "";
+    const packId = options.packId?.trim() || null;
+    if (packId !== null && !this.#state.byPackId.has(packId)) {
+      throw new AdminError("pack_not_found", `Pack ${packId} was not found.`, 404, { packId });
+    }
     const offset = options.offset ?? 0;
     const limit = options.limit ?? DEFAULT_ASSET_SEARCH_LIMIT;
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_ASSET_SEARCH_LIMIT) {
@@ -2746,6 +2802,7 @@ export class AdminService {
     const matching = [...this.#state.assets]
       .filter((asset) => {
         const packIds = this.#state.assetPackIds.get(asset.id) ?? [];
+        if (packId !== null && !packIds.includes(packId)) return false;
         const searchable = [
           asset.id,
           asset.display,
@@ -2763,6 +2820,7 @@ export class AdminService {
     return Object.freeze({
       schemaVersion: 1,
       query,
+      packId,
       offset,
       limit,
       total: matching.length,
@@ -2927,6 +2985,123 @@ export class AdminService {
     return this.applyAssetRegistration(changeId, "APPLY ASSET SOURCE CHANGE");
   }
 
+  prepareRegistryCsvImport(input: { readonly fileName: unknown; readonly csvText: unknown }): AdminRegistryCsvImportPreview {
+    if (
+      typeof input.fileName !== "string" ||
+      input.fileName.trim() !== input.fileName ||
+      input.fileName.length < 1 || input.fileName.length > 255 ||
+      /[\u0000-\u001F\u007F]/u.test(input.fileName)
+    ) {
+      throw new AdminError("invalid_request", "CSV filename must be a single-line value of 1 to 255 characters.");
+    }
+    if (typeof input.csvText !== "string") throw new AdminError("invalid_request", "CSV import body must be UTF-8 text.");
+    const candidate = previewRegistryCsvImport({
+      csvText: input.csvText,
+      rawRegistry: this.#state.rawRegistry,
+      rawPacks: this.#state.rawPacks,
+      channels: this.#state.rawChannels,
+      assets: this.#state.assets,
+      packs: this.#state.packs,
+    });
+    const sourceState = Object.freeze({
+      registrySha256: this.#state.registryFile.sha256,
+      packsSha256: this.#state.packsFile.sha256,
+      channelsSha256: this.#state.channelsFile.sha256,
+    });
+    const previewId = sha256(Buffer.from(JSON.stringify({
+      fileName: input.fileName,
+      csvSha256: sha256(Buffer.from(input.csvText, "utf8")),
+      sourceState,
+    }), "utf8"));
+    const valid = candidate.issues.length === 0 && candidate.registryAfterBytes !== null && candidate.packsAfterBytes !== null;
+    const preview: AdminRegistryCsvImportPreview = Object.freeze({
+      schemaVersion: 1,
+      previewId,
+      fileName: input.fileName,
+      valid,
+      rowCount: candidate.rows.length,
+      additionCount: valid ? candidate.rows.length : 0,
+      packMembershipCount: valid ? candidate.packMembershipCount : 0,
+      rows: candidate.rows,
+      issues: candidate.issues,
+      sourceState,
+      effects: Object.freeze({
+        registryChanged: valid && candidate.rows.length > 0,
+        packMembershipChanged: valid && candidate.packMembershipCount > 0,
+        discordContacted: false,
+      }),
+    });
+    if (valid) {
+      if (this.#registryCsvImports.size >= 20) {
+        const oldest = this.#registryCsvImports.keys().next().value as string | undefined;
+        if (oldest !== undefined) this.#registryCsvImports.delete(oldest);
+      }
+      this.#registryCsvImports.set(previewId, Object.freeze({
+        preview,
+        registryAfterBytes: candidate.registryAfterBytes as Buffer,
+        packsAfterBytes: candidate.packsAfterBytes as Buffer,
+      }));
+    }
+    return preview;
+  }
+
+  async applyRegistryCsvImport(previewId: string, confirmation: unknown): Promise<Readonly<Record<string, unknown>>> {
+    if (confirmation !== "APPLY REGISTRY CSV IMPORT") {
+      throw new AdminError("application_confirmation_invalid", "Confirmation must equal APPLY REGISTRY CSV IMPORT exactly.");
+    }
+    const record = this.#registryCsvImports.get(previewId);
+    if (record === undefined) throw new AdminError("registry_csv_import_not_found", "CSV import preview was not found or is no longer valid.", 404);
+    return this.#withCanonicalSourceMutationLock(async () => {
+      await this.refresh();
+      if (
+        this.#state.registryFile.sha256 !== record.preview.sourceState.registrySha256 ||
+        this.#state.packsFile.sha256 !== record.preview.sourceState.packsSha256 ||
+        this.#state.channelsFile.sha256 !== record.preview.sourceState.channelsSha256
+      ) {
+        this.#registryCsvImports.delete(previewId);
+        throw new AdminError("stale_registry_state", "Registry, Pack, or channel state changed after CSV review.", 409);
+      }
+      try {
+        const applied = await applyRegistryCsvImportFile({
+          repositoryRoot: this.repositoryRoot,
+          expectedRegistrySha256: record.preview.sourceState.registrySha256,
+          expectedPacksSha256: record.preview.sourceState.packsSha256,
+          expectedChannelsSha256: record.preview.sourceState.channelsSha256,
+          registryAfterBytes: record.registryAfterBytes,
+          packsAfterBytes: record.packsAfterBytes,
+        });
+        this.#registryCsvImports.delete(previewId);
+        await this.refresh();
+        return Object.freeze({
+          schemaVersion: 1,
+          previewId,
+          importedAssetCount: record.preview.additionCount,
+          packMembershipCount: record.preview.packMembershipCount,
+          sourceState: applied,
+          effects: Object.freeze({
+            registryChanged: true,
+            packMembershipChanged: record.preview.packMembershipCount > 0,
+            discordContacted: false,
+          }),
+          status: this.status(),
+        });
+      } catch (error) {
+        if (error instanceof RegistryCsvImportFileError) {
+          if (error.code === "stale_source_state") {
+            this.#registryCsvImports.delete(previewId);
+            throw new AdminError("stale_registry_state", error.message, 409);
+          }
+          if (error.code === "invalid_candidate") {
+            this.#registryCsvImports.delete(previewId);
+            throw new AdminError("invalid_registry_csv_import", error.message);
+          }
+          throw new AdminError(error.code === "rollback_failed" ? "rollback_failed" : "source_write_failed", error.message, 500);
+        }
+        throw error;
+      }
+    });
+  }
+
   async inspectRegistryAssetLogo(assetId: string): Promise<Readonly<Record<string, unknown>>> {
     this.getAsset(assetId);
     try {
@@ -3027,32 +3202,35 @@ export class AdminService {
   }
 
   async retireRegistryAsset(assetId: string, previewId: unknown, confirmation: unknown): Promise<Readonly<Record<string, unknown>>> {
-    const preview = await this.previewRegistryAssetRetirement(assetId);
-    if (preview.previewId !== previewId) {
-      throw new AdminError("stale_asset_state", "Registry, Pack membership, or Thread routing changed after the retirement preview.", 409);
-    }
-    if (preview.blockingPackIds.length > 0 || preview.blockingThreadRoutes.length > 0) {
-      throw new AdminError("stale_asset_state", "Remove the Asset from every Pack and local Thread route before retiring it.", 409, {
-        packIds: preview.blockingPackIds,
-        threadRoutes: preview.blockingThreadRoutes,
-      });
-    }
-    if (confirmation !== `RETIRE ${assetId.toUpperCase()}`) {
-      throw new AdminError("application_confirmation_invalid", `Confirmation must equal RETIRE ${assetId.toUpperCase()} exactly.`);
-    }
-    try {
-      retireAsset(
-        join(this.repositoryRoot, REGISTRY_RELATIVE_PATH),
-        join(this.repositoryRoot, CHANNELS_RELATIVE_PATH),
-        assetId,
-        new Set(this.#state.packs.flatMap((pack) => pack.assets)),
-      );
-    } catch (error) {
-      if (error instanceof RegistryError) throw new AdminError("stale_asset_state", error.message, 409);
-      throw error;
-    }
-    await this.refresh();
-    return Object.freeze({ schemaVersion: 1, assetId, retired: true, canonicalLogoRetained: true, status: this.status() });
+    return this.#withCanonicalSourceMutationLock(async () => {
+      await this.refresh();
+      const preview = await this.previewRegistryAssetRetirement(assetId);
+      if (preview.previewId !== previewId) {
+        throw new AdminError("stale_asset_state", "Registry, Pack membership, or Thread routing changed after the retirement preview.", 409);
+      }
+      if (preview.blockingPackIds.length > 0 || preview.blockingThreadRoutes.length > 0) {
+        throw new AdminError("stale_asset_state", "Remove the Asset from every Pack and local Thread route before retiring it.", 409, {
+          packIds: preview.blockingPackIds,
+          threadRoutes: preview.blockingThreadRoutes,
+        });
+      }
+      if (confirmation !== `RETIRE ${assetId.toUpperCase()}`) {
+        throw new AdminError("application_confirmation_invalid", `Confirmation must equal RETIRE ${assetId.toUpperCase()} exactly.`);
+      }
+      try {
+        retireAsset(
+          join(this.repositoryRoot, REGISTRY_RELATIVE_PATH),
+          join(this.repositoryRoot, CHANNELS_RELATIVE_PATH),
+          assetId,
+          new Set(this.#state.packs.flatMap((pack) => pack.assets)),
+        );
+      } catch (error) {
+        if (error instanceof RegistryError) throw new AdminError("stale_asset_state", error.message, 409);
+        throw error;
+      }
+      await this.refresh();
+      return Object.freeze({ schemaVersion: 1, assetId, retired: true, canonicalLogoRetained: true, status: this.status() });
+    });
   }
 
   listPacks(): readonly AdminPackSummary[] {
@@ -3226,6 +3404,8 @@ export class AdminService {
   async applyPackPromotion(draftId: string, promotionId: string, confirmation: unknown): Promise<{ readonly promotionId: string; readonly receiptSha256: string; readonly receiptBytes: number; readonly receipt: unknown }> {
     if (confirmation === undefined || confirmation === null || confirmation === "") throw new AdminError("application_confirmation_required", "Exact application confirmation is required.");
     if (confirmation !== "APPLY PACK SOURCE CHANGE") throw new AdminError("application_confirmation_invalid", "Confirmation must equal APPLY PACK SOURCE CHANGE exactly.");
+    return this.#withCanonicalSourceMutationLock(async () => {
+      await this.refresh();
     const names = {
       promotionRequestPath: "promotion-request.json", proposalPath: "pack-proposal.json", planningAuthorizationPath: "planning-authorization.json",
       planPath: "pack-application-plan.json", patchPath: "pack-source.patch", sourceChangePath: "pack-source-change.json",
@@ -3238,6 +3418,7 @@ export class AdminService {
     if (!result.ok) throw new AdminError(result.reason as never, result.detail, result.reason === "output_already_exists" ? 409 : 400);
     await this.refresh();
     return Object.freeze({ promotionId, receiptSha256: result.receiptSha256, receiptBytes: result.receiptBytes, receipt: result.receipt });
+    });
   }
 
   async packPromotionApplicationStatus(draftId: string, promotionId: string): Promise<Readonly<Record<string, unknown>>> {
@@ -3476,6 +3657,8 @@ export class AdminService {
     if (confirmation !== "APPLY ASSET SOURCE CHANGE") {
       throw new AdminError("application_confirmation_invalid", "Confirmation must equal APPLY ASSET SOURCE CHANGE exactly.");
     }
+    return this.#withCanonicalSourceMutationLock(async () => {
+      await this.refresh();
     if ((await this.assetRegistrations.listArtifacts(registrationId)).some((artifact) => artifact.name === "asset-source-application.json")) {
       throw new AdminError("application_already_completed", "This exact Asset source application already has a successful receipt.", 409);
     }
@@ -3500,6 +3683,7 @@ export class AdminService {
       receiptBytes: receiptBytes.length,
       receipt: result.receipt,
       status: await this.assetRegistrationStatus(registrationId),
+    });
     });
   }
 

@@ -23,6 +23,8 @@ const state = {
   threadForumInspection: null,
   threadLogo: null,
   registryQuery: "",
+  registryPackId: "",
+  registryPacks: [],
   registryOffset: 0,
   registryLimit: 25,
   registryTotal: 0,
@@ -37,6 +39,10 @@ const state = {
   registryChangePreview: null,
   registryChangeBusy: false,
   registryEditorReturnFocus: null,
+  registryImportFile: null,
+  registryImportPreview: null,
+  registryImportBusy: false,
+  registryImportReturnFocus: null,
   packAssetSearchGeneration: 0,
   packAssetSearchTimer: null,
   rendererAssetSearchGeneration: 0,
@@ -1058,6 +1064,31 @@ async function selectRegistryAsset(assetId) {
   }
 }
 
+function renderRegistryPackFilters() {
+  const container = qs("#registry-pack-filters");
+  const options = [{ id: "", displayName: "All Assets", membershipCount: state.status?.registryAssetCount ?? 0 }, ...state.registryPacks];
+  container.innerHTML = options.map((pack) => `
+    <button class="registry-pack-filter" type="button" data-registry-pack-filter="${escapeAttribute(pack.id)}" aria-pressed="${pack.id === state.registryPackId ? "true" : "false"}">
+      ${escapeHtml(pack.displayName.toUpperCase())} · ${pack.membershipCount}
+    </button>`).join("");
+  qsa("[data-registry-pack-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const next = button.dataset.registryPackFilter ?? "";
+      if (next === state.registryPackId || state.registryBusy) return;
+      state.registryPackId = next;
+      state.registryOffset = 0;
+      renderRegistryPackFilters();
+      void loadRegistry({ offset: 0 }).catch((error) => showMessage(error.message));
+    });
+  });
+}
+
+async function loadRegistryPacks() {
+  state.registryPacks = await api("/api/v1/packs");
+  if (state.registryPackId && !state.registryPacks.some((pack) => pack.id === state.registryPackId)) state.registryPackId = "";
+  renderRegistryPackFilters();
+}
+
 function renderRegistryResults() {
   const body = qs("#registry-body");
   if (state.registryAssets.length === 0) {
@@ -1079,7 +1110,8 @@ function renderRegistryResults() {
 
   const first = state.registryTotal === 0 ? 0 : state.registryOffset + 1;
   const last = Math.min(state.registryOffset + state.registryAssets.length, state.registryTotal);
-  qs("#registry-context").textContent = `${state.registryTotal} MATCH${state.registryTotal === 1 ? "" : "ES"}`;
+  const selectedPack = state.registryPacks.find((pack) => pack.id === state.registryPackId);
+  qs("#registry-context").textContent = `${state.registryTotal} MATCH${state.registryTotal === 1 ? "" : "ES"}${selectedPack ? ` · ${selectedPack.displayName.toUpperCase()}` : ""}`;
   qs("#registry-page-state").textContent = state.registryTotal === 0 ? "0 RESULTS" : `${first}–${last} OF ${state.registryTotal}`;
   qs("#registry-previous").disabled = state.registryBusy || state.registryOffset === 0;
   qs("#registry-next").disabled = state.registryBusy || state.registryOffset + state.registryAssets.length >= state.registryTotal;
@@ -1096,7 +1128,9 @@ async function loadRegistry(options = {}) {
   qs("#registry-previous").disabled = true;
   qs("#registry-next").disabled = true;
   try {
-    const result = await api(`/api/v1/assets?q=${encodeURIComponent(query)}&offset=${offset}&limit=${state.registryLimit}`);
+    const parameters = new URLSearchParams({ q: query, offset: String(offset), limit: String(state.registryLimit) });
+    if (state.registryPackId) parameters.set("pack", state.registryPackId);
+    const result = await api(`/api/v1/assets?${parameters.toString()}`);
     if (generation !== state.registrySearchGeneration) return;
     if (result.total > 0 && result.assets.length === 0 && offset >= result.total) {
       const lastOffset = Math.floor((result.total - 1) / state.registryLimit) * state.registryLimit;
@@ -1138,6 +1172,7 @@ async function refreshRegistryState() {
     await api("/api/v1/refresh", { method: "POST" });
     state.renderOptions = null;
     await refreshStatus();
+    await loadRegistryPacks();
     await loadRegistry({ query: qs("#registry-search").value, offset: 0 });
     if (selectedId !== null) await selectRegistryAsset(selectedId);
     showMessage("Canonical Registry, Pack, and channel state refreshed. No source file was changed.", false);
@@ -1240,6 +1275,171 @@ function closeRegistryEditor(options = {}) {
   const returnFocus = state.registryEditorReturnFocus;
   state.registryEditorReturnFocus = null;
   if (restoreFocus && returnFocus?.isConnected) returnFocus.focus();
+}
+
+function resetRegistryImportPreview() {
+  state.registryImportPreview = null;
+  qs("#registry-import-preview").hidden = true;
+  qs("#registry-import-summary").innerHTML = "";
+  qs("#registry-import-issues").hidden = true;
+  qs("#registry-import-issues").innerHTML = "";
+  qs("#registry-import-body").innerHTML = "";
+  qs("#registry-import-technical").textContent = "";
+  qs("#registry-apply-import").disabled = true;
+}
+
+function registryImportFocusableElements() {
+  return qsa("#registry-import-dialog button, #registry-import-dialog input, #registry-import-dialog summary")
+    .filter((element) => !element.disabled && !element.hidden && element.getAttribute("aria-hidden") !== "true" && element.offsetParent !== null);
+}
+
+function handleRegistryImportKeydown(event) {
+  const dialog = qs("#registry-import-dialog");
+  if (dialog.hidden) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeRegistryImport();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = registryImportFocusableElements();
+  if (focusable.length === 0) {
+    event.preventDefault();
+    dialog.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function openRegistryImport() {
+  state.registryImportReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  state.registryImportFile = null;
+  state.registryImportBusy = false;
+  qs("#registry-import-file").value = "";
+  qs("#registry-import-file-state").textContent = "SELECT A UTF-8 CSV FILE";
+  qs("#registry-review-import").disabled = true;
+  resetRegistryImportPreview();
+  qs("#registry-import-backdrop").hidden = false;
+  qs("#registry-import-dialog").hidden = false;
+  document.body.classList.add("registry-editor-open");
+  requestAnimationFrame(() => qs("#registry-import-file").focus());
+}
+
+function closeRegistryImport(options = {}) {
+  const restoreFocus = options.restoreFocus !== false;
+  qs("#registry-import-dialog").hidden = true;
+  qs("#registry-import-backdrop").hidden = true;
+  document.body.classList.remove("registry-editor-open");
+  resetRegistryImportPreview();
+  state.registryImportFile = null;
+  const returnFocus = state.registryImportReturnFocus;
+  state.registryImportReturnFocus = null;
+  if (restoreFocus && returnFocus?.isConnected) returnFocus.focus();
+}
+
+function setRegistryImportFile(file) {
+  state.registryImportFile = file;
+  resetRegistryImportPreview();
+  const valid = file !== null && file.size > 0 && file.size <= 2 * 1024 * 1024;
+  qs("#registry-review-import").disabled = !valid;
+  qs("#registry-import-file-state").textContent = file === null
+    ? "SELECT A UTF-8 CSV FILE"
+    : `${file.name} · ${file.size.toLocaleString()} BYTES${file.size > 2 * 1024 * 1024 ? " · EXCEEDS 2 MB LIMIT" : ""}`;
+}
+
+function renderRegistryImportPreview() {
+  const preview = state.registryImportPreview;
+  if (preview === null) return resetRegistryImportPreview();
+  qs("#registry-import-preview").hidden = false;
+  qs("#registry-import-preview-title").textContent = preview.valid ? "CSV READY TO APPLY" : "CSV REQUIRES CORRECTION";
+  qs("#registry-import-summary").innerHTML = preview.valid
+    ? `<p><strong>${preview.additionCount} NEW ASSET${preview.additionCount === 1 ? "" : "S"}</strong> validated from ${escapeHtml(preview.fileName)}. ${preview.packMembershipCount} Pack membership${preview.packMembershipCount === 1 ? "" : "s"} will be appended.</p><p>The Registry and Packs source files will be replaced as one rollback-protected transaction. No chart, Release, thread, or Discord operation occurs.</p>`
+    : `<p><strong>${preview.issues.length} BLOCKING ISSUE${preview.issues.length === 1 ? "" : "S"}</strong> found in ${escapeHtml(preview.fileName)}. Nothing can be applied until every issue is corrected.</p>`;
+  const issues = qs("#registry-import-issues");
+  issues.hidden = preview.issues.length === 0;
+  issues.innerHTML = preview.issues.length === 0 ? "" : `<ul>${preview.issues.map((entry) => `<li>${entry.rowNumber ? `ROW ${entry.rowNumber}${entry.field ? ` · ${escapeHtml(entry.field.toUpperCase())}` : ""}: ` : ""}${escapeHtml(entry.message)}</li>`).join("")}</ul>`;
+  qs("#registry-import-body").innerHTML = preview.rows.length === 0
+    ? '<tr><td colspan="7">NO ASSET ROWS AVAILABLE.</td></tr>'
+    : preview.rows.map((row) => `<tr>
+      <td>${row.rowNumber}</td>
+      <td><strong>${escapeHtml(row.displayName || "—")}</strong></td>
+      <td>${escapeHtml(row.tradingViewSymbol || "—")}</td>
+      <td>${escapeHtml(row.currency || "—")}</td>
+      <td>${escapeHtml(row.channel || "—")}</td>
+      <td>${escapeHtml(row.packIds.length ? row.packIds.join(", ") : "—")}</td>
+      <td class="secondary-id">${escapeHtml(row.id || "—")}</td>
+    </tr>`).join("");
+  qs("#registry-import-technical").textContent = JSON.stringify({ previewId: preview.previewId, sourceState: preview.sourceState, effects: preview.effects }, null, 2);
+  qs("#registry-apply-import").disabled = !preview.valid;
+}
+
+async function reviewRegistryCsvImport() {
+  const file = state.registryImportFile;
+  if (file === null || state.registryImportBusy) return;
+  state.registryImportBusy = true;
+  qs("#registry-review-import").disabled = true;
+  resetRegistryImportPreview();
+  try {
+    const preview = await api(`/api/v1/registry/csv-import/preview?filename=${encodeURIComponent(file.name)}`, {
+      method: "POST",
+      headers: { "Content-Type": "text/csv" },
+      body: file,
+    });
+    state.registryImportPreview = preview;
+    renderRegistryImportPreview();
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    state.registryImportBusy = false;
+    const selected = state.registryImportFile;
+    qs("#registry-review-import").disabled = selected === null || selected.size < 1 || selected.size > 2 * 1024 * 1024;
+  }
+}
+
+async function applyRegistryCsvImportFromUi() {
+  const preview = state.registryImportPreview;
+  if (preview === null || !preview.valid || state.registryImportBusy) return;
+  if (!window.confirm(`Import ${preview.additionCount} new Registry Asset${preview.additionCount === 1 ? "" : "s"}?\n\n${preview.packMembershipCount} Pack membership${preview.packMembershipCount === 1 ? "" : "s"} will also be appended. The operation is atomic and does not contact Discord.`)) return;
+  state.registryImportBusy = true;
+  qs("#registry-apply-import").disabled = true;
+  try {
+    const result = await api(`/api/v1/registry/csv-import/${encodeURIComponent(preview.previewId)}/apply`, {
+      method: "POST",
+      body: JSON.stringify({ confirmation: "APPLY REGISTRY CSV IMPORT" }),
+    });
+    await refreshStatus();
+    state.registryPackId = "";
+    await loadRegistryPacks();
+    qs("#registry-search").value = "";
+    await loadRegistry({ query: "", offset: 0 });
+    closeRegistryImport();
+    showMessage(`${result.importedAssetCount} Registry Asset${result.importedAssetCount === 1 ? "" : "s"} imported successfully. No Discord operation occurred.`, false);
+  } catch (error) {
+    showMessage(error.message);
+    resetRegistryImportPreview();
+    await refreshRegistryState().catch(() => undefined);
+  } finally {
+    state.registryImportBusy = false;
+    qs("#registry-apply-import").disabled = !state.registryImportPreview?.valid;
+  }
+}
+
+function downloadRegistryCsvTemplate() {
+  const csv = "id,display_name,tradingview_symbol,currency,channel,aliases,pack_ids\nnew_asset,New Asset,NASDAQ:NEWASSET,USD,stocks,NEW_ASSET,stocks\n";
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "visionx-registry-import-template.csv";
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function registryChangeValue() {
@@ -2068,7 +2268,10 @@ async function activateView(view) {
   qsa("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== view; });
   if (view === "workspace") await loadPackWorkspace();
   if (view === "threads") await loadThreadManagement();
-  if (view === "registry") await loadRegistry({ query: qs("#registry-search").value, offset: state.registryOffset });
+  if (view === "registry") {
+    await loadRegistryPacks();
+    await loadRegistry({ query: qs("#registry-search").value, offset: state.registryOffset });
+  }
   if (view === "renderer") await loadStandaloneRenderOptions();
 }
 
@@ -2082,6 +2285,15 @@ qs("#registry-search").addEventListener("input", (event) => scheduleRegistrySear
 qs("#registry-refresh").addEventListener("click", () => void refreshRegistryState().catch((error) => showMessage(error.message)));
 qs("#registry-previous").addEventListener("click", () => void loadRegistry({ offset: Math.max(0, state.registryOffset - state.registryLimit) }).catch((error) => showMessage(error.message)));
 qs("#registry-next").addEventListener("click", () => void loadRegistry({ offset: state.registryOffset + state.registryLimit }).catch((error) => showMessage(error.message)));
+qs("#registry-import-csv").addEventListener("click", openRegistryImport);
+qs("#registry-import-close").addEventListener("click", closeRegistryImport);
+qs("#registry-import-cancel").addEventListener("click", closeRegistryImport);
+qs("#registry-import-backdrop").addEventListener("click", closeRegistryImport);
+qs("#registry-import-dialog").addEventListener("keydown", handleRegistryImportKeydown);
+qs("#registry-import-file").addEventListener("change", (event) => setRegistryImportFile(event.target.files?.[0] ?? null));
+qs("#registry-review-import").addEventListener("click", () => void reviewRegistryCsvImport());
+qs("#registry-apply-import").addEventListener("click", () => void applyRegistryCsvImportFromUi());
+qs("#registry-download-template").addEventListener("click", downloadRegistryCsvTemplate);
 qs("#registry-add-asset").addEventListener("click", () => void openRegistryEditor("add").catch((error) => showMessage(error.message)));
 qs("#registry-edit-asset").addEventListener("click", () => void openRegistryEditor("edit").catch((error) => showMessage(error.message)));
 qs("#registry-editor-close").addEventListener("click", closeRegistryEditor);

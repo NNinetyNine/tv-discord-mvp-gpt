@@ -13,6 +13,7 @@ export const ADMIN_REQUEST_BODY_LIMIT = 65536 as const;
 export const ADMIN_ASSET_LOGO_BODY_LIMIT =
   ASSET_LOGO_POLICY.maximumBytes;
 export const ADMIN_STANDALONE_RENDER_BODY_LIMIT = 25 * 1024 * 1024;
+export const ADMIN_REGISTRY_CSV_BODY_LIMIT = 2 * 1024 * 1024;
 export const ADMIN_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
 export interface StartAdminHttpServerOptions {
@@ -249,6 +250,28 @@ async function readChartRenderBody(
     chunks.push(bytes);
   }
   return Buffer.concat(chunks);
+}
+
+async function readRegistryCsvBody(request: IncomingMessage): Promise<string> {
+  const contentType = request.headers["content-type"];
+  if (typeof contentType !== "string" || !/^text\/csv(?:\s*;|$)/iu.test(contentType)) {
+    throw new AdminError("invalid_content_type", "Registry CSV imports require Content-Type: text/csv.", 415);
+  }
+  const chunks: Buffer[] = [];
+  let length = 0;
+  for await (const chunk of request) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    length += bytes.length;
+    if (length > ADMIN_REGISTRY_CSV_BODY_LIMIT) {
+      throw new AdminError("request_body_too_large", `Registry CSV exceeds ${ADMIN_REGISTRY_CSV_BODY_LIMIT} bytes.`, 413);
+    }
+    chunks.push(bytes);
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
+  } catch {
+    throw new AdminError("invalid_request", "Registry CSV is not valid UTF-8.");
+  }
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
@@ -701,9 +724,10 @@ async function routeApi(
   }
   if (pathname === "/api/v1/refresh" && method === "POST") return ok(response, await service.refresh());
   if (pathname === "/api/v1/assets" && method === "GET") {
-    optionalSearchParameters(url, ["q", "offset", "limit"], "Asset search request");
+    optionalSearchParameters(url, ["q", "pack", "offset", "limit"], "Asset search request");
     return ok(response, service.searchAssets({
       query: url.searchParams.get("q") ?? "",
+      packId: url.searchParams.get("pack") ?? undefined,
       offset: parseInteger(url.searchParams.get("offset"), 0),
       limit: parseInteger(url.searchParams.get("limit"), 50),
     }));
@@ -713,6 +737,20 @@ async function routeApi(
   if (pathname === "/api/v1/registry/options" && method === "GET") {
     exactSearchParameters(url, [], "Registry options request");
     return ok(response, service.registryOptions());
+  }
+  if (pathname === "/api/v1/registry/csv-import/preview") {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, ["filename"], "Registry CSV preview request");
+    const csvText = await readRegistryCsvBody(request);
+    return ok(response, service.prepareRegistryCsvImport({ fileName: url.searchParams.get("filename"), csvText }), 201);
+  }
+  const registryCsvApply = /^\/api\/v1\/registry\/csv-import\/([a-f0-9]{64})\/apply$/u.exec(pathname);
+  if (registryCsvApply !== null) {
+    if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Registry CSV application body must be an object.");
+    exactFields(body, ["confirmation"], "Registry CSV application body");
+    return ok(response, await service.applyRegistryCsvImport(registryCsvApply[1] ?? "", body.confirmation));
   }
   if (pathname === "/api/v1/registry/asset-changes/preview") {
     if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
