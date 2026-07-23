@@ -92,3 +92,17 @@ Status and filename audits are read-only. TradingView browser automation, button
 inspection, snapshot experiments, fixture posting, and legacy-runtime helpers
 remain development or recovery tools and are deliberately absent from primary
 Administration navigation. No script, configuration, or archive is removed.
+
+## Step 542 design-language decision
+
+The Administration interface now uses one VisionX visual system across
+Workspace, Threads, Server, Packs, Archive, Render, Registry, dialogs, tables,
+and technical evidence. This is a presentation-only consolidation. Existing
+navigation targets, element IDs, confirmations, API routes, governed write
+paths, and read-only boundaries remain unchanged.
+
+The earlier fixed minimum viewport width was removed. Responsive rules preserve
+all controls by reflowing grids, stacking the Registry inspector, allowing
+navigation and tables to scroll horizontally, and expanding dialogs to the
+narrow viewport. Motion is reduced to effectively zero when the operating
+system requests reduced motion. No hidden functionality was added or removed.

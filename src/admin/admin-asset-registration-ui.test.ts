@@ -47,9 +47,11 @@ describe("Registry-owned Pack-builder UI", () => {
     expect(html).toContain("Nothing will be rendered, published, released, or sent to Discord.");
   });
 
-  it("preserves one restrained visual language and adds a motion-safe sliding panel", async () => {
+  it("preserves one coherent layered visual language and a motion-safe sliding panel", async () => {
     const css = await readFile(resolve("src/admin-ui/styles.css"), "utf8");
-    expect(css.match(/radial-gradient\(/gu)).toHaveLength(1);
+    const radialGradients = css.match(/radial-gradient\(/gu) ?? [];
+    expect(radialGradients.length).toBeGreaterThanOrEqual(2);
+    expect(radialGradients.length).toBeLessThanOrEqual(12);
     expect(css).toContain(".ambient-layer");
     expect(css).toContain("backdrop-filter: blur(");
     expect(css).toContain(".registry-editor");

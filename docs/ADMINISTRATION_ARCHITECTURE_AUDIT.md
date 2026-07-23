@@ -240,3 +240,17 @@ Specialist TradingView/browser and fixture scripts remain explicitly classified
 as development or recovery surfaces. Their continued existence is not evidence
 that they belong in primary Administration navigation, and no cleanup is
 performed in this milestone.
+
+## Step 542 presentation-system boundary
+
+The full VisionX design language is confined to the static Administration
+presentation layer. The shell keeps all existing navigation values, element
+IDs, route calls, confirmation phrases, and governed boundaries. No source,
+workspace, Discord, publishing, Release, migration, maintenance, or archive
+behavior is coupled to a visual token or viewport state.
+
+The responsive system removes the former fixed-width floor while preserving
+access to dense operational data through reflow and horizontal table scrolling.
+Decorative motion is progressive enhancement and is explicitly neutralized for
+reduced-motion users. Existing local branding assets are reused; no external
+font, stylesheet, script, image, telemetry, or network dependency is added.

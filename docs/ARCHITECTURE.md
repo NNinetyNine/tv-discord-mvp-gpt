@@ -303,3 +303,17 @@ Administration workspace and is not moved into repository source.
 Read-only market-identity and export audits are service projections over the
 existing audit, resolver, and duplicate-grouping modules. Specialist browser
 scripts remain development/recovery tooling rather than a second operator UI.
+
+## Administration design-system boundary
+
+The Step 542 design language is implemented entirely in the static
+Administration shell. `index.html` adds only local presentation metadata and a
+shell class; `styles.css` owns the visual tokens, layered surfaces, responsive
+layout, and motion policy. No domain or HTTP service consumes design state.
+
+The design retains every existing element ID and route contract. Responsive
+behavior rearranges controls but does not hide capabilities, and narrow tables
+remain horizontally inspectable. Motion is progressive enhancement under
+`prefers-reduced-motion: no-preference`; the explicit reduced-motion rule
+collapses animation and transition duration. No external visual dependency is
+introduced.
