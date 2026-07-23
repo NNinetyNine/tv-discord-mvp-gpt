@@ -53,3 +53,7 @@ A Pack is capture-session ready only when:
 
 This milestone exposes the readiness fact but does not publish, create a
 Release, contact Discord, or change Discord routing.
+
+Confirmed renders appear in Pack Progress as versioned Workspace revisions.
+See `docs/PACK_REVISION_HISTORY.md` for preview, confirmation,
+single-revision deletion, and current-revision restoration behavior.

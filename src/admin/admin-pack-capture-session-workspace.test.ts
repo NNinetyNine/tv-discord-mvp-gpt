@@ -171,4 +171,36 @@ describe("Admin Pack capture sessions", () => {
       missingAssetIds: ["btc", "eth"],
     });
   });
+
+  it("removes matching accepted revisions so deletion or reset cannot leave false readiness", async () => {
+    const { downloads, sessions } = await fixture();
+    const started = await sessions.start(pack, now(10, 0));
+    await writeFile(join(downloads, "BTCUSD_2026-07-23_10-05-00.png"), Buffer.from("btc"));
+    await writeFile(join(downloads, "ETHUSD_2026-07-23_10-06-00.png"), Buffer.from("eth"));
+    const plan = await sessions.planScan(pack, resolver, now(10, 10));
+    const queued = plan.queued.map((item, index) => ({
+      ...item,
+      previewId: `${index + 1}`.repeat(32),
+    }));
+    await sessions.commitScan(pack, started.sessionId ?? "", queued);
+    await sessions.markAccepted(queued[0]?.previewId ?? "", 2, now(10, 11));
+    await sessions.markAccepted(queued[1]?.previewId ?? "", 1, now(10, 12));
+    expect((await sessions.state(pack)).publishReady).toBe(true);
+
+    await sessions.removeAcceptedRevision("crypto", "btc", 1);
+    expect((await sessions.state(pack)).publishReady).toBe(true);
+    await sessions.removeAcceptedRevision("crypto", "btc", 2);
+    expect(await sessions.state(pack)).toMatchObject({
+      publishReady: false,
+      acceptedCount: 1,
+      missingAssetIds: ["btc"],
+      readinessReason: "assets_missing",
+    });
+
+    await sessions.clearAcceptedAssets("crypto", ["eth"]);
+    expect(await sessions.state(pack)).toMatchObject({
+      acceptedCount: 0,
+      missingAssetIds: ["btc", "eth"],
+    });
+  });
 });

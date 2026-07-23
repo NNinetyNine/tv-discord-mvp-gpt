@@ -611,4 +611,44 @@ export class AdminPackCaptureSessionWorkspace {
       return;
     }
   }
+
+  async removeAcceptedRevision(packId: string, assetId: string, revision: number): Promise<void> {
+    if (!IDENTIFIER.test(packId) || !IDENTIFIER.test(assetId) || !Number.isSafeInteger(revision) || revision < 1) {
+      throw new AdminError("invalid_pack_capture_session", "Accepted revision identity is invalid.");
+    }
+    const session = await this.#read(packId);
+    const candidate = session?.candidates[assetId];
+    if (
+      session === null ||
+      candidate === undefined ||
+      candidate.state !== "accepted" ||
+      candidate.acceptedRevision !== revision
+    ) return;
+    const candidates = { ...session.candidates };
+    delete candidates[assetId];
+    await writeAtomic(this.#path(packId), Object.freeze({
+      ...session,
+      candidates: Object.freeze(candidates),
+    }));
+  }
+
+  async clearAcceptedAssets(packId: string, assetIds: readonly string[]): Promise<void> {
+    if (!IDENTIFIER.test(packId) || assetIds.some((assetId) => !IDENTIFIER.test(assetId))) {
+      throw new AdminError("invalid_pack_capture_session", "Capture-session reset scope is invalid.");
+    }
+    const session = await this.#read(packId);
+    if (session === null) return;
+    const candidates = { ...session.candidates };
+    let changed = false;
+    for (const assetId of assetIds) {
+      if (candidates[assetId]?.state !== "accepted") continue;
+      delete candidates[assetId];
+      changed = true;
+    }
+    if (!changed) return;
+    await writeAtomic(this.#path(packId), Object.freeze({
+      ...session,
+      candidates: Object.freeze(candidates),
+    }));
+  }
 }

@@ -105,6 +105,22 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(js).not.toContain("/publish");
   });
 
+  it("exposes confirmed revision previews and one-revision deletion in Pack Progress", async () => {
+    const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
+    const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
+
+    expect(html).toContain("ASSET &amp; PREVIEW");
+    expect(html).toContain("REVISION HISTORY");
+    expect(html).toContain("Delete removes exactly one Workspace revision");
+    expect(js).toContain("data-toggle-workspace-history");
+    expect(js).toContain("REVIEW &amp; CONFIRM");
+    expect(js).toContain('confirmation: "delete_revision"');
+    expect(js).toContain("expectedCurrentRevision: asset.revisions");
+    expect(js).toContain("Only this revision will be removed.");
+    expect(js).not.toContain("/api/v1/releases");
+    expect(js).not.toContain("/publish");
+  });
+
   it("governs existing-post adoption and explicitly confirmed new-post provisioning", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");

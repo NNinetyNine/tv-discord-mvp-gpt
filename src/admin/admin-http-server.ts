@@ -492,7 +492,7 @@ async function routeApi(
   }
   if (pathname === "/api/v1/pack-workspace") {
     if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
-    return ok(response, service.packWorkspaceState());
+    return ok(response, await service.packWorkspaceState());
   }
   if (pathname === "/api/v1/pack-workspace/capture-session") {
     if (method !== "GET") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
@@ -514,6 +514,32 @@ async function routeApi(
     exactFields(body, ["packId"], "Scan capture-session body");
     if (typeof body.packId !== "string") throw new AdminError("invalid_request", "Scan capture-session packId must be a string.");
     return ok(response, await service.scanPackCaptureSession(body.packId));
+  }
+  const packRevisionArtifact = /^\/api\/v1\/pack-workspace\/packs\/([^/]+)\/assets\/([^/]+)\/revisions\/([1-9][0-9]*)\/(publication\.png|receipt\.json)$/u.exec(pathname);
+  if (packRevisionArtifact !== null) {
+    if (method !== "GET" && method !== "HEAD") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const artifact = packRevisionArtifact[4] as "publication.png" | "receipt.json";
+    const bytes = await service.readPackWorkspaceRevisionArtifact(
+      packRevisionArtifact[1] ?? "",
+      packRevisionArtifact[2] ?? "",
+      Number(packRevisionArtifact[3]),
+      artifact,
+    );
+    return binaryArtifact(request, response, bytes, artifact);
+  }
+  const packRevision = /^\/api\/v1\/pack-workspace\/packs\/([^/]+)\/assets\/([^/]+)\/revisions\/([1-9][0-9]*)$/u.exec(pathname);
+  if (packRevision !== null) {
+    if (method !== "DELETE") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Delete Revision body must be an object.");
+    exactFields(body, ["confirmation", "expectedCurrentRevision"], "Delete Revision body");
+    return ok(response, await service.deletePackWorkspaceRevision({
+      packId: packRevision[1] ?? "",
+      assetId: packRevision[2] ?? "",
+      revision: Number(packRevision[3]),
+      confirmation: body.confirmation,
+      expectedCurrentRevision: body.expectedCurrentRevision,
+    }));
   }
   const packAssetReset = /^\/api\/v1\/pack-workspace\/packs\/([^/]+)\/assets\/([^/]+)\/reset$/u.exec(pathname);
   if (packAssetReset !== null) {

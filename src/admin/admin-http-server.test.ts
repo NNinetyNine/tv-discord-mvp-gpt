@@ -240,10 +240,43 @@ describe("Admin HTTP server", () => {
     expect(await readFile(join(service.packRenders.stagingRoot, "active", "btc.png"))).toEqual(secondPublication);
 
     const current = await jsonRequest(server.url, "/api/v1/pack-workspace");
-    expect(current.body.data.packs.find((pack: any) => pack.id === "crypto").assets.find((asset: any) => asset.id === "btc")).toMatchObject({
+    const currentBtc = current.body.data.packs.find((pack: any) => pack.id === "crypto").assets.find((asset: any) => asset.id === "btc");
+    expect(currentBtc).toMatchObject({
       captured: true,
       artifactReady: true,
       revisions: 2,
+    });
+    expect(currentBtc.revisionHistory.map((revision: any) => revision.revision)).toEqual([1, 2]);
+    expect(currentBtc.revisionHistory).toContainEqual(expect.objectContaining({
+      revision: 2,
+      current: true,
+      confirmed: true,
+    }));
+    expect(Buffer.from(await (await fetch(`${server.url}${currentBtc.revisionHistory[0].publicationUrl}`)).arrayBuffer())).toEqual(firstPublication);
+
+    const deleteCurrent = await jsonRequest(
+      server.url,
+      "/api/v1/pack-workspace/packs/crypto/assets/btc/revisions/2",
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: "delete_revision", expectedCurrentRevision: 2 }),
+      },
+    );
+    expect(deleteCurrent.body.data).toMatchObject({
+      deleted: true,
+      deletedRevision: 2,
+      restoredRevision: 1,
+      currentRevision: 1,
+      remainingRevisionCount: 1,
+      effects: { workspaceChanged: true, stagingChanged: true, released: false, discordContacted: false },
+    });
+    expect(await readFile(join(service.packRenders.stagingRoot, "active", "btc.png"))).toEqual(firstPublication);
+    const afterRevisionDelete = await jsonRequest(server.url, "/api/v1/pack-workspace");
+    expect(afterRevisionDelete.body.data.packs.find((pack: any) => pack.id === "crypto").assets.find((asset: any) => asset.id === "btc")).toMatchObject({
+      captured: true,
+      revisions: 1,
+      revisionHistory: [expect.objectContaining({ revision: 1, current: true })],
     });
 
     const unconfirmedAssetReset = await jsonRequest(
@@ -252,7 +285,7 @@ describe("Admin HTTP server", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmation: "", expectedRevisions: 2 }),
+        body: JSON.stringify({ confirmation: "", expectedRevisions: 1 }),
       },
     );
     expect(unconfirmedAssetReset.response.status).toBe(400);
@@ -264,12 +297,12 @@ describe("Admin HTTP server", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmation: "reset_asset", expectedRevisions: 1 }),
+        body: JSON.stringify({ confirmation: "reset_asset", expectedRevisions: 2 }),
       },
     );
     expect(staleAssetReset.response.status).toBe(409);
     expect(staleAssetReset.body.error.code).toBe("pack_workspace_reset_state_conflict");
-    expect(await readFile(join(service.packRenders.stagingRoot, "active", "btc.png"))).toEqual(secondPublication);
+    expect(await readFile(join(service.packRenders.stagingRoot, "active", "btc.png"))).toEqual(firstPublication);
 
     const assetReset = await jsonRequest(
       server.url,
@@ -277,7 +310,7 @@ describe("Admin HTTP server", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmation: "reset_asset", expectedRevisions: 2 }),
+        body: JSON.stringify({ confirmation: "reset_asset", expectedRevisions: 1 }),
       },
     );
     expect(assetReset.body.data).toMatchObject({
@@ -295,6 +328,7 @@ describe("Admin HTTP server", () => {
       captured: false,
       artifactReady: false,
       revisions: 0,
+      revisionHistory: [],
     });
 
     const third = await preview("2026-07-24");

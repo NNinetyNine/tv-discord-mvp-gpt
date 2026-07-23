@@ -39,6 +39,7 @@ export type AcceptPackChartPublicationFileResult =
       readonly packId: string;
       readonly timeframe: ChartPublicationTimeframe;
       readonly dataAsOf: string;
+      readonly capturedAt: string;
       readonly revisions: number;
       readonly packState: PackState;
       readonly capturedCount: number;
@@ -161,7 +162,8 @@ export async function acceptPackChartPublicationFile(
     });
   }
 
-  const capture = dependencies.workspace.capture(options.assetId, dependencies.now());
+  const capturedAt = dependencies.now();
+  const capture = dependencies.workspace.capture(options.assetId, capturedAt);
   const remainingRequiredAssetIds = Object.freeze([
     ...dependencies.workspace.pendingAssets(options.packId),
   ]);
@@ -176,6 +178,7 @@ export async function acceptPackChartPublicationFile(
     packId: options.packId,
     timeframe: options.timeframe,
     dataAsOf: options.dataAsOf,
+    capturedAt,
     revisions: capture.revisions,
     packState: dependencies.workspace.packState(options.packId),
     capturedCount: pack.assets.length - remainingRequiredAssetIds.length,

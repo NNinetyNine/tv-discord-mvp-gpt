@@ -16,6 +16,7 @@ const state = {
   packSourceFile: null,
   packPreview: null,
   packBusy: false,
+  expandedWorkspaceAssets: new Set(),
   threadManagement: null,
   threadVerification: null,
   threadBusy: false,
@@ -1208,6 +1209,7 @@ function updateWorkspacePreviewButton() {
   qs("#workspace-start-session").disabled = locked || pack === null || !state.packCaptureSession?.configured;
   qs("#workspace-scan-session").disabled = locked || pack === null || !state.packCaptureSession?.active;
   qsa("[data-reset-workspace-asset]").forEach((button) => { button.hidden = locked; });
+  qsa("[data-delete-workspace-revision]").forEach((button) => { button.disabled = locked; });
 }
 
 function captureSessionReason(session) {
@@ -1270,6 +1272,7 @@ function renderCaptureSession(session) {
   qsa("[data-review-scanned-asset]").forEach((button) => {
     button.addEventListener("click", () => reviewQueuedCapture(button.dataset.reviewScannedAsset));
   });
+  renderPackWorkspace();
   updateWorkspacePreviewButton();
 }
 
@@ -1336,6 +1339,100 @@ function workspaceAssetStatus(asset) {
   return "REQUIRED";
 }
 
+function pendingCaptureFor(assetId) {
+  return state.packCaptureSession?.candidates.find((candidate) =>
+    candidate.assetId === assetId && candidate.state === "pending"
+  ) ?? null;
+}
+
+function workspaceRevisionPanel(pack, asset) {
+  const pending = pendingCaptureFor(asset.id);
+  const history = [...asset.revisionHistory].sort((left, right) => right.revision - left.revision);
+  const cards = [];
+  if (pending !== null) {
+    cards.push(`<article class="workspace-revision-card pending">
+      <header><strong>NEXT REVISION · AWAITING CONFIRMATION</strong><span>${escapeHtml(pending.exportedAt)}</span></header>
+      <img loading="lazy" src="/api/v1/pack-workspace/previews/${escapeAttribute(pending.previewId)}/publication.png" alt="${escapeAttribute(asset.displayName)} pending Pack render">
+      <p>${escapeHtml(pending.filename)} · SOURCE ${escapeHtml(pending.sourceSha256)}</p>
+      <div class="workspace-revision-actions">
+        <a class="outline-action download-link compact-action" href="/api/v1/pack-workspace/previews/${escapeAttribute(pending.previewId)}/receipt.json" target="_blank" rel="noreferrer">RECEIPT</a>
+        <button class="primary-action compact-action" type="button" data-confirm-pending-revision="${escapeAttribute(asset.id)}">REVIEW &amp; CONFIRM</button>
+      </div>
+    </article>`);
+  }
+  for (const revision of history) {
+    cards.push(`<article class="workspace-revision-card${revision.current ? " current" : ""}">
+      <header><strong>REVISION ${revision.revision} · CONFIRMED${revision.current ? " · CURRENT" : ""}</strong><span>${escapeHtml(revision.acceptedAt)}</span></header>
+      <img loading="lazy" src="${escapeAttribute(revision.publicationUrl)}" alt="${escapeAttribute(asset.displayName)} revision ${revision.revision} render">
+      <p>${escapeHtml(revision.sourceBasename)} · ${escapeHtml(revision.timeframe)} · DATA AS OF ${escapeHtml(revision.dataAsOf)}</p>
+      <div class="workspace-revision-actions">
+        <a class="outline-action download-link compact-action" href="${escapeAttribute(revision.receiptUrl)}" target="_blank" rel="noreferrer">RECEIPT</a>
+        <button class="danger-action compact-action" type="button" data-delete-workspace-revision="${revision.revision}" data-revision-asset="${escapeAttribute(asset.id)}">DELETE REVISION ${revision.revision}</button>
+      </div>
+    </article>`);
+  }
+  return `<tr class="workspace-revision-row"><td colspan="6">
+    <section class="workspace-revision-panel" aria-label="${escapeAttribute(asset.displayName)} revision history">
+      <p class="workspace-revision-summary">${cards.length} REVISION ITEM${cards.length === 1 ? "" : "S"} · ACCEPTANCE IS THE CONFIRMATION GATE</p>
+      <div class="workspace-revision-grid">${cards.join("") || "<p class=\"empty-state\">NO REVISION EVIDENCE</p>"}</div>
+    </section>
+  </td></tr>`;
+}
+
+function toggleWorkspaceAssetHistory(assetId) {
+  const pack = selectedWorkspacePack();
+  if (pack === null || !pack.assets.some((asset) => asset.id === assetId)) return;
+  if (state.expandedWorkspaceAssets.has(assetId)) state.expandedWorkspaceAssets.delete(assetId);
+  else state.expandedWorkspaceAssets.add(assetId);
+  renderPackWorkspace();
+}
+
+async function deleteWorkspaceRevision(assetId, revision) {
+  const pack = selectedWorkspacePack();
+  const asset = pack?.assets.find((candidate) => candidate.id === assetId) ?? null;
+  if (pack === null || asset === null || !Number.isSafeInteger(revision) || state.packBusy || state.packPreview !== null) return;
+  const target = asset.revisionHistory.find((candidate) => candidate.revision === revision);
+  if (target === undefined) return;
+  const consequence = target.current
+    ? asset.revisionHistory.some((candidate) => candidate.revision < revision)
+      ? "The prior confirmed revision will become current and be restored to staging."
+      : "The Asset will return to Remaining Required."
+    : "The current staged Analysis will not change.";
+  if (!window.confirm(`Delete ${asset.id.toUpperCase()} revision ${revision}?\n\nOnly this revision will be removed. ${consequence} The Archive is not affected.`)) return;
+
+  clearMessage();
+  state.packBusy = true;
+  qs("#workspace-review-state").textContent = `DELETING ${asset.id.toUpperCase()} REVISION ${revision}`;
+  updateWorkspacePreviewButton();
+  try {
+    const result = await api(
+      `/api/v1/pack-workspace/packs/${encodeURIComponent(pack.id)}/assets/${encodeURIComponent(asset.id)}/revisions/${revision}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({
+          confirmation: "delete_revision",
+          expectedCurrentRevision: asset.revisions,
+        }),
+      },
+    );
+    await loadPackWorkspace();
+    qs("#workspace-review-state").textContent = `${asset.id.toUpperCase()} REVISION ${revision} DELETED`;
+    showMessage(
+      result.restoredRevision === null
+        ? `${asset.id.toUpperCase()} revision ${revision} was deleted. The Asset is now Remaining Required.`
+        : `${asset.id.toUpperCase()} revision ${revision} was deleted. Current revision: ${result.currentRevision}.`,
+      false,
+    );
+  } catch (error) {
+    qs("#workspace-review-state").textContent = "REVISION DELETE NOT APPLIED";
+    showMessage(error.message);
+    await loadPackWorkspace().catch(() => undefined);
+  } finally {
+    state.packBusy = false;
+    updateWorkspacePreviewButton();
+  }
+}
+
 function renderPackWorkspace() {
   const pack = selectedWorkspacePack();
   if (pack === null) {
@@ -1372,15 +1469,31 @@ function renderPackWorkspace() {
   qs("#workspace-members-body").innerHTML = pack.assets.map((asset) => {
     const status = workspaceAssetStatus(asset);
     const className = status === "CURRENT ANALYSIS" ? "valid" : status === "REQUIRED" ? "pending" : "blocked";
-    return `<tr>
-      <td>${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)}</td>
+    const pending = pendingCaptureFor(asset.id);
+    const expandable = asset.revisionHistory.length > 0 || pending !== null;
+    const expanded = state.expandedWorkspaceAssets.has(asset.id);
+    const primary = `<tr>
+      <td><span class="workspace-asset-name">${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)}</span>${expandable ? `<button class="workspace-preview-pill" type="button" data-toggle-workspace-history="${escapeAttribute(asset.id)}" aria-expanded="${expanded}">${expanded ? "HIDE" : "PREVIEW"}${pending === null ? "" : " · PENDING"}</button>` : ""}</td>
       <td>${escapeHtml(asset.tradingViewSymbol || "—")}</td>
       <td><span class="workspace-status ${className}">${escapeHtml(status)}</span></td>
-      <td>${asset.revisions > 0 ? `REV ${asset.revisions}` : "—"}</td>
+      <td>${asset.revisions > 0 ? `REV ${asset.revisions}` : "—"}${asset.revisionHistory.length > 0 ? ` · ${asset.revisionHistory.length} KEPT` : ""}</td>
       <td>${escapeHtml(asset.capturedAt ?? "—")}</td>
       <td>${asset.captured ? `<button class="danger-action compact-action" type="button" data-reset-workspace-asset="${escapeAttribute(asset.id)}">RESET</button>` : ""}</td>
     </tr>`;
+    return primary + (expanded ? workspaceRevisionPanel(pack, asset) : "");
   }).join("");
+  qsa("[data-toggle-workspace-history]").forEach((button) => {
+    button.addEventListener("click", () => toggleWorkspaceAssetHistory(button.dataset.toggleWorkspaceHistory));
+  });
+  qsa("[data-confirm-pending-revision]").forEach((button) => {
+    button.addEventListener("click", () => reviewQueuedCapture(button.dataset.confirmPendingRevision));
+  });
+  qsa("[data-delete-workspace-revision]").forEach((button) => {
+    button.addEventListener("click", () => void deleteWorkspaceRevision(
+      button.dataset.revisionAsset,
+      Number(button.dataset.deleteWorkspaceRevision),
+    ));
+  });
   qsa("[data-reset-workspace-asset]").forEach((button) => {
     button.addEventListener("click", () => void resetWorkspaceAsset(button.dataset.resetWorkspaceAsset));
   });

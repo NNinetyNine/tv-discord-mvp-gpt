@@ -164,6 +164,21 @@ h1, h2 { margin: 0; font-size: .78rem; letter-spacing: .15em; font-weight: 850; 
 .workspace-status.valid { color: var(--success); border-color: rgba(134, 201, 151, .34); }
 .workspace-status.pending { color: var(--warning); border-color: rgba(214, 183, 108, .34); }
 .workspace-status.blocked { color: var(--danger); border-color: rgba(233, 141, 134, .3); }
+.workspace-asset-name { margin-right: .45rem; }
+.workspace-preview-pill { min-height: 1.45rem; padding: .08rem .42rem; color: var(--gold-strong); border-color: rgba(207, 173, 82, .38); border-radius: 999px; background: rgba(207, 173, 82, .04); font-size: .5rem; letter-spacing: .08em; }
+.workspace-revision-row td { padding: 0; background: rgba(7, 8, 6, .42); }
+.workspace-revision-panel { padding: .85rem 1.1rem 1.1rem; }
+.workspace-revision-summary { margin: 0 0 .65rem; color: var(--text-faint); font-size: .55rem; letter-spacing: .12em; }
+.workspace-revision-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: .75rem; }
+.workspace-revision-card { display: grid; gap: .55rem; align-content: start; padding: .7rem; border: 1px solid var(--border); border-radius: .65rem; background: rgba(20, 21, 17, .66); }
+.workspace-revision-card.current { border-color: rgba(134, 201, 151, .38); }
+.workspace-revision-card.pending { border-color: rgba(214, 183, 108, .38); }
+.workspace-revision-card header { display: flex; justify-content: space-between; gap: .75rem; color: var(--text-faint); font-size: .54rem; letter-spacing: .07em; }
+.workspace-revision-card header strong { color: var(--text-muted); }
+.workspace-revision-card img { display: block; width: 100%; height: 12rem; object-fit: contain; border: 1px solid var(--border); border-radius: .45rem; background: #090a08; }
+.workspace-revision-card p { margin: 0; overflow-wrap: anywhere; color: var(--text-faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .57rem; }
+.workspace-revision-actions { display: flex; justify-content: flex-end; gap: .45rem; }
+.workspace-revision-actions .primary-action { min-width: 8rem; }
 .download-link { display: inline-flex; min-height: 2.15rem; align-items: center; padding: .3rem .8rem; text-decoration: none; letter-spacing: .12em; font-size: .68rem; font-weight: 800; border: 1px solid rgba(207, 173, 82, .55); border-radius: .48rem; }
 .download-link:hover { border-color: var(--gold-strong); }
 .registry-search { max-width: 30rem; margin: .9rem 1.1rem; }

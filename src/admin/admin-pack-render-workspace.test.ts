@@ -68,6 +68,12 @@ describe("Admin Pack render workspace", () => {
     await workspace.completeClaim(task.previewId);
     await expect(workspace.claimPreview(task.previewId)).rejects.toMatchObject({ code: "pack_render_preview_not_found" });
     expect(await readFile(join(workspace.root, "accepted", task.previewId, "publication.png"))).toEqual(output);
+    expect(await workspace.listAcceptedPreviews()).toEqual([
+      expect.objectContaining({
+        record: expect.objectContaining({ previewId: task.previewId, assetId: "btc" }),
+        completedAt: expect.stringMatching(/^20/u),
+      }),
+    ]);
   });
 
   it("detects evidence tampering before display or acceptance", async () => {

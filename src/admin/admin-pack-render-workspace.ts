@@ -5,9 +5,11 @@ import {
   mkdir,
   open,
   readFile,
+  readdir,
   realpath,
   rename,
   rm,
+  stat,
 } from "node:fs/promises";
 import { basename, join, relative, resolve, sep } from "node:path";
 
@@ -70,6 +72,10 @@ export interface PackRenderPreviewRecord {
 export interface ClaimedPackRenderPreview {
   readonly task: PackRenderPreviewTask;
   readonly record: PackRenderPreviewRecord;
+}
+
+export interface CompletedPackRenderPreview extends ClaimedPackRenderPreview {
+  readonly completedAt: string;
 }
 
 function pathInside(root: string, candidate: string): boolean {
@@ -342,5 +348,23 @@ export class AdminPackRenderWorkspace {
 
   async completeClaim(previewId: string): Promise<void> {
     await rename(join(this.#areas.accepting, previewId), join(this.#areas.accepted, previewId));
+  }
+
+  async listAcceptedPreviews(): Promise<readonly CompletedPackRenderPreview[]> {
+    const completed: CompletedPackRenderPreview[] = [];
+    for (const entry of await readdir(this.#areas.accepted, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !PREVIEW_ID.test(entry.name)) continue;
+      const claimed = await this.#read("accepted", entry.name);
+      const evidence = await stat(claimed.task.recordPath);
+      completed.push(Object.freeze({
+        ...claimed,
+        completedAt: evidence.mtime.toISOString(),
+      }));
+    }
+    completed.sort((left, right) =>
+      left.completedAt.localeCompare(right.completedAt) ||
+      left.record.previewId.localeCompare(right.record.previewId)
+    );
+    return Object.freeze(completed);
   }
 }

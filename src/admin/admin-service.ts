@@ -111,6 +111,10 @@ import {
   type QueuedPackCapture,
 } from "./admin-pack-capture-session-workspace.ts";
 import {
+  AdminPackRevisionWorkspace,
+  type PackRevisionArtifactName,
+} from "./admin-pack-revision-workspace.ts";
+import {
   adoptDiscordAssetThread,
   type AdoptDiscordAssetThreadResult,
 } from "../application/adopt-discord-asset-thread.ts";
@@ -265,6 +269,21 @@ export interface AdminPackWorkspaceAssetState extends AdminStandaloneRenderAsset
   readonly artifactReady: boolean;
   readonly revisions: number;
   readonly capturedAt: string | null;
+  readonly revisionHistory: readonly AdminPackWorkspaceRevisionState[];
+}
+
+export interface AdminPackWorkspaceRevisionState {
+  readonly revision: number;
+  readonly previewId: string;
+  readonly acceptedAt: string;
+  readonly sourceBasename: string;
+  readonly timeframe: ChartPublicationTimeframe;
+  readonly dataAsOf: string;
+  readonly outputSha256: string;
+  readonly current: boolean;
+  readonly confirmed: true;
+  readonly publicationUrl: string;
+  readonly receiptUrl: string;
 }
 
 export interface AdminPackWorkspacePackState {
@@ -514,6 +533,7 @@ export class AdminService {
   readonly standaloneRenders: AdminStandaloneRenderWorkspace;
   readonly packRenders: AdminPackRenderWorkspace;
   readonly packCaptureSessions: AdminPackCaptureSessionWorkspace;
+  readonly packRevisions: AdminPackRevisionWorkspace;
   readonly threadProvisioning: AdminThreadProvisioningWorkspace;
   #state: LiveState;
   #packMutationLock: Promise<void> = Promise.resolve();
@@ -530,6 +550,7 @@ export class AdminService {
     standaloneRenders: AdminStandaloneRenderWorkspace,
     packRenders: AdminPackRenderWorkspace,
     packCaptureSessions: AdminPackCaptureSessionWorkspace,
+    packRevisions: AdminPackRevisionWorkspace,
     threadProvisioning: AdminThreadProvisioningWorkspace,
     state: LiveState,
     openDiscordForumSession?: AdminDiscordForumSessionFactory,
@@ -543,6 +564,7 @@ export class AdminService {
     this.standaloneRenders = standaloneRenders;
     this.packRenders = packRenders;
     this.packCaptureSessions = packCaptureSessions;
+    this.packRevisions = packRevisions;
     this.threadProvisioning = threadProvisioning;
     this.#state = state;
     this.#openDiscordForumSession = openDiscordForumSession;
@@ -564,6 +586,7 @@ export class AdminService {
       workspace.root,
       options.chartDownloadsRoot,
     );
+    const packRevisions = await AdminPackRevisionWorkspace.open(workspace.root);
     const threadProvisioning = await AdminThreadProvisioningWorkspace.open(workspace.root);
     const state = await AdminService.#loadState(repositoryRoot);
     return new AdminService(
@@ -575,6 +598,7 @@ export class AdminService {
       standaloneRenders,
       packRenders,
       packCaptureSessions,
+      packRevisions,
       threadProvisioning,
       state,
       options.openDiscordForumSession,
@@ -1412,13 +1436,15 @@ export class AdminService {
     });
   }
 
-  packWorkspaceState(): AdminPackWorkspaceState {
+  async packWorkspaceState(): Promise<AdminPackWorkspaceState> {
     const runtime = this.#packRuntime();
-    const packs = this.#state.packs.map((pack) => {
-      const assets = pack.assets.map((assetId) => {
+    await this.packRevisions.reconcile(runtime.workspace, await this.packRenders.listAcceptedPreviews());
+    const packs = await Promise.all(this.#state.packs.map(async (pack) => {
+      const assets = await Promise.all(pack.assets.map(async (assetId) => {
         const asset = this.#state.byAssetId.get(assetId);
         if (asset === undefined) throw new AdminError("invalid_registry", `Pack ${pack.id} references an unknown Asset.`);
         const capture = runtime.workspace.captureOf(asset.id);
+        const revisionHistory = await this.packRevisions.list(pack.id, asset.id);
         return Object.freeze({
           id: asset.id,
           displayName: asset.display,
@@ -1429,8 +1455,21 @@ export class AdminService {
           artifactReady: runtime.staging.has(asset.id),
           revisions: capture?.revisions ?? 0,
           capturedAt: capture?.capturedAt ?? null,
+          revisionHistory: Object.freeze(revisionHistory.map((revision) => Object.freeze({
+            revision: revision.revision,
+            previewId: revision.previewId,
+            acceptedAt: revision.acceptedAt,
+            sourceBasename: revision.sourceBasename,
+            timeframe: revision.timeframe,
+            dataAsOf: revision.dataAsOf,
+            outputSha256: revision.outputSha256,
+            current: capture?.revisions === revision.revision,
+            confirmed: true as const,
+            publicationUrl: `/api/v1/pack-workspace/packs/${pack.id}/assets/${asset.id}/revisions/${revision.revision}/publication.png`,
+            receiptUrl: `/api/v1/pack-workspace/packs/${pack.id}/assets/${asset.id}/revisions/${revision.revision}/receipt.json`,
+          }))),
         });
-      });
+      }));
       const remainingRequiredAssetIds = Object.freeze([...runtime.workspace.pendingAssets(pack.id)]);
       return Object.freeze({
         id: pack.id,
@@ -1442,7 +1481,7 @@ export class AdminService {
         remainingRequiredAssetIds,
         assets: Object.freeze(assets),
       });
-    });
+    }));
     return Object.freeze({ schemaVersion: 1, publishAvailable: false, packs: Object.freeze(packs) });
   }
 
@@ -1638,6 +1677,15 @@ export class AdminService {
     return this.packRenders.readPreviewArtifact(previewId, artifact);
   }
 
+  readPackWorkspaceRevisionArtifact(
+    packId: string,
+    assetId: string,
+    revision: number,
+    artifact: PackRevisionArtifactName,
+  ): Promise<Buffer> {
+    return this.packRevisions.readArtifact(packId, assetId, revision, artifact);
+  }
+
   async discardPackWorkspacePreview(previewId: string): Promise<void> {
     return this.#withPackMutationLock(async () => {
       await this.packCaptureSessions.removePendingPreview(previewId);
@@ -1652,6 +1700,90 @@ export class AdminService {
     await prior;
     try { return await operation(); }
     finally { release(); }
+  }
+
+  deletePackWorkspaceRevision(input: {
+    readonly packId: string;
+    readonly assetId: string;
+    readonly revision: number;
+    readonly confirmation: unknown;
+    readonly expectedCurrentRevision: unknown;
+  }): Promise<Readonly<Record<string, unknown>>> {
+    if (input.confirmation !== "delete_revision") {
+      throw new AdminError("pack_revision_delete_confirmation_invalid", "Delete Revision requires an explicit current confirmation.");
+    }
+    if (
+      !Number.isSafeInteger(input.revision) || input.revision < 1 ||
+      !Number.isSafeInteger(input.expectedCurrentRevision) || Number(input.expectedCurrentRevision) < 1
+    ) {
+      throw new AdminError("invalid_request", "Revision identities must be positive safe integers.");
+    }
+    return this.#withPackMutationLock(async () => {
+      await this.refresh();
+      const pack = this.#state.byPackId.get(input.packId);
+      if (pack === undefined) {
+        throw new AdminError("pack_not_found", `Pack ${input.packId} was not found.`, 404);
+      }
+      const asset = this.#state.byAssetId.get(input.assetId);
+      if (asset === undefined) {
+        throw new AdminError("asset_not_found", `Asset ${input.assetId} was not found.`, 404);
+      }
+      if (!pack.assets.includes(asset.id)) {
+        throw new AdminError("invalid_request", `Asset ${asset.id} does not belong to Pack ${pack.id}.`);
+      }
+
+      const runtime = this.#packRuntime();
+      await this.packRevisions.reconcile(runtime.workspace, await this.packRenders.listAcceptedPreviews());
+      const capture = runtime.workspace.captureOf(asset.id);
+      if (capture === null || capture.revisions !== Number(input.expectedCurrentRevision)) {
+        throw new AdminError("pack_revision_state_conflict", `${asset.id.toUpperCase()} changed after revision deletion was confirmed.`, 409);
+      }
+      const history = await this.packRevisions.list(pack.id, asset.id);
+      const target = history.find((revision) => revision.revision === input.revision);
+      if (target === undefined) {
+        throw new AdminError("pack_revision_not_found", `Revision ${input.revision} was not found.`, 404);
+      }
+      const deletingCurrent = target.revision === capture.revisions;
+      const previous = history.filter((revision) => revision.revision < target.revision).at(-1);
+
+      if (deletingCurrent) {
+        if (previous === undefined) {
+          if (!runtime.workspace.resetAsset(asset.id)) {
+            throw new AdminError("pack_revision_state_conflict", `${asset.id.toUpperCase()} current Analysis disappeared.`, 409);
+          }
+          runtime.staging.unstage(asset.id);
+        } else {
+          runtime.staging.stage(asset.id, previous.publicationPath);
+          if (!runtime.workspace.resetAsset(asset.id)) {
+            throw new AdminError("pack_revision_state_conflict", `${asset.id.toUpperCase()} current Analysis disappeared.`, 409);
+          }
+          for (let revision = 1; revision <= previous.revision; revision += 1) {
+            runtime.workspace.capture(asset.id, previous.acceptedAt);
+          }
+        }
+      }
+
+      await this.packCaptureSessions.removeAcceptedRevision(pack.id, asset.id, target.revision);
+      await this.packRevisions.delete(pack.id, asset.id, target.revision);
+      const current = runtime.workspace.captureOf(asset.id);
+      return Object.freeze({
+        schemaVersion: 1,
+        deleted: true,
+        packId: pack.id,
+        assetId: asset.id,
+        deletedRevision: target.revision,
+        restoredRevision: deletingCurrent ? previous?.revision ?? null : current?.revisions ?? null,
+        captured: current !== null,
+        currentRevision: current?.revisions ?? 0,
+        remainingRevisionCount: history.length - 1,
+        effects: Object.freeze({
+          workspaceChanged: deletingCurrent,
+          stagingChanged: deletingCurrent,
+          released: false,
+          discordContacted: false,
+        }),
+      });
+    });
   }
 
   acceptPackWorkspacePreview(previewId: string): Promise<Readonly<Record<string, unknown>>> {
@@ -1696,6 +1828,7 @@ export class AdminService {
         throw new AdminError("invalid_pack_render_preview", "Pack preview could not be accepted.", 400, { outcome: accepted.outcome });
       }
       try {
+        await this.packRevisions.commit(claimed, accepted.revisions, accepted.capturedAt);
         await this.packRenders.completeClaim(previewId);
         await this.packCaptureSessions.markAccepted(previewId, accepted.revisions);
       }
@@ -1710,7 +1843,9 @@ export class AdminService {
         packId: accepted.packId,
         timeframe: accepted.timeframe,
         dataAsOf: accepted.dataAsOf,
+        capturedAt: accepted.capturedAt,
         revisions: accepted.revisions,
+        confirmed: true,
         packState: accepted.packState,
         capturedCount: accepted.capturedCount,
         totalCount: accepted.totalCount,
@@ -1757,6 +1892,8 @@ export class AdminService {
         expectedRevisions: Number(input.expectedRevisions),
       }, this.#packRuntime());
       if (!result.ok) return this.#packResetFailure(result);
+      await this.packRevisions.clearAsset(pack.id, asset.id);
+      await this.packCaptureSessions.clearAcceptedAssets(pack.id, [asset.id]);
       return Object.freeze({
         schemaVersion: 1,
         ...result,
@@ -1794,6 +1931,8 @@ export class AdminService {
         expectedCapturedAssetIds,
       }, this.#packRuntime());
       if (!result.ok) return this.#packResetFailure(result);
+      await this.packRevisions.clearPack(pack);
+      await this.packCaptureSessions.clearAcceptedAssets(pack.id, result.resetAssetIds);
       return Object.freeze({
         schemaVersion: 1,
         ...result,
