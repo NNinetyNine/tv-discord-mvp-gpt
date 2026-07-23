@@ -82,7 +82,8 @@ The operator workflow is:
 1. select an unbound Pack Asset;
 2. explicitly inspect the Pack's current forum name and available tags;
 3. enter the exact post title and select at most five inspected tags;
-4. upload a square, single-frame PNG starter logo;
+4. upload a single-frame PNG starter logo; transparent and rectangular PNGs
+   are supported;
 5. review the logo SHA-256 and confirm the complete request;
 6. create one forum post and atomically write its persistent binding;
 7. close the short-lived Discord session.

@@ -31,7 +31,7 @@ For every missing destination, the operator records one decision before acting:
 - route mode: `adopt` or `provision`;
 - for adoption: the exact existing Discord thread ID;
 - for provisioning: the exact post title, current inspected tag IDs, and the
-  approved square PNG logo SHA-256;
+  approved PNG logo SHA-256; transparent and rectangular PNGs are supported;
 - confirmation that the selected forum is the configured Crypto forum;
 - resulting persistent thread ID and binding-file SHA-256.
 

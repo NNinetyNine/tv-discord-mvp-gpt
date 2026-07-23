@@ -7,7 +7,6 @@ export const ASSET_LOGO_POLICY = Object.freeze({
   maximumBytes: 4 * 1024 * 1024,
   minimumDimension: 64,
   maximumDimension: 2048,
-  requireSquare: true,
   maximumFrames: 1,
 });
 
@@ -19,7 +18,6 @@ export type AssetLogoValidationFailureReason =
   | "missing_dimensions"
   | "dimensions_too_small"
   | "dimensions_too_large"
-  | "not_square"
   | "animated_image";
 
 export interface AssetLogoValidationFailure {
@@ -114,16 +112,6 @@ export async function validateAssetLogo(
     return failure(
       "dimensions_too_large",
       `Asset logo dimensions must not exceed ${ASSET_LOGO_POLICY.maximumDimension} × ${ASSET_LOGO_POLICY.maximumDimension} pixels.`,
-    );
-  }
-
-  if (
-    ASSET_LOGO_POLICY.requireSquare &&
-    decoded.width !== decoded.height
-  ) {
-    return failure(
-      "not_square",
-      "Asset logo must have equal width and height.",
     );
   }
 

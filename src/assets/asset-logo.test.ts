@@ -35,7 +35,7 @@ async function makeImage(
 }
 
 describe("validateAssetLogo", () => {
-  it("accepts one square PNG and returns deterministic path-neutral facts", async () => {
+  it("accepts one PNG and returns deterministic path-neutral facts", async () => {
     const bytes = await makeImage("png", 128, 128);
 
     const first = await validateAssetLogo(bytes);
@@ -117,12 +117,17 @@ describe("validateAssetLogo", () => {
     });
   });
 
-  it("rejects a non-square PNG", async () => {
+  it("accepts a rectangular transparent PNG", async () => {
     const bytes = await makeImage("png", 128, 96);
 
     await expect(validateAssetLogo(bytes)).resolves.toMatchObject({
-      ok: false,
-      reason: "not_square",
+      ok: true,
+      format: "png",
+      width: 128,
+      height: 96,
+      pageOrFrameCount: 1,
+      channelCount: 4,
+      hasAlpha: true,
     });
   });
 });
