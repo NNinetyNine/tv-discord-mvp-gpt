@@ -119,3 +119,17 @@ Responsive review continues to preserve every control. Contrast, forced-colors,
 and reduced-motion preferences have explicit fallbacks. The remaining work is
 operator validation and defect correction, not architectural expansion or
 cleanup.
+
+## Step 544 validation and acceptance decision
+
+A first-party `validate:admin` command now exercises the production
+Administration composition and all seven routine workspace read models in safe
+offline mode. It verifies loopback/security policy, local UI assets, credential
+secrecy, and exact non-mutation of canonical Registry, Pack, channel, and thread
+sources.
+
+This closes the final automated startup-smoke gap. Responsive judgement,
+terminology, end-to-end operator comprehension, and optional live Discord checks
+remain human acceptance tasks under `docs/FINAL_SYSTEM_VALIDATION.md`. Specialist
+scripts and legacy configuration remain preserved; no cleanup classification is
+implied by successful validation.

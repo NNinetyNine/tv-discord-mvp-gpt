@@ -332,3 +332,16 @@ background shell inert, trap focus, restore the initiating control, and expose
 busy state during existing review/apply requests. Accessible captions and
 focusable scroll regions are presentation metadata around unchanged table data.
 See `docs/ADMINISTRATION_UX_ACCESSIBILITY.md` for the operator review contract.
+
+## Step 544 final-validation boundary
+
+Final acceptance is implemented as a read-only production smoke over the same
+`AdminService` and loopback HTTP server used by the operator website. The
+validator loads the seven Administration read models, static shell, and security
+headers, then proves exact byte custody for Registry, Packs, channel routes, and
+thread bindings. It does not inject Discord factories and calls no write route.
+
+The report is technical validation evidence, not a new domain noun or stored
+state. Human viewport, keyboard, terminology, and recovery review remains an
+operator acceptance activity documented in `docs/FINAL_SYSTEM_VALIDATION.md`.
+Packaging and any later cleanup are separate gates.

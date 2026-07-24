@@ -271,3 +271,18 @@ than changing authority.
 
 No API route, confirmation phrase, source file, Discord operation, or Release
 custody rule is changed by these interaction refinements.
+
+## Step 544 final system validation decision
+
+The final automated gate composes the real Administration service and HTTP
+server on an ephemeral loopback port. It verifies the static shell, security
+headers, and the read projections used by Workspace, Threads, Server, Packs,
+Archive, Render, and Registry. The same run snapshots and rechecks exact bytes
+for Registry, Packs, channel configuration, and thread bindings.
+
+The validation path deliberately omits Discord session factories and performs
+GET-only requests. It therefore proves safe token-free startup and read-model
+composition without claiming live Discord readiness. Manual operator review and
+optional read-only live Discord inspection remain explicit acceptance steps.
+No cleanup, source migration, publication, or historical custody change is part
+of this milestone.
