@@ -28,5 +28,11 @@
     "display": "ETFs",
     "channel": "etfs",
     "assets": ["acwi", "cssx5eeur", "eem", "xle", "ixn", "mchi", "ni225", "sxrt", "vxus", "xlc", "xlb", "xlre", "xlu", "xli", "xlp", "xly", "xlf", "ita", "shy", "igf", "gld", "vig", "qqq", "urth", "voo", "vwra", "xlk", "xlv"]
+  },
+  {
+    "id": "forex",
+    "display": "Forex",
+    "channel": "forex",
+    "assets": ["dxy"]
   }
 ]
