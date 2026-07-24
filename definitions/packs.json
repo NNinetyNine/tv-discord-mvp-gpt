@@ -34,5 +34,11 @@
     "display": "Forex",
     "channel": "forex",
     "assets": ["dxy"]
+  },
+  {
+    "id": "space",
+    "display": "SPACE",
+    "channel": "space",
+    "assets": ["spcx"]
   }
 ]
