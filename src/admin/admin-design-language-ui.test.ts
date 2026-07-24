@@ -30,6 +30,30 @@ describe("VisionX Administration design language", () => {
     expect(css).not.toMatch(/@import\s|url\(["']?https?:/u);
   });
 
+  it("uses a lighter warm-charcoal label on gold primary actions without reducing contrast", async () => {
+    const css = await readFile(resolve("src/admin-ui/styles.css"), "utf8");
+
+    expect(css.match(/--primary-action-ink: #28251f;/gu)).toHaveLength(2);
+    expect(css.match(/color: var\(--primary-action-ink\);/gu)).toHaveLength(2);
+    expect(css).toContain("linear-gradient(135deg, #f3d573 0%, #d7aa3b 54%, #b98220 100%)");
+
+    const luminance = (hex: string): number => {
+      const channels = hex.match(/[0-9a-f]{2}/giu)?.map((value) => Number.parseInt(value, 16) / 255) ?? [];
+      const linear = channels.map((channel) => channel <= 0.04045
+        ? channel / 12.92
+        : ((channel + 0.055) / 1.055) ** 2.4);
+      return (0.2126 * linear[0]!) + (0.7152 * linear[1]!) + (0.0722 * linear[2]!);
+    };
+    const contrast = (foreground: string, background: string): number => {
+      const lighter = Math.max(luminance(foreground), luminance(background));
+      const darker = Math.min(luminance(foreground), luminance(background));
+      return (lighter + 0.05) / (darker + 0.05);
+    };
+
+    const goldStops = ["f3d573", "d7aa3b", "b98220", "ffe58c", "e3b94d", "c58f27"];
+    expect(Math.min(...goldStops.map((stop) => contrast("28251f", stop)))).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("gates decorative motion and explicitly neutralizes it for reduced-motion users", async () => {
     const css = await readFile(resolve("src/admin-ui/styles.css"), "utf8");
 

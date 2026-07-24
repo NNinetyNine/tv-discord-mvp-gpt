@@ -34,6 +34,12 @@ Outline actions are reversible review, inspection, selection, or download
 operations. Destructive controls retain a distinct red treatment. Disabled
 controls remain visible and legible so workflow blockers are understandable.
 
+Step 546 softens primary-action labels from near-black to the dedicated warm
+charcoal token `#28251f`. The label is visibly lighter without becoming pale,
+and retains at least 4.56:1 contrast against every stop in the normal and hover
+gold gradients. Other uses of `--gold-ink`, including selection and skip-link
+treatment, remain unchanged.
+
 Focus rings use the brightest gold and are not replaced by hover treatment.
 Success, warning, and blocked states retain text labels in addition to color.
 
