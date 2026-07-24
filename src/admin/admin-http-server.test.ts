@@ -91,11 +91,11 @@ describe("Admin HTTP server", () => {
     const { response, body } = await jsonRequest(server.url, "/api/v1/status");
     expect(response.status).toBe(200);
     expect(body.data).toMatchObject({
-      registryAssetCount: 131,
+      registryAssetCount: 132,
       packCount: 5,
       packMembershipCount: 131,
       auditGapCount: 228,
-      registrySourceSha256: "1fd070bea3d0e99942046694d174cf4d330834019ae829a20d7eb209b7e88d5a",
+      registrySourceSha256: "46725b45068b2603f6550035b09c59d225f170436dcc82b4a173f077f7de4a96",
     });
   });
 
@@ -272,8 +272,8 @@ describe("Admin HTTP server", () => {
 
     const options = await jsonRequest(server.url, "/api/v1/standalone-render/options");
     expect(options.body.data.timeframes).toContain("4D");
-    expect(options.body.data.assets).toHaveLength(131);
-    expect(options.body.data).toMatchObject({ renderableAssetCount: 17, reconciliationRequiredCount: 114 });
+    expect(options.body.data.assets).toHaveLength(132);
+    expect(options.body.data).toMatchObject({ renderableAssetCount: 18, reconciliationRequiredCount: 114 });
     expect(options.body.data.assets).toContainEqual(expect.objectContaining({ id: "btc", tradingViewSymbol: "CRYPTO:BTCUSD", currency: "USD", renderReady: true }));
     expect(options.body.data.assets).toContainEqual(expect.objectContaining({ id: "aapl", tradingViewSymbol: "NASDAQ:AAPL", currency: "USD", renderReady: true }));
 
@@ -764,7 +764,7 @@ describe("Admin HTTP server", () => {
     const paths = ["definitions/registry.json", "definitions/packs.json", "config/channels.json"].map((path) => resolve(path));
     const before = await Promise.all(paths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
     const result = await jsonRequest(server.url, "/api/v1/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-    expect(result.body.data.registryAssetCount).toBe(131);
+    expect(result.body.data.registryAssetCount).toBe(132);
     const after = await Promise.all(paths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
     expect(after).toEqual(before);
   });

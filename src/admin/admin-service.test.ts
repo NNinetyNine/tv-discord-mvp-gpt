@@ -36,10 +36,10 @@ describe("AdminService", () => {
     expect(service.status()).toMatchObject({
       canonicalState: "controlled_write",
       canonicalStateReadOnly: false,
-      registryAssetCount: 131,
+      registryAssetCount: 132,
       packCount: 5,
       packMembershipCount: 131,
-      registryFingerprint: "4838e483af6e28c2b9b1d5e64c883e1d8f0252aabc263fe091c047c7525e8294",
+      registryFingerprint: "828cfcd8f897a76ffea882b430ad3f1d49da5658e1d100720b55515865395ee2",
       auditGapCount: 228,
     });
   });
@@ -47,7 +47,7 @@ describe("AdminService", () => {
   it("reports exact canonical source hashes", async () => {
     const service = await createService();
     expect(service.status()).toMatchObject({
-      registrySourceSha256: "1fd070bea3d0e99942046694d174cf4d330834019ae829a20d7eb209b7e88d5a",
+      registrySourceSha256: "46725b45068b2603f6550035b09c59d225f170436dcc82b4a173f077f7de4a96",
       packSourceSha256: "29a8284033f1c67466f7a50b54a64d208e72e8dcce25e1cd897a650bdbc3c0b4",
       channelConfigurationSha256: "11bda2d95b9a93497c673f400bd78fd0215df18a02b2915089e397c13e5b0aad",
     });
@@ -114,8 +114,8 @@ describe("AdminService", () => {
       renderReady: true,
       reconciliationIssues: [],
     });
-    expect(options.assets).toHaveLength(131);
-    expect(options.renderableAssetCount).toBe(17);
+    expect(options.assets).toHaveLength(132);
+    expect(options.renderableAssetCount).toBe(18);
     expect(options.reconciliationRequiredCount).toBe(114);
     expect(options.unavailableAssetCount).toBe(options.reconciliationRequiredCount);
     expect(options.assets.filter((asset) => asset.renderReady)).toHaveLength(options.renderableAssetCount);

@@ -88,7 +88,7 @@ describe("Administration Asset registration custody chain", () => {
     const applied = await service.applyAssetRegistration("ui-smoke-asset", "APPLY ASSET SOURCE CHANGE");
     status = applied.status as typeof status;
     expect(status.gates).toMatchObject({ applied: true, applyEnabled: false });
-    expect(status.currentCanonicalState).toMatchObject({ registryAssetCount: 132 });
+    expect(status.currentCanonicalState).toMatchObject({ registryAssetCount: 133 });
     expect(await readFile(join(repositoryRoot, "definitions/packs.json"))).toEqual(before.packs);
     expect(await readFile(join(repositoryRoot, "config/channels.json"))).toEqual(before.channels);
     const channels = JSON.parse(before.channels.toString("utf8")) as Record<string, unknown>;
@@ -110,7 +110,7 @@ describe("Administration Asset registration custody chain", () => {
     expect(secondSourceChange.sourceState.registry.beforeSha256).toBe(firstApplication.sourceState.registry.afterSha256);
     await approveReview(service, "rolling-asset-b");
     const secondApplicationResult = await service.applyAssetRegistration("rolling-asset-b", "APPLY ASSET SOURCE CHANGE");
-    expect((secondApplicationResult.status as any).currentCanonicalState.registryAssetCount).toBe(133);
+    expect((secondApplicationResult.status as any).currentCanonicalState.registryAssetCount).toBe(134);
 
     const channels = JSON.parse(before.channels.toString("utf8")) as Record<string, unknown>;
     const registry = buildRegistry(JSON.parse((await readFile(join(repositoryRoot, "definitions/registry.json"))).toString("utf8")), channels);
