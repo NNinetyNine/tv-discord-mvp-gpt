@@ -134,5 +134,7 @@
   "vwra": { "tradingView": "VWRA",   "display": "Vanguard FTSE All-World UCITS ETF", "channel": "etfs" },
   "xlk":  { "tradingView": "XLK",    "display": "Technology Select Sector SPDR Fund", "channel": "etfs" },
   "xlv":  { "tradingView": "XLV",    "display": "Health Care Select Sector SPDR Fund", "channel": "etfs" },
-  "dxy": { "tradingView": "TVC:DXY", "display": "DXY", "currency": "USD", "channel": "forex" }
+  "dxy": { "tradingView": "TVC:DXY", "display": "DXY", "currency": "USD", "channel": "forex" },
+  "aio": { "tradingView": "CRYPTO:AIO", "display": "OLAXBT", "currency": "USD", "channel": "crypto" },
+  "spcx": { "tradingView": "NASDAQ:SPCX", "display": "Space Exploration Technologies Corp", "currency": "USD", "channel": "stocks" }
 }
