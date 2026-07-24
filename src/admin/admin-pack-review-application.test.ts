@@ -60,7 +60,7 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(js).not.toContain("capturePackChartFromFile(");
   });
 
-  it("requires explicit Pack preview acceptance while publication remains separately governed", async () => {
+  it("keeps Pack revision acceptance session-scoped while publication remains separately governed", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
 
@@ -70,6 +70,10 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(html).toContain("REVIEW PUBLICATION");
     expect(html).toContain("PUBLISH SELECTED PACKS");
     expect(html).toContain("ACCEPT REVISION");
+    expect(html).toContain('id="workspace-streamlined-confirmation"');
+    expect(html).toContain("DEFAULTS OFF FOR EACH NEW SESSION");
+    expect(js).toContain("streamlinedRevisionConfirmation");
+    expect(js).toContain("Publishing, deletion, reset, Discord, Server, Registry, and Pack changes still require explicit confirmation");
     expect(js).toContain('api(`/api/v1/pack-workspace/previews?${query.toString()}`');
     expect(js).toContain('api(`/api/v1/pack-workspace/previews/${encodeURIComponent(preview.previewId)}/accept`');
     expect(js).toContain('api("/api/v1/pack-workspace/publication/preview"');
@@ -83,12 +87,14 @@ describe("Administration Pack review/application UI boundary", () => {
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
 
     expect(html).toContain("AUTOMATED PACK CAPTURE");
-    expect(html).toContain("SCAN AND UPDATE PACK");
-    expect(html).toMatch(/<details class="window workspace-import" open>/u);
-    expect(html).toContain("IMPORT &amp; REVIEW");
+    expect(html).toContain("SYNC DOWNLOADS &amp; UPDATE PACK");
+    expect(html).toMatch(/<details class="workspace-import">/u);
+    expect(html).not.toMatch(/<details class="workspace-import" open>/u);
+    expect(html).toContain("IMPORT &amp; REVIEW ONE PNG");
     expect(js).toContain('api("/api/v1/pack-workspace/capture-session/start"');
     expect(js).toContain('api("/api/v1/pack-workspace/capture-session/scan"');
-    expect(js).toContain("No newer chart exports were found, so no revisions were created.");
+    expect(js).toContain("No newer or changed chart exports were found, so no revisions were created.");
+    expect(js).toContain("acceptStreamlinedCaptureCandidates");
     expect(js).not.toContain("/publish");
   });
 
@@ -122,6 +128,9 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(html).toContain("Delete removes exactly one Workspace revision");
     expect(js).toContain("data-toggle-workspace-history");
     expect(js).toContain("REVIEW &amp; CONFIRM");
+    expect(html).toContain('id="workspace-quick-look"');
+    expect(js).toContain("openWorkspaceQuickLook");
+    expect(js).toContain("data-workspace-quick-look");
     expect(js).toContain('confirmation: "delete_revision"');
     expect(js).toContain("expectedCurrentRevision: asset.revisions");
     expect(js).toContain("Only this revision will be removed.");

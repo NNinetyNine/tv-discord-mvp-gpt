@@ -50,7 +50,7 @@
             <button id="workspace-reset-pack" class="danger-action" type="button" hidden>RESET PACK</button>
           </div>
         </header>
-        <p class="window-help">Import one Pack member chart, inspect the canonical render, then explicitly accept it into staging. Previewing alone changes no Pack state.</p>
+        <p class="window-help">Synchronize one complete Pack from the configured Downloads folder, review changed Assets, and retain exact revision custody. A collapsed manual PNG fallback remains inside Automated Pack Capture.</p>
         <div class="workspace-overview-grid">
           <label><span>PACK</span><select id="workspace-pack"><option value="">LOADING PACKS</option></select></label>
           <div class="derived-channel"><span>POLICY TIMEFRAME</span><strong id="workspace-timeframe">—</strong></div>
@@ -69,8 +69,7 @@
         <p class="window-help">Select one or more Packs. VisionX reviews every selected Pack together and enables one publication confirmation only when all are complete, staged, within the accepted capture session, fully routed, and free from unresolved Release blockers.</p>
         <div id="publication-pack-pills" class="publication-pack-pills" role="group" aria-label="Packs selected for publication"></div>
         <div class="publication-queue-actions">
-          <button id="publication-select-ready" class="outline-action" type="button">SELECT ALL READY</button>
-          <button id="publication-clear" class="outline-action" type="button">CLEAR</button>
+          <span>SELECT OR DESELECT EACH PACK DIRECTLY</span>
           <button id="publication-review" class="primary-action" type="button" disabled>REVIEW PUBLICATION</button>
         </div>
         <p id="publication-guidance" class="workspace-remaining">SELECT PACKS TO BUILD ONE GOVERNED PUBLICATION OPERATION</p>
@@ -102,28 +101,32 @@
           <div class="derived-channel"><span>PUBLICATION GATE</span><strong id="workspace-session-readiness">BLOCKED</strong></div>
         </div>
         <div class="workspace-session-actions">
+          <label class="workspace-streamlined-toggle">
+            <input id="workspace-streamlined-confirmation" type="checkbox">
+            <span><strong>STREAMLINE ROUTINE REVISION CONFIRMATIONS</strong><small>SESSION ONLY · DEFAULTS OFF FOR EACH NEW SESSION · VALIDATED CHANGED ASSETS ARE ACCEPTED INTO STAGING AUTOMATICALLY</small></span>
+          </label>
           <button id="workspace-start-session" class="outline-action" type="button">START NEW SESSION</button>
-          <button id="workspace-scan-session" class="primary-action" type="button" disabled>SCAN AND UPDATE PACK</button>
+          <button id="workspace-scan-session" class="primary-action" type="button" disabled>SYNC DOWNLOADS &amp; UPDATE PACK</button>
         </div>
         <p id="workspace-session-guidance" class="workspace-remaining">CONFIGURE A CHART DOWNLOADS FOLDER WHEN STARTING THE ADMIN SERVICE</p>
         <div id="workspace-scan-results" class="workspace-scan-results" hidden></div>
+        <details class="workspace-import">
+          <summary class="window-header">
+            <div><p class="micro-label">MANUAL FALLBACK</p><h3 id="workspace-import-heading">IMPORT &amp; REVIEW ONE PNG</h3></div>
+            <span id="workspace-review-state" class="context-fact">SELECT AN ASSET</span>
+          </summary>
+          <p class="window-help">Use this fallback only when a chart cannot be synchronized from Downloads. Previewing alone changes no Pack state.</p>
+          <div class="workspace-import-fields">
+            <label><span>PACK ASSET</span><select id="workspace-asset"><option value="">SELECT ASSET</option></select></label>
+            <label class="renderer-file"><span>TRADINGVIEW PNG</span><input id="workspace-source" type="file" accept="image/png"></label>
+            <button id="workspace-preview-button" class="primary-action" type="button" disabled>RENDER PREVIEW</button>
+          </div>
+          <div class="renderer-guidance">
+            <span id="workspace-file-state">SELECT A TRADINGVIEW PNG EXPORT</span>
+            <span>ACCEPTANCE STAGES THE RENDERED PUBLICATION · NO DISCORD ACTION</span>
+          </div>
+        </details>
       </section>
-
-      <details class="window workspace-import" open>
-        <summary class="window-header">
-          <div><p class="micro-label">NEXT ANALYSIS</p><h2 id="workspace-import-heading">IMPORT &amp; REVIEW</h2></div>
-          <span id="workspace-review-state" class="context-fact">SELECT AN ASSET</span>
-        </summary>
-        <div class="workspace-import-fields">
-          <label><span>PACK ASSET</span><select id="workspace-asset"><option value="">SELECT ASSET</option></select></label>
-          <label class="renderer-file"><span>TRADINGVIEW PNG</span><input id="workspace-source" type="file" accept="image/png"></label>
-          <button id="workspace-preview-button" class="primary-action" type="button" disabled>RENDER PREVIEW</button>
-        </div>
-        <div class="renderer-guidance">
-          <span id="workspace-file-state">SELECT A TRADINGVIEW PNG EXPORT</span>
-          <span>ACCEPTANCE STAGES THE RENDERED PUBLICATION · NO DISCORD ACTION</span>
-        </div>
-      </details>
 
       <section id="workspace-preview" class="window renderer-result" hidden aria-live="polite">
         <header class="window-header">
@@ -150,7 +153,7 @@
         <div class="table-wrap workspace-table-wrap" role="region" aria-labelledby="workspace-members-heading" tabindex="0">
           <table>
             <caption class="visually-hidden">Pack asset progress and revision actions</caption>
-            <thead><tr><th scope="col">ASSET &amp; PREVIEW</th><th scope="col">TRADINGVIEW</th><th scope="col">STATUS</th><th scope="col">REVISION HISTORY</th><th scope="col">CAPTURED</th><th scope="col">ACTION</th></tr></thead>
+            <thead><tr><th scope="col">ASSET &amp; PREVIEW</th><th scope="col">TRADINGVIEW</th><th scope="col">STATUS</th><th scope="col">REVISION HISTORY</th><th scope="col">ACTION</th></tr></thead>
             <tbody id="workspace-members-body"></tbody>
           </table>
         </div>
@@ -198,7 +201,7 @@
           <div><p class="micro-label">NEW FORUM POST</p><h2 id="thread-provisioning-heading">CREATE NEW FORUM POST</h2></div>
           <span class="context-fact">EXPLICIT CONFIRMATION REQUIRED</span>
         </header>
-        <p class="window-help">Use this only when the Asset has no existing forum post. VisionX loads the forum first so optional tags are current, verifies the Asset’s canonical Registry logo, then creates one post from the exact title and that logo and records its Thread ID. A forum with no tags is valid. Manage or replace the logo in Registry rather than uploading a separate thread image.</p>
+        <p class="window-help">Use this only when the Asset has no existing forum post. VisionX loads the forum first so optional tags are current, verifies the Asset’s canonical Registry logo, then creates one post from the exact title and that logo and records its Thread ID. A forum with no tags is valid. 20 tags may be configured for this forum. Apply up to 5 tags to each post. Manage or replace the logo in Registry rather than uploading a separate thread image.</p>
         <div class="thread-provisioning-fields">
           <button id="thread-inspect-forum" class="outline-action" type="button" disabled>LOAD FORUM &amp; OPTIONAL TAGS</button>
           <label><span>EXACT POST TITLE</span><input id="thread-title" autocomplete="off" maxlength="100" placeholder="Akash Network // $AKT"></label>
@@ -206,7 +209,7 @@
           <button id="thread-provision-button" class="primary-action" type="button" disabled>PROVISION POST</button>
         </div>
         <fieldset id="thread-tags" class="thread-tags" disabled>
-          <legend>UP TO 20 AVAILABLE TAGS · APPLY UP TO 5</legend>
+          <legend><span>20 TAGS MAY BE CONFIGURED FOR THIS FORUM · APPLY UP TO 5 TAGS TO EACH POST</span><strong id="thread-tag-count">0 / 5 SELECTED</strong></legend>
           <p id="thread-tags-empty">INSPECT THE FORUM TO LOAD CURRENT TAGS</p>
         </fieldset>
         <div class="renderer-guidance">
@@ -272,11 +275,16 @@
           <div><p class="micro-label">LOGICAL ROUTES TO DISCORD FORUMS</p><h2 id="server-routes-heading">ROUTING &amp; DESTINATIONS</h2></div>
           <span id="server-route-count" class="context-fact">0 ROUTES</span>
         </header>
-        <p class="window-help">Every Pack resolves through its logical route. A normal configuration change is allowed only when no persistent thread bindings depend on a changed destination. Use Server Migration when bindings must be re-established on another Discord server or forum.</p>
+        <p class="window-help">Every Pack resolves through a logical route. Add route mappings here, or remove only routes that no Pack, Registry Asset, or persistent binding uses. This manages VisionX mappings—not Discord channel creation or deletion. Use Server Migration when bindings must be re-established on another Discord server or channel.</p>
+        <div class="server-route-builder">
+          <label><span>NEW LOGICAL ROUTE</span><input id="server-new-route-name" maxlength="64" autocomplete="off" placeholder="research"></label>
+          <label><span>DISCORD CHANNEL ID</span><input id="server-new-route-channel" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="123456789012345678"></label>
+          <button id="server-add-route" class="outline-action" type="button">ADD ROUTE</button>
+        </div>
         <div class="table-wrap server-route-table-wrap" role="region" aria-labelledby="server-routes-heading" tabindex="0">
           <table>
             <caption class="visually-hidden">Logical channel route configuration</caption>
-            <thead><tr><th scope="col">LOGICAL ROUTE</th><th scope="col">DISCORD FORUM ID</th><th scope="col">PACKS</th><th scope="col">REGISTRY ASSETS</th><th scope="col">THREAD BINDINGS</th><th scope="col">LIVE TEST</th></tr></thead>
+            <thead><tr><th scope="col">LOGICAL ROUTE</th><th scope="col">DISCORD CHANNEL ID</th><th scope="col">PACKS</th><th scope="col">REGISTRY ASSETS</th><th scope="col">THREAD BINDINGS</th><th scope="col">LIVE TEST</th><th scope="col">ACTION</th></tr></thead>
             <tbody id="server-routes-body"></tbody>
           </table>
         </div>
@@ -341,21 +349,7 @@
       </section>
     </section>
 
-    <section id="view-packs" class="view" data-view-panel="packs" aria-labelledby="pack-role-heading" aria-busy="false" tabindex="-1" hidden>
-      <section class="window pack-role-window" aria-labelledby="pack-role-heading">
-        <header class="window-header">
-          <div><p class="micro-label">CONFIRMED OPERATIONAL LAYER</p><h1 id="pack-role-heading">WHAT A PACK DOES</h1></div>
-          <span class="context-fact">NOT ASSET METADATA</span>
-        </header>
-        <p class="window-help">A Pack is an ordered publication batch. It defines capture scope, completeness, review order, Release history, the configured forum route, and persistent Pack/Asset thread ownership. Registry remains the source of Asset identity.</p>
-        <div class="pack-role-grid">
-          <div><strong>ORDERED BATCH</strong><span>Defines which Registry Assets belong together and their workflow order.</span></div>
-          <div><strong>READINESS GATE</strong><span>All required members must be captured, accepted, staged, and valid before publication.</span></div>
-          <div><strong>RELEASE BOUNDARY</strong><span>Archive custody, interrupted Release recovery, and publication history are recorded per Pack.</span></div>
-          <div><strong>FORUM ROUTE</strong><span>The Pack logical channel resolves the Discord forum; each Pack/Asset pair owns one persistent thread binding.</span></div>
-        </div>
-      </section>
-
+    <section id="view-packs" class="view" data-view-panel="packs" aria-labelledby="pack-maintenance-heading" aria-busy="false" tabindex="-1" hidden>
       <section class="window pack-maintenance" aria-labelledby="pack-maintenance-heading">
         <header class="window-header">
           <div><p class="micro-label">EXISTING DEFINITION MAINTENANCE</p><h2 id="pack-maintenance-heading">MANAGE CURRENT PACKS</h2></div>
@@ -460,7 +454,8 @@
           <div class="derived-channel"><span>INTERRUPTED</span><strong id="archive-interrupted">—</strong></div>
           <label><span>FILTER PACK</span><select id="archive-pack-filter"><option value="">ALL PACKS</option></select></label>
         </div>
-        <div class="table-wrap archive-table-wrap" role="region" aria-labelledby="archive-heading" tabindex="0">
+        <p id="archive-empty-state" class="empty-state archive-empty-state" hidden>No archived Releases are available.</p>
+        <div id="archive-table-wrap" class="table-wrap archive-table-wrap" role="region" aria-labelledby="archive-heading" tabindex="0">
           <table>
             <caption class="visually-hidden">Current and historical Release records</caption>
             <thead><tr><th scope="col">PACK</th><th scope="col">RELEASE</th><th scope="col">STATE</th><th scope="col">STARTED</th><th scope="col">PUBLISHED</th><th scope="col">ANALYSES</th><th scope="col">ACTION</th></tr></thead>
@@ -483,15 +478,15 @@
         </header>
         <p class="window-help">Render a registered ticker at any supported timeframe. This does not change a Pack, stage a publication, create a Release, or contact Discord.</p>
         <div class="renderer-fields">
-          <div class="renderer-asset-search">
-            <label><span>REGISTERED ASSET</span><input id="renderer-asset-search" type="search" autocomplete="off" placeholder="Search all Registry assets"></label>
+          <div class="renderer-asset-search renderer-control">
+            <label><span>REGISTRY ASSET</span><input id="renderer-asset-search" type="search" autocomplete="off" placeholder="Search all Registry assets"></label>
             <input id="renderer-asset" type="hidden" value="">
             <div id="renderer-asset-results" class="asset-search-results" hidden></div>
             <p id="renderer-selected-asset" class="selected-asset-summary">NO ASSET SELECTED</p>
             <button id="renderer-open-registry" class="outline-action compact-action" type="button" hidden>OPEN IN REGISTRY</button>
           </div>
-          <label><span>TIMEFRAME</span><select id="renderer-timeframe"><option value="">SELECT TIMEFRAME</option></select></label>
-          <label class="renderer-file"><span>TRADINGVIEW PNG</span><input id="renderer-source" type="file" accept="image/png"></label>
+          <label class="renderer-control"><span>TIMEFRAME</span><select id="renderer-timeframe"><option value="">SELECT TIMEFRAME</option></select></label>
+          <label class="renderer-file renderer-control"><span>TRADINGVIEW PNG</span><input id="renderer-source" type="file" accept="image/png"></label>
           <button id="render-chart" class="primary-action" type="button" disabled>RENDER CHART</button>
         </div>
         <div class="renderer-guidance">
@@ -526,9 +521,9 @@
             <button id="registry-add-asset" class="primary-action" type="button">ADD ASSET</button>
           </div>
         </header>
-        <p class="window-help">Registry owns the stable Asset ID, display name, TradingView identity, currency, logical channel, aliases, and canonical logo. Packs only select these existing Assets.</p>
+        <p class="window-help">Registry owns the stable Asset ID, display name, canonical qualified TradingView identity, currency, logical channel, and canonical logo. Packs only select these existing Assets.</p>
         <div class="registry-toolbar">
-          <label class="registry-search"><span>SEARCH ASSETS</span><input id="registry-search" type="search" placeholder="Display name, TradingView, currency, channel, Pack, alias, or ID"></label>
+          <label class="registry-search"><span>SEARCH ASSETS</span><input id="registry-search" type="search" placeholder="Display name, TradingView identity, currency, channel, Pack, or ID"></label>
           <button id="registry-refresh" class="outline-action" type="button">REFRESH CANONICAL STATE</button>
         </div>
         <div class="registry-pack-filter-bar" aria-labelledby="registry-pack-filter-label">
@@ -561,16 +556,6 @@
               <div><strong id="registry-logo-state">NO CANONICAL LOGO</strong><span id="registry-logo-evidence">PNG optional until a downstream workflow requires it.</span></div>
             </div>
             <dl id="registry-asset-facts" class="registry-asset-facts" hidden></dl>
-            <section id="registry-alias-management" class="registry-alias-management" hidden>
-              <h3>TRADINGVIEW ALIASES</h3>
-              <div id="registry-alias-list" class="registry-alias-list"></div>
-              <div class="registry-alias-add"><label><span>NEW ALIAS</span><input id="registry-alias-input" maxlength="96" autocomplete="off" placeholder="Alternate TradingView token"></label><button id="registry-alias-review-add" class="outline-action compact-action" type="button">REVIEW ADD</button></div>
-              <section id="registry-alias-preview" class="registry-change-preview" hidden>
-                <div id="registry-alias-preview-summary"></div>
-                <label><span>TYPE EXACT CONFIRMATION</span><input id="registry-alias-confirmation" autocomplete="off"></label>
-                <button id="registry-alias-apply" class="primary-action compact-action" type="button" disabled>APPLY ALIAS CHANGE</button>
-              </section>
-            </section>
             <div id="registry-primary-controls" class="registry-management-controls" hidden>
               <button id="registry-edit-asset" class="primary-action" type="button">EDIT METADATA</button>
               <label class="registry-logo-upload"><span>REPLACE CANONICAL LOGO</span><input id="registry-logo-input" type="file" accept="image/png"></label>
@@ -592,6 +577,24 @@
       </section>
     </section>
   </main>
+
+  <button id="workspace-quick-look-backdrop" class="registry-editor-backdrop" type="button" aria-label="Close revision Quick Look" tabindex="-1" hidden></button>
+  <aside id="workspace-quick-look" class="workspace-quick-look" role="dialog" aria-modal="true" aria-labelledby="workspace-quick-look-heading" aria-describedby="workspace-quick-look-caption" tabindex="-1" hidden>
+    <header class="window-header">
+      <div><p class="micro-label">REVISION QUICK LOOK</p><h2 id="workspace-quick-look-heading">REVISION</h2></div>
+      <button id="workspace-quick-look-close" class="icon-action" type="button" aria-label="Close revision Quick Look">×</button>
+    </header>
+    <figure class="renderer-preview">
+      <img id="workspace-quick-look-image" alt="">
+      <figcaption id="workspace-quick-look-caption"></figcaption>
+    </figure>
+    <div class="workspace-quick-look-actions">
+      <button id="workspace-quick-look-previous" class="outline-action" type="button">PREVIOUS</button>
+      <span id="workspace-quick-look-position" class="context-fact">1 OF 1</span>
+      <a id="workspace-quick-look-receipt" class="outline-action download-link" target="_blank" rel="noreferrer">VIEW RECEIPT</a>
+      <button id="workspace-quick-look-next" class="outline-action" type="button">NEXT</button>
+    </div>
+  </aside>
 
   <button id="registry-editor-backdrop" class="registry-editor-backdrop" type="button" aria-label="Close Registry editor" tabindex="-1" hidden></button>
   <aside id="registry-editor" class="registry-editor" role="dialog" aria-modal="true" aria-labelledby="registry-editor-heading" aria-describedby="registry-editor-guidance" aria-busy="false" tabindex="-1" hidden>
@@ -629,13 +632,13 @@
       <div><p class="micro-label">VALIDATE BEFORE WRITE</p><h2 id="registry-import-heading">IMPORT REGISTRY CSV</h2></div>
       <button id="registry-import-close" class="icon-action" type="button" aria-label="Close Registry CSV import">×</button>
     </header>
-    <p id="registry-import-guidance" class="window-help">Import new Assets only. VisionX validates every row, all identifiers, channels, optional aliases, and optional Pack membership before one atomic Registry transaction is available.</p>
+    <p id="registry-import-guidance" class="window-help">Import new Assets only. VisionX validates every row, canonical MARKET:SYMBOL identities, channels, and optional Pack membership before one atomic Registry transaction is available.</p>
     <div class="registry-import-fields">
       <label><span>CSV FILE</span><input id="registry-import-file" type="file" accept=".csv,text/csv"></label>
       <p id="registry-import-file-state">SELECT A UTF-8 CSV FILE</p>
       <details class="technical-details">
         <summary>CSV FORMAT</summary>
-        <p class="window-help">Required headers: <code>id,display_name,tradingview_symbol,currency,channel</code>. Optional: <code>aliases,pack_ids</code>. Separate aliases or Pack IDs with <code>|</code>. Current architecture permits at most one Pack membership per Asset.</p>
+        <p class="window-help">Required headers: <code>id,display_name,tradingview_symbol,currency,channel</code>. Optional: <code>pack_ids</code>. Separate Pack IDs with <code>|</code>. TradingView identities must be qualified <code>MARKET:SYMBOL</code> values. Current architecture permits at most one Pack membership per Asset.</p>
         <button id="registry-download-template" class="outline-action compact-action" type="button">DOWNLOAD TEMPLATE</button>
       </details>
     </div>

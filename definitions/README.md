@@ -17,7 +17,7 @@ entry has:
 - `currency` — optional canonical chart currency. Historical Assets may omit it; every Asset created through the task-oriented Pack builder must provide it explicitly. Currency is never inferred or defaulted.
 - `channel` — the single grouping field (see `config/channels.json`)
 
-Entries are grouped by channel for easier review. New entries are appended without reserializing historical entries. When present, the deterministic field order is `tradingView`, `tradingViewAliases`, `display`, `currency`, `channel`.
+Entries are grouped by channel for easier review. New entries are appended without reserializing historical entries. The operator-facing field order is `tradingView`, `display`, `currency`, `channel`. Legacy `tradingViewAliases` may remain in historical source only while internal compatibility dependencies are audited; routine Administration cannot add them.
 
 ## packs.json
 
@@ -28,9 +28,9 @@ The ordered pack definitions (array order is the publishing/workflow order).
 Qualified canonical identities resolve downloaded filenames through their
 instrument segment (`CRYPTO:BTCUSD` resolves `BTCUSD_...png`). The Registry
 rejects duplicate instrument tokens so two markets cannot silently claim the
-same export filename. Historical `tradingViewAliases` remain temporary
-compatibility data for Assets that have not yet been reconciled; new workflows
-should supply the exact qualified TradingView ticker instead of creating aliases.
+same export filename. Historical `tradingViewAliases` remain internal compatibility data only where older
+sources still require them. Operator workflows, search guidance, and CSV import use
+the exact qualified TradingView identity and do not create aliases.
 The Crypto Pack was fully reconciled in Step 528; its qualified identities,
 currencies, filename tokens, and alias dispositions are recorded in
 `docs/CRYPTO_PACK_RECONCILIATION.md`.

@@ -149,6 +149,86 @@ describe("Administration server configuration", () => {
     expect(await readFile(join(root, "config/asset-threads.json"))).toEqual(beforeBindings);
   });
 
+  it("adds a new logical route after live validation without creating Discord content", async () => {
+    const root = await mutableRepository();
+    const { service } = await createService(root);
+    const routes = currentRoutes(await service.serverConfigurationState());
+    routes.research = "144444444444444444";
+
+    const preview = await service.prepareServerConfigurationChange({ routes });
+    expect(preview).toMatchObject({
+      valid: true,
+      mode: "configuration",
+      changedRouteCount: 1,
+      affectedPackIds: [],
+      bindingsToReestablish: 0,
+      effects: { discordContentChanged: false },
+    });
+    expect(preview.routes).toContainEqual(expect.objectContaining({
+      logicalChannel: "research",
+      currentChannelId: null,
+      nextChannelId: routes.research,
+      changed: true,
+      packIds: [],
+      boundThreadCount: 0,
+    }));
+
+    await service.applyServerConfiguration(preview.previewId, preview.confirmation);
+    const stored = JSON.parse(await readFile(join(root, "config/channels.json"), "utf8")) as Record<string, string>;
+    expect(stored.research).toBe(routes.research);
+    expect((await service.serverConfigurationState()).routes).toContainEqual(expect.objectContaining({
+      logicalChannel: "research",
+      channelId: routes.research,
+      packIds: [],
+      registryAssetCount: 0,
+      boundThreadCount: 0,
+    }));
+  });
+
+  it("removes an unused logical route after review while preserving every remaining route", async () => {
+    const root = await mutableRepository();
+    const channelsPath = join(root, "config/channels.json");
+    const channels = JSON.parse(await readFile(channelsPath, "utf8")) as Record<string, string>;
+    channels.unused = "144444444444444444";
+    await writeFile(channelsPath, `${JSON.stringify(channels, null, 2)}\n`, "utf8");
+
+    const { service } = await createService(root);
+    const routes = currentRoutes(await service.serverConfigurationState());
+    delete routes.unused;
+    const preview = await service.prepareServerConfigurationChange({ routes });
+    expect(preview).toMatchObject({ valid: true, changedRouteCount: 1, affectedPackIds: [] });
+    expect(preview.routes).toContainEqual(expect.objectContaining({
+      logicalChannel: "unused",
+      currentChannelId: channels.unused,
+      nextChannelId: null,
+      changed: true,
+    }));
+
+    await service.applyServerConfiguration(preview.previewId, preview.confirmation);
+    const stored = JSON.parse(await readFile(channelsPath, "utf8")) as Record<string, string>;
+    expect(stored).not.toHaveProperty("unused");
+    expect(Object.keys(stored).sort()).toEqual(Object.keys(routes).sort());
+  });
+
+  it("blocks route removal until Pack, Registry, and binding dependencies are reassigned", async () => {
+    const root = await mutableRepository();
+    const { service } = await createService(root);
+    const routes = currentRoutes(await service.serverConfigurationState());
+    delete routes.crypto;
+
+    const preview = await service.prepareServerConfigurationChange({ routes });
+    expect(preview.valid).toBe(false);
+    expect(preview.issues).toContainEqual(expect.objectContaining({
+      code: "route_removal_blocked",
+      logicalChannel: "crypto",
+    }));
+    expect(preview.issues.find((entry) => entry.code === "route_removal_blocked")?.message).toContain("Packs crypto");
+    expect(preview.issues.find((entry) => entry.code === "route_removal_blocked")?.message).toContain("Registry Assets");
+    await expect(service.applyServerConfiguration(preview.previewId, preview.confirmation)).rejects.toMatchObject({
+      code: "server_configuration_preview_not_found",
+    });
+  });
+
   it("requires migration for a changed route with persistent bindings", async () => {
     const root = await mutableRepository();
     const { service } = await createService(root);

@@ -2,8 +2,7 @@
 
 The administration Registry is the authoritative Asset-management surface. It owns
 canonical identity, display name, qualified TradingView symbol, currency, logical
-channel, aliases already present in source, and the canonical logo stored by stable
-Asset ID. Packs select current Registry Assets; they do not ask the operator to enter a
+channel, and the canonical logo stored by stable Asset ID. Packs select current Registry Assets; they do not ask the operator to enter a
 second copy of Asset metadata.
 
 ## Why the Asset ID exists
@@ -29,7 +28,7 @@ GET /api/v1/assets?q=<terms>&offset=<integer>&limit=<integer>
 Only `q`, `offset`, and `limit` are accepted. Unknown and duplicate parameters are
 rejected. Search is case-insensitive, requires every whitespace-separated term to
 match somewhere, and covers the stable ID, display name, canonical TradingView symbol,
-aliases, currency, logical channel, owning Pack IDs, and Pack display names. Results
+currency, logical channel, owning Pack IDs, and Pack display names. Results
 are sorted by stable ID and paged deterministically.
 
 Selecting **Manage** performs a second exact lookup. Older in-flight search or
@@ -48,7 +47,7 @@ application authorization. The canonical Registry is not changed during review.
 **Apply Registry Change** requires an explicit confirmation and applies the reviewed
 source patch only if Registry, Pack, and channel source state is still current. The
 operation does not change Pack membership, render a chart, create a Release, or contact
-Discord. Existing aliases are preserved when canonical metadata is edited.
+Discord. Legacy compatibility aliases, when present in historical source, are preserved internally during canonical metadata edits but are not exposed as an operator workflow.
 
 ## Canonical logo custody
 
@@ -102,7 +101,7 @@ canonical Pack membership and continues to combine with the existing multi-term
 text query. Filtering is read-only.
 
 The additions-only CSV importer validates the whole file before application and
-supports optional aliases and one current Pack placement per new Asset. Valid
+supports one optional current Pack placement per new Asset and rejects alias columns. Valid
 imports replace Registry and Packs through one rollback-protected transaction;
 invalid rows never partially modify canonical source. See
 `docs/REGISTRY_CSV_IMPORT.md` for the exact format and safeguards.

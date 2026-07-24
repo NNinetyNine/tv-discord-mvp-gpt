@@ -661,8 +661,8 @@ export interface AdminServerConnectionInspection {
 
 export interface AdminServerConfigurationIssue {
   readonly code:
-    | "route_missing"
-    | "route_unknown"
+    | "route_name_invalid"
+    | "route_removal_blocked"
     | "channel_id_invalid"
     | "channel_id_duplicate"
     | "pack_route_unconfigured"
@@ -1292,38 +1292,64 @@ export class AdminService {
     if (!isRecord(input.routes)) {
       throw new AdminError("invalid_request", "Server route configuration must be an object.");
     }
+
     const currentNames = this.logicalChannels();
-    const suppliedNames = Object.keys(input.routes);
+    const suppliedNames = Object.keys(input.routes).sort((left, right) => left.localeCompare(right, "en"));
+    const { file: bindingsFile, bindings } = await this.#readThreadBindings();
+    const currentRoutes: Record<string, string> = {};
     for (const logicalChannel of currentNames) {
-      if (!Object.hasOwn(input.routes, logicalChannel)) {
+      const value = this.#state.rawChannels[logicalChannel];
+      currentRoutes[logicalChannel] = typeof value === "string" ? value.trim() : "";
+    }
+
+    for (const logicalChannel of suppliedNames) {
+      if (!/^[a-z][a-z0-9_-]{0,63}$/u.test(logicalChannel)) {
         issues.push(Object.freeze({
-          code: "route_missing" as const,
+          code: "route_name_invalid" as const,
           logicalChannel,
-          message: `Route ${logicalChannel} is missing from the reviewed configuration.`,
+          message: `Logical route ${logicalChannel || "(blank)"} must be a lowercase stable name of 1 to 64 characters, beginning with a letter.`,
         }));
       }
     }
-    for (const logicalChannel of suppliedNames) {
-      if (!currentNames.includes(logicalChannel)) {
+
+    for (const logicalChannel of currentNames.filter((name) => !suppliedNames.includes(name))) {
+      const packIds = this.#state.packs.filter((pack) => pack.channel === logicalChannel).map((pack) => pack.id);
+      const registryAssetCount = this.#state.assets.filter((asset) => asset.channel === logicalChannel).length;
+      const boundThreadCount = packIds.reduce(
+        (sum, packId) => sum + Object.keys(bindings.packs[packId] ?? {}).length,
+        0,
+      );
+      if (packIds.length > 0 || registryAssetCount > 0 || boundThreadCount > 0) {
+        const dependencies = [
+          ...(packIds.length === 0 ? [] : [`Packs ${packIds.join(", ")}`]),
+          ...(registryAssetCount === 0 ? [] : [`${registryAssetCount} Registry Asset${registryAssetCount === 1 ? "" : "s"}`]),
+          ...(boundThreadCount === 0 ? [] : [`${boundThreadCount} persistent thread binding${boundThreadCount === 1 ? "" : "s"}`]),
+        ];
         issues.push(Object.freeze({
-          code: "route_unknown" as const,
+          code: "route_removal_blocked" as const,
           logicalChannel,
-          message: `Unknown logical route ${logicalChannel} cannot be added by server migration.`,
+          message: `Route ${logicalChannel} cannot be removed because it is still used by ${dependencies.join(" and ")}. Reassign those dependencies first.`,
         }));
       }
     }
 
     const nextRoutes: Record<string, string> = {};
     const seenIds = new Map<string, string>();
-    for (const logicalChannel of currentNames) {
+    for (const logicalChannel of suppliedNames) {
       const raw = input.routes[logicalChannel];
-      if (typeof raw !== "string" || raw.trim() !== raw || (raw.length > 0 && !/^[0-9]{17,20}$/u.test(raw))) {
+      const isNew = !currentNames.includes(logicalChannel);
+      if (
+        typeof raw !== "string" ||
+        raw.trim() !== raw ||
+        (raw.length > 0 && !/^[0-9]{17,20}$/u.test(raw)) ||
+        (isNew && raw.length === 0)
+      ) {
         issues.push(Object.freeze({
           code: "channel_id_invalid" as const,
           logicalChannel,
-          message: `${logicalChannel} must be an empty value or one normalized Discord snowflake.`,
+          message: `${logicalChannel} must use one normalized 17- to 20-digit Discord Channel ID${isNew ? "" : " or remain explicitly unconfigured"}.`,
         }));
-        nextRoutes[logicalChannel] = "";
+        nextRoutes[logicalChannel] = typeof raw === "string" ? raw.trim() : "";
         continue;
       }
       nextRoutes[logicalChannel] = raw;
@@ -1333,7 +1359,7 @@ export class AdminService {
           issues.push(Object.freeze({
             code: "channel_id_duplicate" as const,
             logicalChannel,
-            message: `${logicalChannel} and ${prior} cannot resolve to the same Discord forum.`,
+            message: `${logicalChannel} and ${prior} cannot resolve to the same Discord channel.`,
           }));
         } else {
           seenIds.set(raw, logicalChannel);
@@ -1351,19 +1377,16 @@ export class AdminService {
       }
     }
 
-    const { file: bindingsFile, bindings } = await this.#readThreadBindings();
-    const currentRoutes: Record<string, string> = {};
-    for (const logicalChannel of currentNames) {
-      const value = this.#state.rawChannels[logicalChannel];
-      currentRoutes[logicalChannel] = typeof value === "string" ? value.trim() : "";
-    }
-    const changedRoutes = currentNames.filter(
-      (logicalChannel) => currentRoutes[logicalChannel] !== nextRoutes[logicalChannel],
-    );
+    const allNames = [...new Set([...currentNames, ...suppliedNames])].sort((left, right) => left.localeCompare(right, "en"));
+    const changedRoutes = allNames.filter((logicalChannel) => {
+      const current = Object.hasOwn(currentRoutes, logicalChannel) ? currentRoutes[logicalChannel] : undefined;
+      const next = Object.hasOwn(nextRoutes, logicalChannel) ? nextRoutes[logicalChannel] : undefined;
+      return current !== next;
+    });
     if (changedRoutes.length === 0) {
       issues.push(Object.freeze({
         code: "no_route_changes" as const,
-        message: "The candidate does not change any Discord route.",
+        message: "The candidate does not add, remove, or change any Discord route.",
       }));
     }
     const affectedPackIds = this.#state.packs
@@ -1419,7 +1442,7 @@ export class AdminService {
         })
       : bindings;
     const channelsAfterBytes = Buffer.from(
-      `${JSON.stringify(Object.fromEntries(currentNames.map((name) => [name, nextRoutes[name] ?? ""])), null, 2)}\n`,
+      `${JSON.stringify(Object.fromEntries(suppliedNames.map((name) => [name, nextRoutes[name] ?? ""])), null, 2)}\n`,
       "utf8",
     );
     const threadBindingsAfterBytes = serializeAssetThreadBindings(nextBindings);
@@ -1451,12 +1474,12 @@ export class AdminService {
       affectedPackIds: Object.freeze(affectedPackIds),
       bindingsToReestablish,
       issues: Object.freeze(issues),
-      routes: Object.freeze(currentNames.map((logicalChannel) => {
+      routes: Object.freeze(allNames.map((logicalChannel) => {
         const packIds = this.#state.packs.filter((pack) => pack.channel === logicalChannel).map((pack) => pack.id);
         return Object.freeze({
           logicalChannel,
-          currentChannelId: currentRoutes[logicalChannel] || null,
-          nextChannelId: nextRoutes[logicalChannel] || null,
+          currentChannelId: Object.hasOwn(currentRoutes, logicalChannel) ? currentRoutes[logicalChannel] || null : null,
+          nextChannelId: Object.hasOwn(nextRoutes, logicalChannel) ? nextRoutes[logicalChannel] || null : null,
           changed: changedRoutes.includes(logicalChannel),
           packIds: Object.freeze(packIds),
           boundThreadCount: packIds.reduce(
@@ -1536,9 +1559,7 @@ export class AdminService {
         );
       }
 
-      const liveCandidateRoutes = Object.fromEntries(
-        record.preview.routes.map((route) => [route.logicalChannel, route.nextChannelId ?? ""]),
-      );
+      const liveCandidateRoutes = JSON.parse(record.channelsAfterBytes.toString("utf8")) as Record<string, string>;
       const liveRevalidation = await this.#inspectServerRouteMap(liveCandidateRoutes);
       if (!liveRevalidation.operationallyReady) {
         throw new AdminError(
@@ -4051,7 +4072,6 @@ export class AdminService {
           asset.tradingView,
           asset.channel,
           asset.currency ?? "",
-          ...(asset.tradingViewAliases ?? []),
           ...packIds,
           ...packIds.map((packId) => this.#state.byPackId.get(packId)?.display ?? ""),
         ].map((value) => value.toLocaleLowerCase("en-US"));

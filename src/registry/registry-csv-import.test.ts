@@ -20,10 +20,10 @@ function context(csvText: string) {
 }
 
 describe("Registry CSV import preview", () => {
-  it("validates additions, aliases, and one optional Pack membership as one candidate", () => {
+  it("validates canonical additions and one optional Pack membership as one candidate", () => {
     const result = context([
-      "id,display_name,tradingview_symbol,currency,channel,aliases,pack_ids",
-      'aapl,"Apple, Inc.",NASDAQ:AAPL,USD,stocks,APPLE|APPLE_INC,stocks',
+      "id,display_name,tradingview_symbol,currency,channel,pack_ids",
+      'aapl,"Apple, Inc.",NASDAQ:AAPL,USD,stocks,stocks',
     ].join("\n"));
 
     expect(result.issues).toEqual([]);
@@ -31,7 +31,6 @@ describe("Registry CSV import preview", () => {
       rowNumber: 2,
       id: "aapl",
       displayName: "Apple, Inc.",
-      aliases: ["APPLE", "APPLE_INC"],
       packIds: ["stocks"],
     })]);
     expect(result.packMembershipCount).toBe(1);
@@ -43,9 +42,9 @@ describe("Registry CSV import preview", () => {
 
   it("reports duplicate identifiers, existing display conflicts, unknown channels, and unknown Packs without candidates", () => {
     const result = context([
-      "id,display_name,tradingview_symbol,currency,channel,aliases,pack_ids",
-      "btc,Bitcoin,NASDAQ:BTC,USD,missing,,unknown",
-      "btc,Other,NASDAQ:OTHER,USD,stocks,,",
+      "id,display_name,tradingview_symbol,currency,channel,pack_ids",
+      "btc,Bitcoin,NASDAQ:BTC,USD,missing,unknown",
+      "btc,Other,NASDAQ:OTHER,USD,stocks,",
     ].join("\n"));
 
     expect(result.registryAfterBytes).toBeNull();
@@ -60,24 +59,26 @@ describe("Registry CSV import preview", () => {
   });
 
 
-  it("reports invalid TradingView, currency, alias, and canonical filename-token collisions", () => {
+  it("reports invalid canonical TradingView identities and currencies", () => {
     const invalid = context([
-      "id,display_name,tradingview_symbol,currency,channel,aliases,pack_ids",
-      "bad_asset,Bad Asset,UNQUALIFIED,US$,stocks,DUP|dup,",
+      "id,display_name,tradingview_symbol,currency,channel,pack_ids",
+      "bad_asset,Bad Asset,UNQUALIFIED,US$,stocks,",
     ].join("\n"));
     expect(invalid.issues.map((entry) => entry.code)).toEqual(expect.arrayContaining([
       "invalid_tradingview_symbol",
       "invalid_currency",
-      "duplicate_alias",
     ]));
-
-    const collision = context([
-      "id,display_name,tradingview_symbol,currency,channel,aliases,pack_ids",
-      "eth,Example,NASDAQ:ETH,USD,stocks,BTCUSD,",
-    ].join("\n"));
-    expect(collision.issues).toContainEqual(expect.objectContaining({ code: "candidate_validation_failed" }));
-    expect(collision.registryAfterBytes).toBeNull();
   });
+
+  it("rejects the retired aliases column instead of silently importing compatibility tokens", () => {
+    const result = context([
+      "id,display_name,tradingview_symbol,currency,channel,aliases,pack_ids",
+      "aapl,Apple,NASDAQ:AAPL,USD,stocks,APPLE,stocks",
+    ].join("\n"));
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: "unknown_header", field: "aliases" }));
+    expect(result.registryAfterBytes).toBeNull();
+  });
+
 
   it("rejects multiple Pack memberships because current Workspace architecture is disjoint", () => {
     const result = context([

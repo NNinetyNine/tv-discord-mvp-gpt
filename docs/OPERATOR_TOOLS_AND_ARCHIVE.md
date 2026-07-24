@@ -32,17 +32,16 @@ state, and thread-binding facts. Application requires the exact phrase
 persistence functions and restores the original Pack bytes if a later step
 fails. Registry, Workspace, Release custody, and Discord are non-effects.
 
-## Registry alias maintenance
+## Canonical Registry identity
 
-The Registry inspector now adds or removes TradingView compatibility aliases for
-a current Asset. Alias review validates the global canonical and alias namespace
-case-insensitively, binds the operation to the exact Registry hash, and requires
-`APPLY ALIAS <ASSET_ID>`.
+The routine Registry workflow uses one canonical qualified TradingView identity
+(`MARKET:SYMBOL`) per Asset. Alias controls, alias search guidance, and alias CSV
+columns are no longer exposed to operators.
 
-Application reuses `addAssetAlias` and `removeAssetAlias`. It changes only
-`definitions/registry.json`; Pack membership, logos, staging, Releases, and
-Discord are non-effects. Canonical TradingView identity remains separate from
-optional compatibility aliases.
+Legacy alias fields and resolver functions remain internal compatibility code
+until every dependency and historical source path has been audited. Step 545 does
+not delete that underlying compatibility model or rewrite historical data. New
+operator actions cannot create aliases.
 
 ## Release archive
 

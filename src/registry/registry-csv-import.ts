@@ -13,7 +13,6 @@ export const REGISTRY_CSV_IMPORT_REQUIRED_HEADERS = Object.freeze([
   "channel",
 ] as const);
 export const REGISTRY_CSV_IMPORT_OPTIONAL_HEADERS = Object.freeze([
-  "aliases",
   "pack_ids",
 ] as const);
 
@@ -24,7 +23,6 @@ export interface RegistryCsvImportRow {
   readonly tradingViewSymbol: string;
   readonly currency: string;
   readonly channel: string;
-  readonly aliases: readonly string[];
   readonly packIds: readonly string[];
 }
 
@@ -213,7 +211,6 @@ export function previewRegistryCsvImport(input: PreviewRegistryCsvImportInput): 
     const tradingViewSymbol = fieldAt(record, "tradingview_symbol");
     const currency = fieldAt(record, "currency");
     const channel = fieldAt(record, "channel");
-    const aliases = splitList(fieldAt(record, "aliases"));
     const rowPackIds = splitList(fieldAt(record, "pack_ids"));
 
     const requiredValues = { id, display_name: displayName, tradingview_symbol: tradingViewSymbol, currency, channel };
@@ -239,8 +236,6 @@ export function previewRegistryCsvImport(input: PreviewRegistryCsvImportInput): 
     const importedDisplayOwner = importedDisplays.get(displayKey);
     if (importedDisplayOwner !== undefined) issues.push(issue("duplicate_import_display", `Display name ${displayName} is also used by imported Asset ${importedDisplayOwner}.`, rowNumber, "display_name"));
     importedDisplays.set(displayKey, id);
-    if (new Set(aliases.map((alias) => alias.toLocaleUpperCase("en-US"))).size !== aliases.length) issues.push(issue("duplicate_alias", "aliases contains duplicate values.", rowNumber, "aliases"));
-    if (aliases.some((alias) => alias.length === 0 || alias.trim() !== alias || /[\u0000-\u001F\u007F]/u.test(alias))) issues.push(issue("invalid_alias", "aliases must be non-empty single-line values separated by |.", rowNumber, "aliases"));
     if (new Set(rowPackIds).size !== rowPackIds.length) issues.push(issue("duplicate_pack_reference", "pack_ids contains duplicate Pack IDs.", rowNumber, "pack_ids"));
     if (rowPackIds.length > 1) issues.push(issue("multiple_pack_memberships_unsupported", "Current Pack architecture permits each Asset to belong to at most one Pack.", rowNumber, "pack_ids"));
     for (const packId of rowPackIds) if (!packIds.has(packId)) issues.push(issue("unknown_pack", `Pack ${packId} does not exist.`, rowNumber, "pack_ids"));
@@ -252,7 +247,6 @@ export function previewRegistryCsvImport(input: PreviewRegistryCsvImportInput): 
       tradingViewSymbol,
       currency: validatedCurrency.ok ? validatedCurrency.currency : currency,
       channel,
-      aliases,
       packIds: rowPackIds,
     }));
   }
@@ -269,7 +263,6 @@ export function previewRegistryCsvImport(input: PreviewRegistryCsvImportInput): 
       display: row.displayName,
       currency: row.currency,
       channel: row.channel,
-      ...(row.aliases.length === 0 ? {} : { tradingViewAliases: [...row.aliases] }),
     };
   }
   const candidatePacks = clonePacks(input.rawPacks);

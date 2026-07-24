@@ -186,8 +186,8 @@ describe("Admin HTTP server", () => {
     const repositoryRoot = await mutableRepository();
     const { server } = await start({ repositoryRoot });
     const csv = [
-      "id,display_name,tradingview_symbol,currency,channel,aliases,pack_ids",
-      "http_csv,HTTP CSV Asset,NASDAQ:HTCSV,USD,stocks,HT_CSV,stocks",
+      "id,display_name,tradingview_symbol,currency,channel,pack_ids",
+      "http_csv,HTTP CSV Asset,NASDAQ:HTCSV,USD,stocks,stocks",
     ].join("\n");
     const preview = await jsonRequest(server.url, "/api/v1/registry/csv-import/preview?filename=assets.csv", {
       method: "POST",

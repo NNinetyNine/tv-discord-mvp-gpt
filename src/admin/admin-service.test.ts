@@ -188,8 +188,8 @@ describe("AdminService", () => {
     const preview = service.prepareRegistryCsvImport({
       fileName: "assets.csv",
       csvText: [
-        "id,display_name,tradingview_symbol,currency,channel,aliases,pack_ids",
-        "qa_csv,QA CSV Asset,NASDAQ:QACSV,USD,stocks,QA_CSV|QAASSET,stocks",
+        "id,display_name,tradingview_symbol,currency,channel,pack_ids",
+        "qa_csv,QA CSV Asset,NASDAQ:QACSV,USD,stocks,stocks",
       ].join("\n"),
     });
     expect(preview).toMatchObject({
@@ -202,7 +202,6 @@ describe("AdminService", () => {
     expect(applied).toMatchObject({ importedAssetCount: 1, packMembershipCount: 1 });
     expect(service.getAsset("qa_csv")).toMatchObject({
       displayName: "QA CSV Asset",
-      tradingViewAliases: ["QA_CSV", "QAASSET"],
       packIds: ["stocks"],
     });
   });

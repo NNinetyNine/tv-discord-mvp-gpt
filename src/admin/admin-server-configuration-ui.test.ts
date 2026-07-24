@@ -9,6 +9,12 @@ describe("Administration server configuration UI", () => {
     expect(html).toContain("SERVER CONFIGURATION");
     expect(html).toContain("TEST CURRENT SERVER");
     expect(html).toContain("ROUTING &amp; DESTINATIONS");
+    expect(html).toContain("DISCORD CHANNEL ID");
+    expect(html).not.toContain("DISCORD FORUM ID");
+    expect(html).toContain('id="server-add-route"');
+    expect(html).toContain('id="server-new-route-name"');
+    expect(js).toContain("addServerRouteDraft");
+    expect(js).toContain("routeRemovalBlocker");
     expect(html).toContain("REVIEW AS SERVER MIGRATION");
     expect(html).toContain("Credentials remain process-environment secrets");
     expect(html).toContain("WEBHOOKS");

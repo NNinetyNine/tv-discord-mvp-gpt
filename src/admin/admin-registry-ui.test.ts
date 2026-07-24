@@ -29,6 +29,9 @@ describe("Operational Registry UI", () => {
     expect(js).toContain('"Content-Type": "text/csv"');
     expect(js).toContain('confirmation: "APPLY REGISTRY CSV IMPORT"');
     expect(html).toContain("Current architecture permits at most one Pack membership per Asset");
+    expect(html).toContain("canonical MARKET:SYMBOL identities");
+    expect(html).not.toContain("Optional: <code>aliases");
+    expect(js).not.toContain("channel,aliases,pack_ids");
   });
 
   it("revalidates exact Asset IDs and exposes the most important canonical metadata", async () => {
@@ -40,6 +43,7 @@ describe("Operational Registry UI", () => {
     expect(js).toContain("/api/v1/assets/${encodeURIComponent(assetId)}");
     expect(js).toContain("registrySelectionGeneration");
     expect(js).toContain("<dt>INTERNAL ID</dt>");
+    expect(js).not.toContain("<dt>ALIASES</dt>");
     expect(html).toContain("Pack memberships, revisions, archive filenames, logos, and thread routes reference it");
   });
 
@@ -75,7 +79,9 @@ describe("Operational Registry UI", () => {
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
     expect(html).not.toContain('id="thread-logo"');
     expect(html).toContain('id="thread-logo-state"');
-    expect(html).toContain("UP TO 20 AVAILABLE TAGS · APPLY UP TO 5");
+    expect(html).toContain("20 TAGS MAY BE CONFIGURED FOR THIS FORUM · APPLY UP TO 5 TAGS TO EACH POST");
+    expect(html).toContain('id="thread-tag-count"');
+    expect(js).toContain("updateThreadTagCount");
     expect(html).toContain("Manage or replace the logo in Registry");
     expect(js).toContain("/provisioning-logo/canonical");
     expect(js).toContain("ADD CANONICAL LOGO IN REGISTRY");

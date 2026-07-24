@@ -16,7 +16,12 @@ const state = {
   packSourceFile: null,
   packPreview: null,
   packBusy: false,
+  streamlinedRevisionConfirmation: false,
+  streamlinedCaptureSessionId: null,
   expandedWorkspaceAssets: new Set(),
+  workspaceQuickLookItems: [],
+  workspaceQuickLookIndex: 0,
+  workspaceQuickLookReturnFocus: null,
   publicationSelectedPackIds: new Set(),
   publicationSupersedePackIds: new Set(),
   publicationPreview: null,
@@ -30,6 +35,7 @@ const state = {
   serverInspection: null,
   serverPreview: null,
   serverBusy: false,
+  serverRouteDrafts: [],
   operatorTools: null,
   exportAudit: null,
   packMaintenance: null,
@@ -41,8 +47,6 @@ const state = {
   packMaintenanceBusy: false,
   releaseArchive: null,
   releaseDetail: null,
-  aliasPreview: null,
-  aliasBusy: false,
   registryQuery: "",
   registryPackId: "",
   registryPacks: [],
@@ -144,7 +148,7 @@ function showMessage(text, error = true) {
   box.setAttribute("role", error ? "alert" : "status");
   box.setAttribute("aria-live", error ? "assertive" : "polite");
   box.hidden = false;
-  const modalOpen = !qs("#registry-editor").hidden || !qs("#registry-import-dialog").hidden;
+  const modalOpen = !qs("#registry-editor").hidden || !qs("#registry-import-dialog").hidden || !qs("#workspace-quick-look").hidden;
   if (error && !modalOpen) requestAnimationFrame(() => box.focus());
 }
 
@@ -463,6 +467,16 @@ function selectedThreadTagIds() {
   return qsa('#thread-tags input[type="checkbox"]:checked').map((input) => input.value);
 }
 
+function threadTagLegend() {
+  return '<legend><span>20 TAGS MAY BE CONFIGURED FOR THIS FORUM · APPLY UP TO 5 TAGS TO EACH POST</span><strong id="thread-tag-count">0 / 5 SELECTED</strong></legend>';
+}
+
+function updateThreadTagCount() {
+  const count = selectedThreadTagIds().length;
+  const counter = qs("#thread-tag-count");
+  if (counter !== null) counter.textContent = `${count} / 5 SELECTED`;
+}
+
 function resetThreadProvisioning({ keepForum = false } = {}) {
   if (!keepForum) state.threadForumInspection = null;
   state.threadLogo = null;
@@ -475,21 +489,24 @@ function renderThreadTags() {
   const fieldset = qs("#thread-tags");
   const inspection = state.threadForumInspection;
   if (inspection === null) {
-    fieldset.innerHTML = '<legend>UP TO 20 AVAILABLE TAGS · APPLY UP TO 5</legend><p id="thread-tags-empty">INSPECT THE FORUM TO LOAD CURRENT TAGS</p>';
+    fieldset.innerHTML = `${threadTagLegend()}<p id="thread-tags-empty">INSPECT THE FORUM TO LOAD CURRENT TAGS</p>`;
+    updateThreadTagCount();
     return;
   }
   const tags = inspection.forum.availableTags;
-  fieldset.innerHTML = '<legend>UP TO 20 AVAILABLE TAGS · APPLY UP TO 5</legend>' + (tags.length === 0
+  fieldset.innerHTML = threadTagLegend() + (tags.length === 0
     ? '<p id="thread-tags-empty">THIS FORUM HAS NO AVAILABLE TAGS</p>'
     : `<div class="thread-tag-options">${tags.map((tag) => `<label class="thread-tag-option"><input type="checkbox" value="${escapeAttribute(tag.id)}"><span>${escapeHtml(tag.name)}${tag.moderated ? " · MODERATED" : ""}</span></label>`).join("")}</div>`);
   qsa('#thread-tags input[type="checkbox"]').forEach((input) => input.addEventListener("change", () => {
     const selected = selectedThreadTagIds();
     if (selected.length > 5) {
       input.checked = false;
-      showMessage("Discord permits at most five applied forum tags.");
+      showMessage("Each Discord forum post may apply at most five tags.");
     }
+    updateThreadTagCount();
     updateThreadAdoptButton();
   }));
+  updateThreadTagCount();
 }
 
 function updateThreadAdoptButton() {
@@ -1084,12 +1101,9 @@ function renderRegistryInspector() {
     controls.hidden = true;
     workflows.hidden = true;
     qs("#registry-logo-card").hidden = true;
-    qs("#registry-alias-management").hidden = true;
-    clearAliasPreview();
     return;
   }
 
-  const aliases = asset.tradingViewAliases?.length ? asset.tradingViewAliases.join(", ") : "NONE";
   const packs = asset.packIds.length ? asset.packIds.join(", ") : "NONE";
   const renderReady = Boolean(asset.currency && /^[^:]+:[^:]+$/u.test(asset.tradingViewSymbol));
   qs("#registry-inspector-heading").textContent = asset.displayName;
@@ -1103,7 +1117,6 @@ function renderRegistryInspector() {
     <dt>CURRENCY</dt><dd>${escapeHtml(asset.currency ?? "MISSING")}</dd>
     <dt>ASSIGNED CHANNEL</dt><dd>${escapeHtml(asset.logicalChannel)}</dd>
     <dt>PACK MEMBERSHIPS</dt><dd>${escapeHtml(packs)}</dd>
-    <dt>ALIASES</dt><dd>${escapeHtml(aliases)}</dd>
     <dt>INTERNAL ID</dt><dd>${escapeHtml(asset.id)}</dd>`;
   controls.hidden = false;
   workflows.hidden = false;
@@ -1113,7 +1126,6 @@ function renderRegistryInspector() {
   qs("#registry-open-threads").disabled = asset.packIds.length === 0;
   qs("#registry-retire-asset").disabled = asset.packIds.length > 0;
   renderRegistryLogo();
-  renderAliasManagement();
 }
 
 async function loadRegistryLogo(assetId) {
@@ -1137,9 +1149,6 @@ async function selectRegistryAsset(assetId) {
   qs("#registry-asset-facts").hidden = true;
   qs("#registry-primary-controls").hidden = true;
   qs("#registry-workflow-actions").hidden = true;
-  qs("#registry-alias-management").hidden = true;
-  qs("#registry-alias-input").value = "";
-  clearAliasPreview();
   try {
     const asset = await api(`/api/v1/assets/${encodeURIComponent(assetId)}`);
     if (generation !== state.registrySelectionGeneration) return;
@@ -1533,7 +1542,7 @@ async function applyRegistryCsvImportFromUi() {
 }
 
 function downloadRegistryCsvTemplate() {
-  const csv = "id,display_name,tradingview_symbol,currency,channel,aliases,pack_ids\nnew_asset,New Asset,NASDAQ:NEWASSET,USD,stocks,NEW_ASSET,stocks\n";
+  const csv = "id,display_name,tradingview_symbol,currency,channel,pack_ids\nnew_asset,New Asset,NASDAQ:NEWASSET,USD,stocks,stocks\n";
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
@@ -1946,8 +1955,6 @@ function renderPublicationQueue() {
       ? "SELECT PACKS TO BUILD ONE GOVERNED PUBLICATION OPERATION"
       : `${selectedPacks.map((pack) => pack.displayName.toUpperCase()).join(" · ")} · REVIEW ALL TOGETHER BEFORE DISCORD`;
   qs("#publication-review").disabled = state.publicationBusy || selectedPacks.length === 0;
-  qs("#publication-select-ready").disabled = state.publicationBusy;
-  qs("#publication-clear").disabled = state.publicationBusy || selectedPacks.length === 0;
 
   qsa("[data-publication-pack]").forEach((button) => button.addEventListener("click", () => {
     const packId = button.dataset.publicationPack;
@@ -2116,6 +2123,9 @@ function updateWorkspacePreviewButton() {
   qs("#workspace-reset-pack").hidden = locked || pack === null || pack.capturedCount === 0;
   qs("#workspace-start-session").disabled = locked || pack === null || !state.packCaptureSession?.configured;
   qs("#workspace-scan-session").disabled = locked || pack === null || !state.packCaptureSession?.active;
+  const streamlined = qs("#workspace-streamlined-confirmation");
+  streamlined.checked = state.streamlinedRevisionConfirmation;
+  streamlined.disabled = locked || pack === null || !state.packCaptureSession?.active;
   qsa("[data-reset-workspace-asset]").forEach((button) => { button.hidden = locked; });
   qsa("[data-delete-workspace-revision]").forEach((button) => { button.disabled = locked; });
 }
@@ -2155,7 +2165,7 @@ function reviewQueuedCapture(assetId) {
   qs("#workspace-preview-heading").textContent = `${asset.id.toUpperCase()} REVISION ${asset.revisions + 1} READY`;
   qs("#workspace-preview-context").textContent = `${pack.timeframe} · EXPORTED ${candidate.exportedAt}`;
   qs("#workspace-preview-image").src = state.packPreview.publicationUrl;
-  qs("#workspace-preview-caption").textContent = `${asset.displayName} · ${candidate.filename} · SOURCE SHA-256 ${candidate.sourceSha256}`;
+  qs("#workspace-preview-caption").textContent = `${asset.displayName} · SOURCE SHA-256 ${candidate.sourceSha256}`;
   qs("#workspace-preview-receipt").href = state.packPreview.receiptUrl;
   qs("#workspace-accept").textContent = `ACCEPT REVISION ${asset.revisions + 1}`;
   qs("#workspace-review-state").textContent = "AWAITING ACCEPTANCE";
@@ -2163,7 +2173,13 @@ function reviewQueuedCapture(assetId) {
 }
 
 function renderCaptureSession(session) {
+  const sessionIdentity = session.active ? session.sessionId : null;
+  if (state.streamlinedCaptureSessionId !== sessionIdentity) {
+    state.streamlinedCaptureSessionId = sessionIdentity;
+    state.streamlinedRevisionConfirmation = false;
+  }
   state.packCaptureSession = session;
+  qs("#workspace-streamlined-confirmation").checked = state.streamlinedRevisionConfirmation;
   qs("#workspace-downloads-folder").textContent = session.downloadsFolder ?? "NOT CONFIGURED";
   qs("#workspace-session-started").textContent = session.startedAt ?? "NOT STARTED";
   qs("#workspace-session-progress").textContent = `${session.acceptedCount} ACCEPTED · ${session.pendingCount} PENDING`;
@@ -2174,7 +2190,7 @@ function renderCaptureSession(session) {
   const results = qs("#workspace-scan-results");
   results.hidden = pending.length === 0;
   results.innerHTML = pending.length === 0 ? "" : `
-    <p>${pending.length} NEWEST CHART${pending.length === 1 ? "" : "S"} QUEUED FOR REVIEW</p>
+    <p>${pending.length} CHANGED ASSET${pending.length === 1 ? "" : "S"} ${state.streamlinedRevisionConfirmation ? "READY FOR AUTOMATIC ACCEPTANCE" : "QUEUED FOR REVIEW"}</p>
     <ul>${pending.map((candidate) => `<li><button class="outline-action" type="button" data-review-scanned-asset="${escapeAttribute(candidate.assetId)}">${escapeHtml(candidate.assetId.toUpperCase())} · REVIEW</button></li>`).join("")}</ul>
   `;
   qsa("[data-review-scanned-asset]").forEach((button) => {
@@ -2212,6 +2228,24 @@ async function startCaptureSession() {
   }
 }
 
+async function acceptStreamlinedCaptureCandidates(candidates) {
+  const accepted = [];
+  const failed = [];
+  for (const candidate of candidates) {
+    try {
+      const result = await api(`/api/v1/pack-workspace/previews/${encodeURIComponent(candidate.previewId)}/accept`, {
+        method: "POST",
+        body: "{}",
+      });
+      accepted.push(Object.freeze({ assetId: result.assetId, revision: result.revisions }));
+    } catch (error) {
+      failed.push(Object.freeze({ assetId: candidate.assetId, message: error.message }));
+    }
+  }
+  await loadPackWorkspace();
+  return Object.freeze({ accepted: Object.freeze(accepted), failed: Object.freeze(failed) });
+}
+
 async function scanCaptureSession() {
   const pack = selectedWorkspacePack();
   if (pack === null || state.packBusy || !state.packCaptureSession?.active) return;
@@ -2225,12 +2259,22 @@ async function scanCaptureSession() {
     });
     renderCaptureSession(result.session);
     const queued = result.scan.queued.length;
-    showMessage(
-      queued === 0
-        ? "Scan complete. No newer chart exports were found, so no revisions were created."
-        : `Scan complete. ${queued} newest chart${queued === 1 ? "" : "s"} queued; unchanged assets were left untouched.`,
-      false,
-    );
+    if (queued > 0 && state.streamlinedRevisionConfirmation) {
+      qs("#workspace-session-state").textContent = "VERIFYING & STAGING CHANGED ASSETS";
+      const accepted = await acceptStreamlinedCaptureCandidates(result.scan.queued);
+      if (accepted.failed.length > 0) {
+        showMessage(`${accepted.accepted.length} changed Asset${accepted.accepted.length === 1 ? " was" : "s were"} accepted; ${accepted.failed.length} require manual review. ${accepted.failed.map((item) => `${item.assetId.toUpperCase()}: ${item.message}`).join(" ")}`);
+      } else {
+        showMessage(`${accepted.accepted.length} changed Asset${accepted.accepted.length === 1 ? " was" : "s were"} verified and staged automatically. Unchanged Assets were left untouched. Nothing was sent to Discord.`, false);
+      }
+    } else {
+      showMessage(
+        queued === 0
+          ? "Synchronization complete. No newer or changed chart exports were found, so no revisions were created."
+          : `Synchronization complete. ${queued} changed Asset${queued === 1 ? " is" : "s are"} queued for review; unchanged Assets were left untouched.`,
+        false,
+      );
+    }
   } catch (error) {
     showMessage(error.message);
     await loadCaptureSession().catch(() => undefined);
@@ -2253,6 +2297,116 @@ function pendingCaptureFor(assetId) {
   ) ?? null;
 }
 
+function workspaceQuickLookItems(pack) {
+  if (pack === null) return [];
+  const items = [];
+  for (const asset of pack.assets) {
+    const pending = pendingCaptureFor(asset.id);
+    if (pending !== null) {
+      items.push(Object.freeze({
+        key: `${asset.id}:pending`,
+        assetId: asset.id,
+        heading: `${asset.id.toUpperCase()} · NEXT REVISION`,
+        imageUrl: `/api/v1/pack-workspace/previews/${pending.previewId}/publication.png`,
+        receiptUrl: `/api/v1/pack-workspace/previews/${pending.previewId}/receipt.json`,
+        alt: `${asset.displayName} pending Pack render`,
+        caption: `${asset.displayName} · AWAITING CONFIRMATION · EXPORTED ${pending.exportedAt} · SOURCE SHA-256 ${pending.sourceSha256}`,
+      }));
+    }
+    for (const revision of [...asset.revisionHistory].sort((left, right) => right.revision - left.revision)) {
+      items.push(Object.freeze({
+        key: `${asset.id}:${revision.revision}`,
+        assetId: asset.id,
+        heading: `${asset.id.toUpperCase()} · REVISION ${revision.revision}${revision.current ? " · CURRENT" : ""}`,
+        imageUrl: revision.publicationUrl,
+        receiptUrl: revision.receiptUrl,
+        alt: `${asset.displayName} revision ${revision.revision} render`,
+        caption: `${asset.displayName} · ${revision.timeframe} · DATA AS OF ${revision.dataAsOf} · ACCEPTED ${revision.acceptedAt}`,
+      }));
+    }
+  }
+  return items;
+}
+
+function renderWorkspaceQuickLook() {
+  const item = state.workspaceQuickLookItems[state.workspaceQuickLookIndex] ?? null;
+  if (item === null) return;
+  qs("#workspace-quick-look-heading").textContent = item.heading;
+  qs("#workspace-quick-look-image").src = item.imageUrl;
+  qs("#workspace-quick-look-image").alt = item.alt;
+  qs("#workspace-quick-look-caption").textContent = item.caption;
+  qs("#workspace-quick-look-receipt").href = item.receiptUrl;
+  qs("#workspace-quick-look-position").textContent = `${state.workspaceQuickLookIndex + 1} OF ${state.workspaceQuickLookItems.length}`;
+  qs("#workspace-quick-look-previous").disabled = state.workspaceQuickLookItems.length < 2;
+  qs("#workspace-quick-look-next").disabled = state.workspaceQuickLookItems.length < 2;
+}
+
+function openWorkspaceQuickLook(key, trigger = null) {
+  const items = workspaceQuickLookItems(selectedWorkspacePack());
+  const index = items.findIndex((item) => item.key === key);
+  if (index < 0) return;
+  state.workspaceQuickLookItems = items;
+  state.workspaceQuickLookIndex = index;
+  state.workspaceQuickLookReturnFocus = trigger instanceof HTMLElement ? trigger : document.activeElement;
+  qs("#workspace-quick-look-backdrop").hidden = false;
+  qs("#workspace-quick-look").hidden = false;
+  document.body.classList.add("registry-editor-open");
+  setModalIsolation(true);
+  renderWorkspaceQuickLook();
+  requestAnimationFrame(() => qs("#workspace-quick-look").focus());
+}
+
+function closeWorkspaceQuickLook() {
+  if (qs("#workspace-quick-look").hidden) return;
+  qs("#workspace-quick-look").hidden = true;
+  qs("#workspace-quick-look-backdrop").hidden = true;
+  qs("#workspace-quick-look-image").removeAttribute("src");
+  document.body.classList.remove("registry-editor-open");
+  setModalIsolation(false);
+  const target = state.workspaceQuickLookReturnFocus;
+  state.workspaceQuickLookItems = [];
+  state.workspaceQuickLookIndex = 0;
+  state.workspaceQuickLookReturnFocus = null;
+  if (target instanceof HTMLElement && document.contains(target)) target.focus();
+}
+
+function moveWorkspaceQuickLook(delta) {
+  const count = state.workspaceQuickLookItems.length;
+  if (count < 2) return;
+  state.workspaceQuickLookIndex = (state.workspaceQuickLookIndex + delta + count) % count;
+  renderWorkspaceQuickLook();
+}
+
+function handleWorkspaceQuickLookKeydown(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeWorkspaceQuickLook();
+  } else if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    moveWorkspaceQuickLook(-1);
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    moveWorkspaceQuickLook(1);
+  } else if (event.key === "Tab") {
+    const focusable = qsa('#workspace-quick-look a[href], #workspace-quick-look button:not([disabled])')
+      .filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+    if (focusable.length === 0) {
+      event.preventDefault();
+      qs("#workspace-quick-look").focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+}
+
 function workspaceRevisionPanel(pack, asset) {
   const pending = pendingCaptureFor(asset.id);
   const history = [...asset.revisionHistory].sort((left, right) => right.revision - left.revision);
@@ -2261,8 +2415,9 @@ function workspaceRevisionPanel(pack, asset) {
     cards.push(`<article class="workspace-revision-card pending">
       <header><strong>NEXT REVISION · AWAITING CONFIRMATION</strong><span>${escapeHtml(pending.exportedAt)}</span></header>
       <img loading="lazy" src="/api/v1/pack-workspace/previews/${escapeAttribute(pending.previewId)}/publication.png" alt="${escapeAttribute(asset.displayName)} pending Pack render">
-      <p>${escapeHtml(pending.filename)} · SOURCE ${escapeHtml(pending.sourceSha256)}</p>
+      <p>SOURCE SHA-256 ${escapeHtml(pending.sourceSha256)}</p>
       <div class="workspace-revision-actions">
+        <button class="outline-action compact-action" type="button" data-workspace-quick-look="${escapeAttribute(`${asset.id}:pending`)}">QUICK LOOK</button>
         <a class="outline-action download-link compact-action" href="/api/v1/pack-workspace/previews/${escapeAttribute(pending.previewId)}/receipt.json" target="_blank" rel="noreferrer">RECEIPT</a>
         <button class="primary-action compact-action" type="button" data-confirm-pending-revision="${escapeAttribute(asset.id)}">REVIEW &amp; CONFIRM</button>
       </div>
@@ -2272,17 +2427,18 @@ function workspaceRevisionPanel(pack, asset) {
     cards.push(`<article class="workspace-revision-card${revision.current ? " current" : ""}">
       <header><strong>REVISION ${revision.revision} · CONFIRMED${revision.current ? " · CURRENT" : ""}</strong><span>${escapeHtml(revision.acceptedAt)}</span></header>
       <img loading="lazy" src="${escapeAttribute(revision.publicationUrl)}" alt="${escapeAttribute(asset.displayName)} revision ${revision.revision} render">
-      <p>${escapeHtml(revision.sourceBasename)} · ${escapeHtml(revision.timeframe)} · DATA AS OF ${escapeHtml(revision.dataAsOf)}</p>
+      <p>${escapeHtml(revision.timeframe)} · DATA AS OF ${escapeHtml(revision.dataAsOf)}</p>
       <div class="workspace-revision-actions">
+        <button class="outline-action compact-action" type="button" data-workspace-quick-look="${escapeAttribute(`${asset.id}:${revision.revision}`)}">QUICK LOOK</button>
         <a class="outline-action download-link compact-action" href="${escapeAttribute(revision.receiptUrl)}" target="_blank" rel="noreferrer">RECEIPT</a>
         <button class="danger-action compact-action" type="button" data-delete-workspace-revision="${revision.revision}" data-revision-asset="${escapeAttribute(asset.id)}">DELETE REVISION ${revision.revision}</button>
       </div>
     </article>`);
   }
-  return `<tr class="workspace-revision-row"><td colspan="6">
+  return `<tr class="workspace-revision-row"><td colspan="5">
     <section class="workspace-revision-panel" aria-label="${escapeAttribute(asset.displayName)} revision history">
-      <p class="workspace-revision-summary">${cards.length} REVISION ITEM${cards.length === 1 ? "" : "S"} · ACCEPTANCE IS THE CONFIRMATION GATE</p>
-      <div class="workspace-revision-grid">${cards.join("") || "<p class=\"empty-state\">NO REVISION EVIDENCE</p>"}</div>
+      <p class="workspace-revision-summary">${cards.length} REVISION ITEM${cards.length === 1 ? "" : "S"} · ROUTINE ACCEPTANCE MAY BE STREAMLINED FOR THIS CAPTURE SESSION ONLY</p>
+      <div class="workspace-revision-grid">${cards.join("") || '<p class="empty-state">NO REVISION EVIDENCE</p>'}</div>
     </section>
   </td></tr>`;
 }
@@ -2385,13 +2541,15 @@ function renderPackWorkspace() {
       <td>${escapeHtml(asset.tradingViewSymbol || "—")}</td>
       <td><span class="workspace-status ${className}">${escapeHtml(status)}</span></td>
       <td>${asset.revisions > 0 ? `REV ${asset.revisions}` : "—"}${asset.revisionHistory.length > 0 ? ` · ${asset.revisionHistory.length} KEPT` : ""}</td>
-      <td>${escapeHtml(asset.capturedAt ?? "—")}</td>
       <td>${asset.captured ? `<button class="danger-action compact-action" type="button" data-reset-workspace-asset="${escapeAttribute(asset.id)}">RESET</button>` : ""}</td>
     </tr>`;
     return primary + (expanded ? workspaceRevisionPanel(pack, asset) : "");
   }).join("");
   qsa("[data-toggle-workspace-history]").forEach((button) => {
     button.addEventListener("click", () => toggleWorkspaceAssetHistory(button.dataset.toggleWorkspaceHistory));
+  });
+  qsa("[data-workspace-quick-look]").forEach((button) => {
+    button.addEventListener("click", () => openWorkspaceQuickLook(button.dataset.workspaceQuickLook, button));
   });
   qsa("[data-confirm-pending-revision]").forEach((button) => {
     button.addEventListener("click", () => reviewQueuedCapture(button.dataset.confirmPendingRevision));
@@ -2601,11 +2759,27 @@ async function resetWorkspacePack() {
 }
 
 function serverRouteValues() {
-  return Object.fromEntries(qsa("[data-server-route]").map((input) => [input.dataset.serverRoute, input.value.trim()]));
+  return Object.fromEntries(state.serverRouteDrafts.map((route) => [route.logicalChannel, route.channelId.trim()]));
 }
 
-function serverInspectionFor(logicalChannel) {
-  return state.serverInspection?.routes?.find((route) => route.logicalChannel === logicalChannel) ?? null;
+function serverInspectionFor(logicalChannel, channelId) {
+  const inspection = state.serverInspection?.routes?.find((route) => route.logicalChannel === logicalChannel) ?? null;
+  return inspection?.channelId === channelId ? inspection : null;
+}
+
+function clearServerInspection() {
+  state.serverInspection = null;
+  clearServerPreview();
+  qs("#server-guild").textContent = "NOT TESTED";
+  qs("#server-bot-identity").textContent = "BOT IDENTITY NOT TESTED";
+}
+
+function routeRemovalBlocker(route) {
+  const parts = [];
+  if (route.packIds.length > 0) parts.push(`${route.packIds.length} Pack${route.packIds.length === 1 ? "" : "s"}`);
+  if (route.registryAssetCount > 0) parts.push(`${route.registryAssetCount} Registry Asset${route.registryAssetCount === 1 ? "" : "s"}`);
+  if (route.boundThreadCount > 0) parts.push(`${route.boundThreadCount} thread binding${route.boundThreadCount === 1 ? "" : "s"}`);
+  return parts.join(" · ");
 }
 
 function renderServerConfiguration() {
@@ -2619,15 +2793,17 @@ function renderServerConfiguration() {
   qs("#server-test-current").disabled = state.serverBusy || !configuration.connectionTestAvailable;
   qs("#server-review-configuration").disabled = state.serverBusy;
   qs("#server-review-migration").disabled = state.serverBusy;
-  qs("#server-route-count").textContent = `${configuration.routes.length} ROUTE${configuration.routes.length === 1 ? "" : "S"}`;
+  qs("#server-add-route").disabled = state.serverBusy;
+  qs("#server-new-route-name").disabled = state.serverBusy;
+  qs("#server-new-route-channel").disabled = state.serverBusy;
+  qs("#server-route-count").textContent = `${state.serverRouteDrafts.length} ROUTE${state.serverRouteDrafts.length === 1 ? "" : "S"}`;
   qs("#server-guild").textContent = state.serverInspection?.guild?.name?.toUpperCase() ?? "NOT TESTED";
   qs("#server-bot-identity").textContent = state.serverInspection === null
     ? "BOT IDENTITY NOT TESTED"
     : `${state.serverInspection.bot.username} · ${state.serverInspection.bot.userId}`;
 
-  const existing = serverRouteValues();
-  qs("#server-routes-body").innerHTML = configuration.routes.map((route) => {
-    const inspection = serverInspectionFor(route.logicalChannel);
+  qs("#server-routes-body").innerHTML = state.serverRouteDrafts.map((route) => {
+    const inspection = serverInspectionFor(route.logicalChannel, route.channelId.trim());
     const tagNames = inspection?.facts?.availableTags?.map((tag) => tag.name).join(", ") ?? "";
     const testState = inspection === null
       ? "NOT TESTED"
@@ -2635,21 +2811,21 @@ function renderServerConfiguration() {
         ? `${inspection.facts.channelName} · ${inspection.facts.availableTagCount} TAGS${tagNames.length === 0 ? "" : ` · ${tagNames}`}`
         : inspection.issues.join(" ");
     const testClass = inspection === null ? "pending" : inspection.state === "ready" ? "valid" : "blocked";
-    const value = Object.hasOwn(existing, route.logicalChannel) ? existing[route.logicalChannel] : route.channelId ?? "";
+    const removalBlocker = routeRemovalBlocker(route);
     return `<tr>
-      <td><strong>${escapeHtml(route.logicalChannel.toUpperCase())}</strong></td>
-      <td><input data-server-route="${escapeAttribute(route.logicalChannel)}" inputmode="numeric" autocomplete="off" maxlength="20" value="${escapeAttribute(value)}" placeholder="DISCORD FORUM ID"></td>
+      <td><strong>${escapeHtml(route.logicalChannel.toUpperCase())}</strong>${route.isNew ? '<span class="table-secondary">NEW ROUTE</span>' : ""}</td>
+      <td><input data-server-route="${escapeAttribute(route.logicalChannel)}" inputmode="numeric" autocomplete="off" maxlength="20" value="${escapeAttribute(route.channelId)}" placeholder="DISCORD CHANNEL ID"></td>
       <td>${route.packIds.length === 0 ? "—" : escapeHtml(route.packIds.map((id) => id.toUpperCase()).join(" · "))}</td>
       <td>${route.registryAssetCount}</td>
       <td>${route.boundThreadCount}</td>
       <td><span class="workspace-status ${testClass}" title="${escapeAttribute(testState)}">${escapeHtml(testState)}</span></td>
+      <td><button class="danger-action compact-action" type="button" data-remove-server-route="${escapeAttribute(route.logicalChannel)}"${state.serverBusy || removalBlocker ? " disabled" : ""}${removalBlocker ? ` title="USED BY ${escapeAttribute(removalBlocker)}"` : ""}>REMOVE</button>${removalBlocker ? `<span class="table-secondary">${escapeHtml(removalBlocker)}</span>` : ""}</td>
     </tr>`;
   }).join("");
   qsa("[data-server-route]").forEach((input) => input.addEventListener("input", () => {
-    state.serverInspection = null;
-    clearServerPreview();
-    qs("#server-guild").textContent = "NOT TESTED";
-    qs("#server-bot-identity").textContent = "BOT IDENTITY NOT TESTED";
+    const route = state.serverRouteDrafts.find((entry) => entry.logicalChannel === input.dataset.serverRoute);
+    if (route !== undefined) route.channelId = input.value;
+    clearServerInspection();
     qs("#server-readiness").textContent = configuration.connectionTestAvailable ? "READY FOR LIVE TEST" : "BOT TOKEN REQUIRED";
     qsa("#server-routes-body .workspace-status").forEach((status) => {
       status.className = "workspace-status pending";
@@ -2657,11 +2833,74 @@ function renderServerConfiguration() {
       status.title = "NOT TESTED";
     });
   }));
+  qsa("[data-remove-server-route]").forEach((button) => button.addEventListener("click", () => {
+    const route = state.serverRouteDrafts.find((entry) => entry.logicalChannel === button.dataset.removeServerRoute);
+    if (route === undefined) return;
+    const blocker = routeRemovalBlocker(route);
+    if (blocker) {
+      showMessage(`Route ${route.logicalChannel.toUpperCase()} cannot be removed because it is used by ${blocker}. Reassign those dependencies first.`);
+      return;
+    }
+    state.serverRouteDrafts = state.serverRouteDrafts.filter((entry) => entry.logicalChannel !== route.logicalChannel);
+    clearServerInspection();
+    renderServerConfiguration();
+  }));
+}
+
+function resetServerRouteDrafts() {
+  const configuration = state.serverConfiguration;
+  if (configuration === null) return;
+  state.serverRouteDrafts = configuration.routes.map((route) => ({
+    logicalChannel: route.logicalChannel,
+    channelId: route.channelId ?? "",
+    packIds: [...route.packIds],
+    registryAssetCount: route.registryAssetCount,
+    boundThreadCount: route.boundThreadCount,
+    isNew: false,
+  }));
+  qs("#server-new-route-name").value = "";
+  qs("#server-new-route-channel").value = "";
+  clearServerInspection();
+  renderServerConfiguration();
+}
+
+function addServerRouteDraft() {
+  const logicalChannel = qs("#server-new-route-name").value.trim();
+  const channelId = qs("#server-new-route-channel").value.trim();
+  if (!/^[a-z][a-z0-9_-]{0,63}$/u.test(logicalChannel)) {
+    showMessage("A logical route must be a lowercase stable name of 1 to 64 letters, numbers, underscores, or hyphens, beginning with a letter.");
+    return;
+  }
+  if (!/^[0-9]{17,20}$/u.test(channelId)) {
+    showMessage("Discord Channel ID must be one 17- to 20-digit snowflake.");
+    return;
+  }
+  if (state.serverRouteDrafts.some((route) => route.logicalChannel === logicalChannel)) {
+    showMessage(`Logical route ${logicalChannel.toUpperCase()} already exists.`);
+    return;
+  }
+  if (state.serverRouteDrafts.some((route) => route.channelId === channelId)) {
+    showMessage("That Discord Channel ID is already assigned to another logical route.");
+    return;
+  }
+  state.serverRouteDrafts.push({
+    logicalChannel,
+    channelId,
+    packIds: [],
+    registryAssetCount: 0,
+    boundThreadCount: 0,
+    isNew: true,
+  });
+  state.serverRouteDrafts.sort((left, right) => left.logicalChannel.localeCompare(right.logicalChannel, "en"));
+  qs("#server-new-route-name").value = "";
+  qs("#server-new-route-channel").value = "";
+  clearServerInspection();
+  renderServerConfiguration();
 }
 
 async function loadServerConfiguration() {
   state.serverConfiguration = await api("/api/v1/server-configuration");
-  renderServerConfiguration();
+  resetServerRouteDrafts();
 }
 
 async function testCurrentServer() {
@@ -2779,7 +3018,11 @@ async function applyServerChange() {
     });
     clearServerPreview();
     state.serverInspection = null;
-    await loadServerConfiguration();
+    await Promise.all([
+      loadServerConfiguration(),
+      loadChannels(),
+      ...(state.packMaintenance === null ? [] : [loadPackMaintenance()]),
+    ]);
     showMessage(
       result.mode === "migration"
         ? `Server migration applied. ${result.bindingsToReestablish} affected thread binding${result.bindingsToReestablish === 1 ? "" : "s"} must now be re-established. Backup identity: ${result.backupId}.`
@@ -3025,11 +3268,20 @@ function renderReleaseArchive() {
   qs("#archive-total").textContent = String(archive.releaseCount);
   qs("#archive-published").textContent = String(archive.publishedCount);
   qs("#archive-interrupted").textContent = String(archive.interruptedCount);
+  const empty = archive.releaseCount === 0;
+  qs("#archive-empty-state").hidden = !empty;
+  qs("#archive-table-wrap").hidden = empty;
+  qs("#archive-detail").hidden = empty || state.releaseDetail === null;
   const filter = qs("#archive-pack-filter");
+  filter.disabled = empty;
   const current = filter.value;
   const packIds = [...new Set(archive.releases.map((release) => release.packId))];
   filter.innerHTML = '<option value="">ALL PACKS</option>' + packIds.map((id) => `<option value="${escapeAttribute(id)}">${escapeHtml(id.toUpperCase())}</option>`).join("");
   filter.value = packIds.includes(current) ? current : "";
+  if (empty) {
+    qs("#archive-body").innerHTML = "";
+    return;
+  }
   const visible = archive.releases.filter((release) => !filter.value || release.packId === filter.value);
   qs("#archive-body").innerHTML = visible.length === 0 ? '<tr><td colspan="7">NO RELEASES MATCH THIS FILTER.</td></tr>' : visible.map((release) => `<tr><td><strong>${escapeHtml(release.packDisplayName)}</strong><span class="table-secondary">${escapeHtml(release.packId)}${release.packCurrent ? "" : " · HISTORICAL PACK"}</span></td><td>${escapeHtml(release.releaseId)}</td><td><span class="workspace-status ${release.state === "published" ? "valid" : "blocked"}">${escapeHtml(release.state.toUpperCase())}</span></td><td>${escapeHtml(formatTimestamp(release.startedAt))}</td><td>${escapeHtml(formatTimestamp(release.publishedAt))}</td><td>${release.postedCount} / ${release.analysisCount}</td><td><button class="outline-action compact-action" type="button" data-open-release="${escapeAttribute(release.packId)}|${escapeAttribute(release.releaseId)}">OPEN</button></td></tr>`).join("");
   qsa("[data-open-release]").forEach((button) => button.addEventListener("click", () => {
@@ -3056,62 +3308,6 @@ async function openReleaseDetail(packId, releaseId) {
     qs("#archive-analyses").innerHTML = detail.analyses.map((analysis) => `<article><img src="${escapeAttribute(analysis.imageUrl)}" alt="${escapeAttribute(analysis.displayName)} archived chart"><div><strong>${escapeHtml(analysis.displayName)}</strong><span>${escapeHtml(analysis.assetId.toUpperCase())} · ${escapeHtml(formatTimestamp(analysis.capturedAt))}</span><span>${analysis.discordMessageId ? `MESSAGE ${escapeHtml(analysis.discordMessageId)}` : "NOT POSTED"}</span><a class="outline-action compact-action download-link" href="${escapeAttribute(analysis.imageUrl)}" download="${escapeAttribute(analysis.imageFile)}">DOWNLOAD PNG</a></div></article>`).join("");
     qs("#archive-detail").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) { showMessage(error.message); }
-}
-
-function clearAliasPreview() {
-  state.aliasPreview = null;
-  qs("#registry-alias-preview").hidden = true;
-  qs("#registry-alias-confirmation").value = "";
-  qs("#registry-alias-apply").disabled = true;
-}
-
-function renderAliasManagement() {
-  const asset = state.registrySelectedAsset;
-  const section = qs("#registry-alias-management");
-  section.hidden = asset === null;
-  if (asset === null) return;
-  const aliases = asset.tradingViewAliases ?? [];
-  qs("#registry-alias-list").innerHTML = aliases.length === 0 ? '<p class="empty-state">NO ALIASES</p>' : aliases.map((alias) => `<span class="registry-alias-pill">${escapeHtml(alias)}<button type="button" data-remove-alias="${escapeAttribute(alias)}" aria-label="Remove alias ${escapeAttribute(alias)}">×</button></span>`).join("");
-  qsa("[data-remove-alias]").forEach((button) => button.addEventListener("click", () => void reviewAliasChange("remove", button.dataset.removeAlias)));
-}
-
-async function reviewAliasChange(operation, alias) {
-  const asset = state.registrySelectedAsset;
-  const value = (alias ?? qs("#registry-alias-input").value).trim();
-  if (asset === null || !value || state.aliasBusy) return;
-  clearMessage();
-  state.aliasBusy = true;
-  clearAliasPreview();
-  try {
-    state.aliasPreview = await api(`/api/v1/assets/${encodeURIComponent(asset.id)}/aliases/preview`, { method: "POST", body: JSON.stringify({ change: { assetId: asset.id, operation, alias: value } }) });
-    const preview = state.aliasPreview;
-    qs("#registry-alias-preview").hidden = false;
-    qs("#registry-alias-preview-summary").innerHTML = `<p><strong>${escapeHtml(preview.operation.toUpperCase())}</strong> ${escapeHtml(preview.alias)} · ${escapeHtml(preview.displayName)}</p><p>${escapeHtml(preview.aliasesBefore.join(", ") || "NONE")} → ${escapeHtml(preview.aliasesAfter.join(", ") || "NONE")}</p>`;
-    qs("#registry-alias-confirmation").placeholder = preview.confirmation;
-  } catch (error) { showMessage(error.message); }
-  finally { state.aliasBusy = false; updateAliasApplyButton(); }
-}
-
-function updateAliasApplyButton() {
-  const preview = state.aliasPreview;
-  qs("#registry-alias-apply").disabled = state.aliasBusy || preview === null || qs("#registry-alias-confirmation").value !== preview.confirmation;
-}
-
-async function applyAliasChange() {
-  const preview = state.aliasPreview;
-  if (preview === null || state.aliasBusy || qs("#registry-alias-confirmation").value !== preview.confirmation) return;
-  state.aliasBusy = true;
-  updateAliasApplyButton();
-  try {
-    await api(`/api/v1/assets/${encodeURIComponent(preview.assetId)}/aliases/${encodeURIComponent(preview.previewId)}/apply`, { method: "POST", body: JSON.stringify({ confirmation: preview.confirmation }) });
-    clearAliasPreview();
-    qs("#registry-alias-input").value = "";
-    await refreshStatus();
-    await loadRegistry({ offset: state.registryOffset });
-    await selectRegistryAsset(preview.assetId);
-    showMessage(`Alias ${preview.alias} was ${preview.operation === "add" ? "added" : "removed"}.`, false);
-  } catch (error) { showMessage(error.message); }
-  finally { state.aliasBusy = false; updateAliasApplyButton(); }
 }
 
 async function activateView(view, options = {}) {
@@ -3249,18 +3445,6 @@ qs("#renderer-source").addEventListener("change", (event) => {
   resetStandaloneResult();
 });
 qs("#render-chart").addEventListener("click", () => void runStandaloneRender());
-qs("#publication-select-ready").addEventListener("click", () => {
-  state.publicationSelectedPackIds = new Set((state.packWorkspace?.packs ?? []).filter((pack) => pack.publication.ready).map((pack) => pack.id));
-  state.publicationSupersedePackIds.clear();
-  clearPublicationPreview();
-  renderPublicationQueue();
-});
-qs("#publication-clear").addEventListener("click", () => {
-  state.publicationSelectedPackIds.clear();
-  state.publicationSupersedePackIds.clear();
-  clearPublicationPreview();
-  renderPublicationQueue();
-});
 qs("#publication-review").addEventListener("click", () => void reviewPackPublication());
 qs("#publication-confirmation").addEventListener("input", updatePublicationApplyButton);
 qs("#publication-apply").addEventListener("click", () => void applyPackPublication());
@@ -3278,12 +3462,27 @@ qs("#workspace-source").addEventListener("change", (event) => {
   state.packSourceFile = file;
   qs("#workspace-file-state").textContent = file === null
     ? "SELECT A TRADINGVIEW PNG EXPORT"
-    : `${file.name} · ${file.size.toLocaleString()} BYTES`;
+    : `PNG SELECTED · ${file.size.toLocaleString()} BYTES`;
   renderPackWorkspace();
 });
 qs("#workspace-preview-button").addEventListener("click", () => void runPackPreview());
 qs("#workspace-start-session").addEventListener("click", () => void startCaptureSession());
 qs("#workspace-scan-session").addEventListener("click", () => void scanCaptureSession());
+qs("#workspace-streamlined-confirmation").addEventListener("change", (event) => {
+  state.streamlinedRevisionConfirmation = event.target.checked;
+  if (state.packCaptureSession !== null) renderCaptureSession(state.packCaptureSession);
+  showMessage(
+    state.streamlinedRevisionConfirmation
+      ? "Routine validated revision acceptance is streamlined for this capture session only. Publishing, deletion, reset, Discord, Server, Registry, and Pack changes still require explicit confirmation."
+      : "Routine revision confirmations are explicit again for this capture session.",
+    false,
+  );
+});
+qs("#workspace-quick-look-close").addEventListener("click", closeWorkspaceQuickLook);
+qs("#workspace-quick-look-backdrop").addEventListener("click", closeWorkspaceQuickLook);
+qs("#workspace-quick-look-previous").addEventListener("click", () => moveWorkspaceQuickLook(-1));
+qs("#workspace-quick-look-next").addEventListener("click", () => moveWorkspaceQuickLook(1));
+qs("#workspace-quick-look").addEventListener("keydown", handleWorkspaceQuickLookKeydown);
 qs("#workspace-accept").addEventListener("click", () => void acceptPackPreview());
 qs("#workspace-discard").addEventListener("click", () => void discardPackPreview());
 qs("#workspace-reset-pack").addEventListener("click", () => void resetWorkspacePack());
@@ -3307,14 +3506,8 @@ qs("#thread-title").addEventListener("input", updateThreadAdoptButton);
 qs("#thread-provision-button").addEventListener("click", () => void provisionNewThread());
 qs("#thread-verify-routing").addEventListener("click", () => void verifyPackRouting());
 qs("#server-test-current").addEventListener("click", () => void testCurrentServer());
-qs("#server-reset-routes").addEventListener("click", () => {
-  if (state.serverConfiguration === null) return;
-  qsa("[data-server-route]").forEach((input) => {
-    const route = state.serverConfiguration.routes.find((entry) => entry.logicalChannel === input.dataset.serverRoute);
-    input.value = route?.channelId ?? "";
-  });
-  clearServerPreview();
-});
+qs("#server-reset-routes").addEventListener("click", resetServerRouteDrafts);
+qs("#server-add-route").addEventListener("click", addServerRouteDraft);
 qs("#server-review-configuration").addEventListener("click", () => void reviewServerChange("configuration"));
 qs("#server-review-migration").addEventListener("click", () => void reviewServerChange("migration"));
 qs("#server-confirmation").addEventListener("input", updateServerApplyButton);
@@ -3343,10 +3536,6 @@ qs("#pack-maintenance-delete").addEventListener("click", () => void reviewPackMa
 qs("#pack-maintenance-confirmation").addEventListener("input", updatePackMaintenanceApply);
 qs("#pack-maintenance-apply").addEventListener("click", () => void applyPackMaintenance());
 qs("#archive-pack-filter").addEventListener("change", renderReleaseArchive);
-qs("#registry-alias-input").addEventListener("input", clearAliasPreview);
-qs("#registry-alias-review-add").addEventListener("click", () => void reviewAliasChange("add"));
-qs("#registry-alias-confirmation").addEventListener("input", updateAliasApplyButton);
-qs("#registry-alias-apply").addEventListener("click", () => void applyAliasChange());
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";

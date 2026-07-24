@@ -8,8 +8,6 @@ describe("Multi-Pack publication UI", () => {
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
     for (const id of [
       "publication-pack-pills",
-      "publication-select-ready",
-      "publication-clear",
       "publication-review",
       "publication-preview",
       "publication-preview-packs",
@@ -17,6 +15,9 @@ describe("Multi-Pack publication UI", () => {
       "publication-apply",
       "publication-result",
     ]) expect(html).toContain(`id="${id}"`);
+    expect(html).not.toContain('id="publication-select-ready"');
+    expect(html).not.toContain('id="publication-clear"');
+    expect(html).toContain("SELECT OR DESELECT EACH PACK DIRECTLY");
     expect(html).toContain("All selected Packs are revalidated immediately before the first Discord action");
     expect(js).toContain("publicationSelectedPackIds");
     expect(js).toContain("publicationSupersedePackIds");
