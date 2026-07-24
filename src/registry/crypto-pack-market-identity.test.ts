@@ -15,7 +15,7 @@ const CRYPTO_IDENTITIES = Object.freeze([
   Object.freeze({ id: "xlm", tradingView: "CRYPTO:XLMUSD", currency: "USD", filenameToken: "XLMUSD" }),
   Object.freeze({ id: "xrp", tradingView: "CRYPTO:XRPUSD", currency: "USD", filenameToken: "XRPUSD" }),
   Object.freeze({ id: "sui", tradingView: "CRYPTO:SUIUSD", currency: "USD", filenameToken: "SUIUSD" }),
-  Object.freeze({ id: "tao", tradingView: "BINANCE:TAOUSDT", currency: "USDT", filenameToken: "TAOUSDT" }),
+  Object.freeze({ id: "tao", tradingView: "BITGET:TAOUSDT", currency: "USDT", filenameToken: "TAOUSDT" }),
   Object.freeze({ id: "trx", tradingView: "CRYPTO:TRXUSD", currency: "USD", filenameToken: "TRXUSD" }),
   Object.freeze({ id: "link", tradingView: "CRYPTO:LINKUSD", currency: "USD", filenameToken: "LINKUSD" }),
   Object.freeze({ id: "sol", tradingView: "CRYPTO:SOLUSD", currency: "USD", filenameToken: "SOLUSD" }),

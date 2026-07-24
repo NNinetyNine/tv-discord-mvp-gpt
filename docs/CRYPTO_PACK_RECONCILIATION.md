@@ -20,7 +20,7 @@ renderer-supported timeframe.
 | `xlm` | `CRYPTO:XLMUSD` | `USD` | `XLMUSD` | `XLMUSD` removed as redundant |
 | `xrp` | `CRYPTO:XRPUSD` | `USD` | `XRPUSD` | `XRPUSD` removed as redundant |
 | `sui` | `CRYPTO:SUIUSD` | `USD` | `SUIUSD` | `SUIUSD` removed as redundant |
-| `tao` | `BINANCE:TAOUSDT` | `USDT` | `TAOUSDT` | `TAOUSDT` removed as redundant |
+| `tao` | `BITGET:TAOUSDT` | `USDT` | `TAOUSDT` | `TAOUSDT` removed as redundant |
 | `trx` | `CRYPTO:TRXUSD` | `USD` | `TRXUSD` | `TRXUSD` removed as redundant |
 | `link` | `CRYPTO:LINKUSD` | `USD` | `LINKUSD` | `LINKUSD` removed as redundant |
 | `sol` | `CRYPTO:SOLUSD` | `USD` | `SOLUSD` | `SOLUSD` removed as redundant |
@@ -36,7 +36,7 @@ entire canonical and filename namespaces and fails on any collision.
 
 TradingView evidence for the exceptional provider identities:
 
-- `BINANCE:TAOUSDT`: <https://www.tradingview.com/symbols/TAOUSDT/>
+- `BITGET:TAOUSDT`: <https://www.tradingview.com/symbols/TAOUSDT/>
 - `CRYPTO:HYPEHUSD`: <https://www.tradingview.com/symbols/HYPEHUSD/technicals/>
 - `CRYPTOCAP:TOTAL3`: <https://www.tradingview.com/support/solutions/43000550480-where-do-i-find-crypto-market-capitalization-and-dominance/>
 

@@ -7,7 +7,7 @@
   "xlm":  { "tradingView": "CRYPTO:XLMUSD",   "display": "Stellar",     "currency": "USD",  "channel": "crypto" },
   "xrp":  { "tradingView": "CRYPTO:XRPUSD",   "display": "Ripple",      "currency": "USD",  "channel": "crypto" },
   "sui":  { "tradingView": "CRYPTO:SUIUSD",   "display": "Sui",         "currency": "USD",  "channel": "crypto" },
-  "tao":  { "tradingView": "BINANCE:TAOUSDT",  "display": "Bittensor",   "currency": "USDT", "channel": "crypto" },
+  "tao":  { "tradingView": "BITGET:TAOUSDT",  "display": "Bittensor",   "currency": "USDT", "channel": "crypto" },
   "trx":  { "tradingView": "CRYPTO:TRXUSD",   "display": "Tron",        "currency": "USD",  "channel": "crypto" },
   "link": { "tradingView": "CRYPTO:LINKUSD",  "display": "Chainlink",   "currency": "USD",  "channel": "crypto" },
   "sol":  { "tradingView": "CRYPTO:SOLUSD",   "display": "Solana",      "currency": "USD",  "channel": "crypto" },
