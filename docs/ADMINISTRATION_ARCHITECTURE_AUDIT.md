@@ -254,3 +254,20 @@ access to dense operational data through reflow and horizontal table scrolling.
 Decorative motion is progressive enhancement and is explicitly neutralized for
 reduced-motion users. Existing local branding assets are reused; no external
 font, stylesheet, script, image, telemetry, or network dependency is added.
+
+## Step 543 interaction and accessibility boundary
+
+Administration workspace navigation now has stable URL-hash state, roving
+keyboard focus, named target regions, polite completion announcements, and
+explicit loading state. This is a browser-shell concern only: every workspace
+continues to call the same service loaders and governed write paths.
+
+Global errors remain assertive and focusable; successful outcomes are polite
+and do not steal focus. Registry modals preserve focus containment and return
+focus while isolating the underlying shell. Tables now expose captions, scoped
+column headers, and keyboard-focusable horizontal scroll regions. Responsive,
+contrast, forced-colors, and reduced-motion behavior preserve capability rather
+than changing authority.
+
+No API route, confirmation phrase, source file, Discord operation, or Release
+custody rule is changed by these interaction refinements.

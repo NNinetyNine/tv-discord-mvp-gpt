@@ -9,7 +9,7 @@ import { makePackSourceReviewApplicationFixture } from "../packs/pack-source-rev
 describe("Administration Pack review/application UI boundary", () => {
   it("uses Create Pack as the primary operator workflow and hides legacy custody stages", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
-    const packsView = html.match(/<section class="view" data-view-panel="packs" hidden>([\s\S]*?)<section class="view" data-view-panel="renderer" hidden>/u)?.[1] ?? "";
+    const packsView = html.match(/<section[^>]*data-view-panel="packs"[^>]*>([\s\S]*?)<section[^>]*data-view-panel="renderer"[^>]*>/u)?.[1] ?? "";
 
     expect(packsView).toContain("PACK BUILDER");
     expect(packsView).toContain("CREATE PACK");

@@ -67,10 +67,60 @@ const state = {
   packAssetSearchGeneration: 0,
   packAssetSearchTimer: null,
   rendererAssetSearchGeneration: 0,
+  activeView: "workspace",
+  viewActivationGeneration: 0,
 };
 
 const qs = (selector) => document.querySelector(selector);
 const qsa = (selector) => [...document.querySelectorAll(selector)];
+
+const VIEW_LABELS = Object.freeze({
+  workspace: "Workspace",
+  threads: "Threads",
+  server: "Server",
+  packs: "Packs",
+  archive: "Archive",
+  renderer: "Render",
+  registry: "Registry",
+});
+
+function requestedViewFromHash() {
+  const requested = window.location.hash.replace(/^#/, "");
+  return Object.hasOwn(VIEW_LABELS, requested) ? requested : "workspace";
+}
+
+function setViewBusy(view, busy) {
+  const panel = qs(`[data-view-panel="${view}"]`);
+  if (panel === null) return;
+  panel.setAttribute("aria-busy", String(busy));
+  panel.classList.toggle("view-loading", busy);
+}
+
+function updateViewNavigation(view) {
+  qsa("[data-view]").forEach((item) => {
+    const current = item.dataset.view === view;
+    item.tabIndex = current ? 0 : -1;
+    if (current) item.setAttribute("aria-current", "page");
+    else item.removeAttribute("aria-current");
+  });
+  qsa("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== view; });
+}
+
+function announceView(view) {
+  const label = VIEW_LABELS[view] ?? "Administration";
+  qs("#view-status").textContent = `${label} workspace ready.`;
+  document.title = `${label} · VisionX Administration`;
+}
+
+function setModalIsolation(active) {
+  const shell = [qs("#app-header"), qs("#primary-nav"), qs("#app-footer"), ...qsa("#main-content > [data-view-panel]")];
+  for (const element of shell) {
+    if (element === null) continue;
+    element.inert = active;
+    if (active) element.setAttribute("aria-hidden", "true");
+    else element.removeAttribute("aria-hidden");
+  }
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -89,13 +139,20 @@ async function api(path, options = {}) {
 
 function showMessage(text, error = true) {
   const box = qs("#message");
-  box.textContent = text;
+  qs("#message-text").textContent = text;
   box.className = `message${error ? "" : " success"}`;
+  box.setAttribute("role", error ? "alert" : "status");
+  box.setAttribute("aria-live", error ? "assertive" : "polite");
   box.hidden = false;
-  box.focus?.();
+  const modalOpen = !qs("#registry-editor").hidden || !qs("#registry-import-dialog").hidden;
+  if (error && !modalOpen) requestAnimationFrame(() => box.focus());
 }
 
-function clearMessage() { qs("#message").hidden = true; }
+function clearMessage() {
+  const box = qs("#message");
+  box.hidden = true;
+  qs("#message-text").textContent = "";
+}
 
 function packFormValue() {
   return {
@@ -106,10 +163,14 @@ function packFormValue() {
 }
 
 function persistInput() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    pack: packFormValue(),
-    members: state.members.map((member) => ({ id: member.id })),
-  }));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      pack: packFormValue(),
+      members: state.members.map((member) => ({ id: member.id })),
+    }));
+  } catch {
+    // Restricted browser storage must not block the governed in-memory workflow.
+  }
 }
 
 function restoreInput() {
@@ -130,7 +191,9 @@ function restoreInput() {
           lookupGeneration: 0,
         }));
     }
-  } catch { localStorage.removeItem(STORAGE_KEY); }
+  } catch {
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* Storage is unavailable. */ }
+  }
 }
 
 function currentInput() {
@@ -1265,6 +1328,7 @@ async function openRegistryEditor(mode) {
   try {
     state.registryEditorMode = mode;
     state.registryChangeBusy = false;
+    qs("#registry-editor").setAttribute("aria-busy", "false");
     resetRegistryChangePreview();
     await populateRegistryChannelOptions();
     const asset = mode === "edit" ? state.registrySelectedAsset : null;
@@ -1284,6 +1348,7 @@ async function openRegistryEditor(mode) {
     qs("#registry-editor-backdrop").hidden = false;
     qs("#registry-editor").hidden = false;
     document.body.classList.add("registry-editor-open");
+    setModalIsolation(true);
     requestAnimationFrame(() => {
       if (!qs("#registry-editor").hidden) qs("#registry-field-display").focus();
     });
@@ -1298,6 +1363,7 @@ function closeRegistryEditor(options = {}) {
   qs("#registry-editor").hidden = true;
   qs("#registry-editor-backdrop").hidden = true;
   document.body.classList.remove("registry-editor-open");
+  setModalIsolation(false);
   resetRegistryChangePreview();
   const returnFocus = state.registryEditorReturnFocus;
   state.registryEditorReturnFocus = null;
@@ -1350,6 +1416,7 @@ function openRegistryImport() {
   state.registryImportReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   state.registryImportFile = null;
   state.registryImportBusy = false;
+  qs("#registry-import-dialog").setAttribute("aria-busy", "false");
   qs("#registry-import-file").value = "";
   qs("#registry-import-file-state").textContent = "SELECT A UTF-8 CSV FILE";
   qs("#registry-review-import").disabled = true;
@@ -1357,6 +1424,7 @@ function openRegistryImport() {
   qs("#registry-import-backdrop").hidden = false;
   qs("#registry-import-dialog").hidden = false;
   document.body.classList.add("registry-editor-open");
+  setModalIsolation(true);
   requestAnimationFrame(() => qs("#registry-import-file").focus());
 }
 
@@ -1365,6 +1433,7 @@ function closeRegistryImport(options = {}) {
   qs("#registry-import-dialog").hidden = true;
   qs("#registry-import-backdrop").hidden = true;
   document.body.classList.remove("registry-editor-open");
+  setModalIsolation(false);
   resetRegistryImportPreview();
   state.registryImportFile = null;
   const returnFocus = state.registryImportReturnFocus;
@@ -1412,6 +1481,7 @@ async function reviewRegistryCsvImport() {
   const file = state.registryImportFile;
   if (file === null || state.registryImportBusy) return;
   state.registryImportBusy = true;
+  qs("#registry-import-dialog").setAttribute("aria-busy", "true");
   qs("#registry-review-import").disabled = true;
   resetRegistryImportPreview();
   try {
@@ -1426,6 +1496,7 @@ async function reviewRegistryCsvImport() {
     showMessage(error.message);
   } finally {
     state.registryImportBusy = false;
+    qs("#registry-import-dialog").setAttribute("aria-busy", "false");
     const selected = state.registryImportFile;
     qs("#registry-review-import").disabled = selected === null || selected.size < 1 || selected.size > 2 * 1024 * 1024;
   }
@@ -1436,6 +1507,7 @@ async function applyRegistryCsvImportFromUi() {
   if (preview === null || !preview.valid || state.registryImportBusy) return;
   if (!window.confirm(`Import ${preview.additionCount} new Registry Asset${preview.additionCount === 1 ? "" : "s"}?\n\n${preview.packMembershipCount} Pack membership${preview.packMembershipCount === 1 ? "" : "s"} will also be appended. The operation is atomic and does not contact Discord.`)) return;
   state.registryImportBusy = true;
+  qs("#registry-import-dialog").setAttribute("aria-busy", "true");
   qs("#registry-apply-import").disabled = true;
   try {
     const result = await api(`/api/v1/registry/csv-import/${encodeURIComponent(preview.previewId)}/apply`, {
@@ -1455,6 +1527,7 @@ async function applyRegistryCsvImportFromUi() {
     await refreshRegistryState().catch(() => undefined);
   } finally {
     state.registryImportBusy = false;
+    qs("#registry-import-dialog").setAttribute("aria-busy", "false");
     qs("#registry-apply-import").disabled = !state.registryImportPreview?.valid;
   }
 }
@@ -1485,6 +1558,7 @@ function registryChangeValue() {
 async function reviewRegistryChange() {
   if (state.registryChangeBusy) return;
   state.registryChangeBusy = true;
+  qs("#registry-editor").setAttribute("aria-busy", "true");
   resetRegistryChangePreview();
   qs("#registry-review-change").disabled = true;
   try {
@@ -1511,6 +1585,7 @@ async function reviewRegistryChange() {
     showMessage(error.message);
   } finally {
     state.registryChangeBusy = false;
+    qs("#registry-editor").setAttribute("aria-busy", "false");
     qs("#registry-review-change").disabled = false;
   }
 }
@@ -1520,6 +1595,7 @@ async function applyRegistryChange() {
   if (!preview || state.registryChangeBusy) return;
   if (!window.confirm(`Apply this ${preview.operation} change for ${preview.asset.displayName}?\n\nThis writes canonical Registry source only.`)) return;
   state.registryChangeBusy = true;
+  qs("#registry-editor").setAttribute("aria-busy", "true");
   qs("#registry-apply-change").disabled = true;
   try {
     await api(`/api/v1/registry/asset-changes/${encodeURIComponent(preview.changeId)}/apply`, {
@@ -1536,6 +1612,7 @@ async function applyRegistryChange() {
     await refreshRegistryState().catch(() => undefined);
   } finally {
     state.registryChangeBusy = false;
+    qs("#registry-editor").setAttribute("aria-busy", "false");
   }
 }
 
@@ -3037,27 +3114,79 @@ async function applyAliasChange() {
   finally { state.aliasBusy = false; updateAliasApplyButton(); }
 }
 
-async function activateView(view) {
-  qsa("[data-view]").forEach((item) => {
-    if (item.dataset.view === view) item.setAttribute("aria-current", "page");
-    else item.removeAttribute("aria-current");
-  });
-  qsa("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== view; });
-  if (view === "workspace") await loadPackWorkspace();
-  if (view === "threads") await loadThreadManagement();
-  if (view === "server") await Promise.all([loadServerConfiguration(), loadOperatorTools()]);
-  if (view === "packs") await loadPackMaintenance();
-  if (view === "archive") await loadReleaseArchive();
-  if (view === "registry") {
-    await loadRegistryPacks();
-    await loadRegistry({ query: qs("#registry-search").value, offset: state.registryOffset });
+async function activateView(view, options = {}) {
+  const nextView = Object.hasOwn(VIEW_LABELS, view) ? view : "workspace";
+  const changed = state.activeView !== nextView;
+  const generation = ++state.viewActivationGeneration;
+  state.activeView = nextView;
+  if (changed) clearMessage();
+  updateViewNavigation(nextView);
+
+  const nextHash = `#${nextView}`;
+  const historyMode = options.historyMode ?? "push";
+  if (historyMode === "push" && window.location.hash !== nextHash) {
+    window.history.pushState({ view: nextView }, "", nextHash);
+  } else if (historyMode === "replace" || !Object.hasOwn(VIEW_LABELS, window.location.hash.replace(/^#/, ""))) {
+    window.history.replaceState({ view: nextView }, "", nextHash);
   }
-  if (view === "renderer") await loadStandaloneRenderOptions();
+
+  setViewBusy(nextView, true);
+  let loaded = false;
+  try {
+    if (nextView === "workspace") await loadPackWorkspace();
+    if (nextView === "threads") await loadThreadManagement();
+    if (nextView === "server") await Promise.all([loadServerConfiguration(), loadOperatorTools()]);
+    if (nextView === "packs") await loadPackMaintenance();
+    if (nextView === "archive") await loadReleaseArchive();
+    if (nextView === "registry") {
+      await loadRegistryPacks();
+      await loadRegistry({ query: qs("#registry-search").value, offset: state.registryOffset });
+    }
+    if (nextView === "renderer") await loadStandaloneRenderOptions();
+    loaded = true;
+  } finally {
+    setViewBusy(nextView, false);
+    if (generation === state.viewActivationGeneration) {
+      if (loaded) announceView(nextView);
+      else qs("#view-status").textContent = `${VIEW_LABELS[nextView]} workspace failed to load.`;
+      if (loaded && options.focusPanel === true) {
+        const panel = qs(`[data-view-panel="${nextView}"]`);
+        panel?.focus({ preventScroll: true });
+        panel?.scrollIntoView({ block: "start" });
+      }
+    }
+  }
 }
 
-qsa("[data-view]").forEach((button) => button.addEventListener("click", () => {
-  void activateView(button.dataset.view).catch((error) => showMessage(error.message));
-}));
+function handlePrimaryNavigationKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const buttons = qsa("[data-view]");
+  const currentIndex = buttons.indexOf(event.currentTarget);
+  if (currentIndex < 0) return;
+  event.preventDefault();
+  const nextIndex = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? buttons.length - 1
+      : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+  const next = buttons[nextIndex];
+  next.focus();
+  next.scrollIntoView({ block: "nearest", inline: "nearest" });
+  void activateView(next.dataset.view, { historyMode: "push" }).catch((error) => showMessage(error.message));
+}
+
+qsa("[data-view]").forEach((button) => {
+  button.addEventListener("click", () => {
+    void activateView(button.dataset.view, { historyMode: "push" }).catch((error) => showMessage(error.message));
+  });
+  button.addEventListener("keydown", handlePrimaryNavigationKeydown);
+});
+
+window.addEventListener("hashchange", () => {
+  void activateView(requestedViewFromHash(), { focusPanel: true }).catch((error) => showMessage(error.message));
+});
+
+qs("#message-dismiss").addEventListener("click", clearMessage);
 
 qs("#create-pack").addEventListener("click", () => void createPack());
 qs("#pack-asset-search").addEventListener("input", (event) => schedulePackAssetSearch(event.target.value));
@@ -3230,14 +3359,17 @@ for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
 async function start() {
   try {
     await refreshStatus();
-    await loadPackWorkspace();
     await loadChannels();
     restoreInput();
     await loadChannels();
     renderMembers();
     await Promise.all(state.members.map((_, index) => resolveMember(index)));
     schedulePreview();
-  } catch (error) { showMessage(error.message); }
+    await activateView(requestedViewFromHash(), { historyMode: "replace" });
+  } catch (error) {
+    setViewBusy(state.activeView, false);
+    showMessage(error.message);
+  }
 }
 
 void start();

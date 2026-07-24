@@ -34,7 +34,7 @@ describe("Operational Registry UI", () => {
   it("revalidates exact Asset IDs and exposes the most important canonical metadata", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
-    expect(html).toContain("DISPLAY NAME</th><th>TRADINGVIEW</th><th>CURRENCY</th><th>CHANNEL</th>");
+    expect(html).toContain('<th scope="col">DISPLAY NAME</th><th scope="col">TRADINGVIEW</th><th scope="col">CURRENCY</th><th scope="col">CHANNEL</th>');
     expect(html).toContain('id="registry-asset-facts"');
     expect(js).toContain("VERIFYING CURRENT ID");
     expect(js).toContain("/api/v1/assets/${encodeURIComponent(assetId)}");

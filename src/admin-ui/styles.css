@@ -1193,3 +1193,202 @@ footer {
   table { min-width: 46rem; }
   footer { letter-spacing: .12em; }
 }
+
+/* Step 543 — operator UX, responsive behavior, and accessibility */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+main:focus,
+.view:focus { outline: none; }
+.view {
+  position: relative;
+  min-width: 0;
+  scroll-margin-top: 10rem;
+}
+.window,
+.registry-layout,
+.registry-results,
+.table-wrap {
+  min-width: 0;
+  max-width: 100%;
+}
+.table-wrap { width: 100%; }
+.view:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: .45rem;
+  border-radius: var(--radius-xl);
+}
+.view[aria-busy="true"]::before {
+  content: "";
+  position: sticky;
+  z-index: 14;
+  top: 9rem;
+  display: block;
+  width: 100%;
+  height: 3px;
+  margin-bottom: -3px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, transparent 0 8%, var(--gold-strong) 42% 58%, transparent 92% 100%);
+  background-size: 220% 100%;
+  box-shadow: 0 0 1rem rgba(240, 207, 107, .45);
+}
+
+.primary-nav {
+  scroll-padding-inline: clamp(1rem, 3vw, 3rem);
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+}
+.primary-nav button {
+  scroll-snap-align: center;
+  touch-action: manipulation;
+}
+.primary-nav button[tabindex="0"] { z-index: 1; }
+
+.message {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  line-height: 1.55;
+}
+.message-dismiss {
+  min-width: 0;
+  min-height: 2.25rem;
+  padding: .3rem .7rem;
+  border-color: currentColor;
+  border-radius: var(--radius-pill);
+  color: inherit;
+  background: rgba(0, 0, 0, .18);
+  font-size: .64rem;
+}
+.message-dismiss:hover:not(:disabled) { background: rgba(255, 255, 255, .07); }
+
+.table-wrap[role="region"] {
+  scroll-padding: .75rem;
+  outline: none;
+}
+.table-wrap[role="region"]:focus-visible {
+  border-color: var(--focus);
+  box-shadow: inset 0 0 0 2px rgba(240, 207, 107, .2), 0 0 0 3px rgba(240, 207, 107, .08);
+}
+.table-wrap[role="region"]:focus-visible::after {
+  content: "SCROLL TO INSPECT ALL COLUMNS";
+  position: sticky;
+  right: .65rem;
+  bottom: .55rem;
+  float: right;
+  padding: .28rem .48rem;
+  border: 1px solid rgba(240, 207, 107, .28);
+  border-radius: var(--radius-pill);
+  color: var(--gold-strong);
+  background: rgba(7, 8, 6, .92);
+  font-family: var(--font-condensed);
+  font-size: .56rem;
+  font-weight: 850;
+  letter-spacing: .12em;
+  pointer-events: none;
+}
+
+.registry-editor[aria-busy="true"]::after {
+  content: "WORKING";
+  position: sticky;
+  right: 1rem;
+  bottom: 5rem;
+  display: block;
+  width: max-content;
+  margin-left: auto;
+  padding: .35rem .58rem;
+  border: 1px solid rgba(240, 207, 107, .32);
+  border-radius: var(--radius-pill);
+  color: var(--gold-strong);
+  background: rgba(7, 8, 6, .94);
+  font-family: var(--font-condensed);
+  font-size: .6rem;
+  font-weight: 850;
+  letter-spacing: .14em;
+}
+[inert] { user-select: none; }
+
+button,
+a,
+summary,
+input[type="file"],
+input[type="checkbox"],
+select { touch-action: manipulation; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .view[aria-busy="true"]::before { animation: visionx-loading-sweep 1.15s linear infinite; }
+  @keyframes visionx-loading-sweep {
+    from { background-position: 100% 0; }
+    to { background-position: -100% 0; }
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --text-muted: #d0ccc1;
+    --text-faint: #b3aea2;
+    --border: rgba(255, 236, 177, .3);
+    --border-strong: rgba(255, 226, 135, .62);
+  }
+  button:disabled { opacity: .62; }
+  .window,
+  .derived-channel,
+  .registry-inspector { background-color: #10110e; }
+}
+
+@media (forced-colors: active) {
+  .ambient-layer,
+  .window::before,
+  .primary-action::after { display: none; }
+  button,
+  input,
+  select,
+  .window,
+  .message,
+  .table-wrap { forced-color-adjust: auto; }
+  .workspace-status,
+  .member-status,
+  .context-fact { border: 1px solid currentColor; }
+}
+
+@media (max-width: 900px) {
+  .view { scroll-margin-top: 5rem; }
+  .view[aria-busy="true"]::before { top: 4rem; }
+  .message {
+    position: relative;
+    top: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .primary-nav {
+    padding-right: max(.65rem, env(safe-area-inset-right));
+    padding-left: max(.65rem, env(safe-area-inset-left));
+    scroll-snap-type: inline proximity;
+  }
+  main {
+    padding-right: max(.65rem, env(safe-area-inset-right));
+    padding-bottom: max(4rem, env(safe-area-inset-bottom));
+    padding-left: max(.65rem, env(safe-area-inset-left));
+  }
+  .message { grid-template-columns: 1fr; }
+  .message-dismiss { justify-self: start; }
+  .publication-queue-actions > *,
+  .server-overview-actions > *,
+  .server-route-actions > *,
+  .workspace-session-actions > *,
+  .workspace-review-actions > *,
+  .renderer-downloads > *,
+  .pack-maintenance-actions > * { width: 100%; }
+  .table-wrap[role="region"]:focus-visible::after { content: "HORIZONTAL SCROLL"; }
+}

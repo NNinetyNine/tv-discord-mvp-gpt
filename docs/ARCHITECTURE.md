@@ -317,3 +317,18 @@ remain horizontally inspectable. Motion is progressive enhancement under
 `prefers-reduced-motion: no-preference`; the explicit reduced-motion rule
 collapses animation and transition duration. No external visual dependency is
 introduced.
+
+## Administration interaction shell
+
+The static Administration client owns workspace routing through URL hashes,
+keyboard navigation, focus movement, live announcements, modal isolation, and
+responsive table access. It does not introduce a second application router or
+state store. A workspace activation still invokes the existing AdminService
+HTTP projection and reports `aria-busy` only while that projection loads.
+
+Errors and successful outcomes share one dismissible notification surface but
+retain distinct accessibility semantics. Registry modal operations make the
+background shell inert, trap focus, restore the initiating control, and expose
+busy state during existing review/apply requests. Accessible captions and
+focusable scroll regions are presentation metadata around unchanged table data.
+See `docs/ADMINISTRATION_UX_ACCESSIBILITY.md` for the operator review contract.

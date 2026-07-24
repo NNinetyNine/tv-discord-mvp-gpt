@@ -106,3 +106,16 @@ all controls by reflowing grids, stacking the Registry inspector, allowing
 navigation and tables to scroll horizontally, and expanding dialogs to the
 narrow viewport. Motion is reduced to effectively zero when the operating
 system requests reduced motion. No hidden functionality was added or removed.
+
+## Step 543 UX and accessibility decision
+
+The completed operator surface now supports URL-restorable workspaces,
+Left/Right/Home/End primary navigation, named workspace regions, loading
+announcements, dismissible feedback, modal isolation, and keyboard-accessible
+wide tables. These are interaction-shell improvements over existing functions;
+they do not expose a new domain capability or duplicate a service.
+
+Responsive review continues to preserve every control. Contrast, forced-colors,
+and reduced-motion preferences have explicit fallbacks. The remaining work is
+operator validation and defect correction, not architectural expansion or
+cleanup.
