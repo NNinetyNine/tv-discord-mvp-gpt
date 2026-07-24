@@ -37,11 +37,18 @@ describe("buildChannelResolver — pure resolution", () => {
 });
 
 describe("loadChannelResolver — real config", () => {
-  it("loads config/channels.json and builds a working resolver", () => {
-    const resolve = loadChannelResolver(resolvePath(process.cwd(), "config", "channels.json"));
+  it("loads config/channels.json and resolves every configured channel exactly", () => {
+    const channelsPath = resolvePath(process.cwd(), "config", "channels.json");
+    const channels = loadChannels(channelsPath);
+    const resolve = loadChannelResolver(channelsPath);
+
     expect(typeof resolve).toBe("function");
-    expect(resolve("crypto")).toBe("1529334738454839349");
-    expect(resolve("forex")).toBe("1528609079822516305");
+    expect(Object.keys(channels).length).toBeGreaterThan(0);
+
+    for (const [name, id] of Object.entries(channels)) {
+      expect(typeof id).toBe("string");
+      expect(resolve(name)).toBe((id as string).trim());
+    }
   });
 });
 

@@ -6,13 +6,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AdminService } from "./admin-service.ts";
 import { startAdminHttpServer } from "./admin-http-server.ts";
 import { sha256 } from "../packs/pack-draft-promotion.ts";
+import { ADMIN_CANONICAL_FIXTURE_ROOT } from "../test-support/admin-canonical-fixture.ts";
 
 const cleanup: string[] = [];
 afterEach(async () => { await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
 
 async function serviceWithDraft() {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "visionx-admin-promotion-")); cleanup.push(workspaceRoot);
-  const service = await AdminService.create({ repositoryRoot: resolve("."), workspaceRoot });
+  const service = await AdminService.create({ repositoryRoot: ADMIN_CANONICAL_FIXTURE_ROOT, workspaceRoot });
   const created = await service.createDraft({ schemaVersion: 1, draftType: "visionx.pack-draft", id: "qa-pack", displayName: "QA Pack", description: "Workspace-only description.", assetIds: ["gold", "aapl", "btc"], revision: 1 });
   await service.updateDraft("qa-pack", 1, created.draft);
   return { service, workspaceRoot };
@@ -40,7 +41,7 @@ describe("Administration Pack promotion integration", () => {
     const artifacts = await service.listPackPromotionArtifacts("qa-pack", proposal.promotionId);
     expect(artifacts.map((entry: any) => entry.name)).toEqual(["promotion-request.json", "pack-proposal.json", "planning-authorization.json", "pack-application-plan.json", "pack-source.patch", "pack-source-change.json", "packs-after.json"]);
     expect((await service.readPackPromotionArtifact("qa-pack", proposal.promotionId, "pack-source.patch")).toString("utf8")).toContain("definitions/packs.json");
-    expect((await readFile(resolve("definitions/packs.json")))).toEqual(service.promotionContext().packsBytes);
+    expect((await readFile(resolve(ADMIN_CANONICAL_FIXTURE_ROOT, "definitions/packs.json")))).toEqual(service.promotionContext().packsBytes);
     expect(workspaceRoot).not.toBe(resolve("definitions"));
   });
   it("rejects manually supplied channel mutation for replace_pack_assets", async () => {
