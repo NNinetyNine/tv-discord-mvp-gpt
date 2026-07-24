@@ -105,6 +105,7 @@ function provisionFixture(
   const forum = {
     id: FORUM_ID,
     type: ChannelType.GuildForum,
+    flags: { has: () => false },
     availableTags: (
       options.availableTagIds ?? [TAG_ID]
     ).map((id) => ({
@@ -144,6 +145,7 @@ describe("Discord forum inspection", () => {
       id: FORUM_ID,
       type: ChannelType.GuildForum,
       name: "Crypto Analyses",
+      flags: { has: (flag: number) => flag === (1 << 4) },
       availableTags: [
         { id: TAG_ID, name: "Analysis", moderated: false, emoji: null },
         { id: "423456789012345678", name: "Members", moderated: true, emoji: null },
@@ -153,6 +155,7 @@ describe("Discord forum inspection", () => {
     await expect(inspectDiscordForum(fetcher({ [FORUM_ID]: forum }, calls), FORUM_ID)).resolves.toEqual({
       forumChannelId: FORUM_ID,
       name: "Crypto Analyses",
+      requiresTag: true,
       availableTags: [
         { id: TAG_ID, name: "Analysis", moderated: false },
         { id: "423456789012345678", name: "Members", moderated: true },
@@ -330,6 +333,27 @@ describe("Discord forum provisioning operations", () => {
             name: "btc.png",
           },
         ],
+      },
+    });
+  });
+
+
+  it("omits the applied-tags field when the operator selects no tags", async () => {
+    const target = provisionFixture({ availableTagIds: [] });
+    const operations = buildDiscordForumProvisioningOperations(target.fetchChannel);
+
+    await operations.createThread({
+      forumChannelId: FORUM_ID,
+      title: "Bitcoin // $BTC",
+      appliedTagIds: [],
+      starterLogoBytes: Buffer.from("logo"),
+      starterLogoFilename: "btc.png",
+    });
+
+    expect(target.createCalls[0]).toEqual({
+      name: "Bitcoin // $BTC",
+      message: {
+        files: [{ attachment: Buffer.from("logo"), name: "btc.png" }],
       },
     });
   });

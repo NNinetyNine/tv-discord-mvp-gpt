@@ -42,21 +42,25 @@ The scan commits its candidate set only after every requested render succeeds.
 If rendering fails, newly created previews are discarded and the session file
 is not advanced.
 
-## Readiness
+## Session coverage
 
-A Pack is capture-session ready only when:
+A capture session reports complete coverage only when:
 
 1. every required Asset has a candidate in the active session;
-2. every current candidate has been explicitly accepted;
-3. the accepted candidates all belong to that same session; and
-4. the earliest-to-latest embedded export span is at most 60 minutes.
+2. every current candidate has been verified and staged; and
+3. the earliest-to-latest embedded export span is at most 60 minutes.
 
-This milestone exposes the readiness fact but does not publish, create a
-Release, contact Discord, or change Discord routing.
+Step 547 makes this an informational workflow fact rather than a publication
+gate. A Pack may be published whenever its canonical required Assets are
+complete and staged and its ordinary routing and Release safeguards pass,
+regardless of whether those revisions were collected in one capture session.
 
-Confirmed renders appear in Pack Progress as versioned Workspace revisions.
-See `docs/PACK_REVISION_HISTORY.md` for preview, confirmation,
-single-revision deletion, and current-revision restoration behavior.
+Downloads synchronization verifies and stages eligible changed candidates
+automatically. If automatic staging fails, the pending candidate remains
+available in Quick Look for manual review. Confirmed renders appear in Pack
+Progress as versioned Workspace revisions. Quick Look navigates Assets and
+revisions separately and allows one confirmed revision to be deleted at a time.
+See `docs/PACK_REVISION_HISTORY.md` for current-revision restoration behavior.
 
 ## Publication completion
 

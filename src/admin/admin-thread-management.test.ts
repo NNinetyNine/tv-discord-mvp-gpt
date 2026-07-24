@@ -160,6 +160,7 @@ function provisioningSessionFactory(options: {
         return Object.freeze({
           forumChannelId,
           name: "Crypto Analyses",
+          requiresTag: false,
           availableTags: Object.freeze(options.availableTags ?? [
             Object.freeze({ id: "1527777777777777777", name: "Analysis", moderated: false }),
             Object.freeze({ id: "1527777777777777778", name: "Members", moderated: true }),
@@ -535,6 +536,7 @@ describe("Administration Discord thread routing", () => {
       packId: "crypto",
       forum: {
         name: "Crypto Analyses",
+        requiresTag: false,
         availableTags: [
           { id: "1527777777777777777", name: "Analysis", moderated: false },
           { id: "1527777777777777778", name: "Members", moderated: true },
@@ -925,6 +927,7 @@ describe("Administration Discord thread routing", () => {
     expect((await inspectionResponse.json() as any).data).toMatchObject({
       forum: {
         name: "Crypto Analyses",
+        requiresTag: false,
         availableTags: [
           { id: "1527777777777777777" },
           { id: "1527777777777777778" },

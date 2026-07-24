@@ -83,10 +83,14 @@ The operator workflow is:
 2. explicitly inspect the Pack's current forum name and available tags;
 3. verify and stage the Asset's canonical Registry logo into the local
    provisioning workspace;
-4. enter the exact post title and select at most five inspected tags;
+4. enter the exact post title and optionally select at most five inspected tags;
 5. review the canonical logo SHA-256 and confirm the complete request;
 6. create one forum post and atomically write its persistent binding;
 7. close the short-lived Discord session.
+
+When no tag is selected, VisionX omits the applied-tags request field. Live
+forum inspection reports Discord's Require Tag setting so a tagless post is
+blocked before creation only when that forum requires one.
 
 The canonical logo remains owned by the Registry. Provisioning copies its exact
 bytes into the administration workspace only after Asset and Pack membership

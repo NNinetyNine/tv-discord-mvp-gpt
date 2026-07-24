@@ -165,6 +165,36 @@ describe("Discord Asset-thread provisioning", () => {
     expect(state.deleted).toEqual([]);
   });
 
+  it("creates a forum post without tags when the forum does not require one", async () => {
+    const state = fixture({
+      createThread: async (input) => {
+        state.created.push(input);
+        return Object.freeze({ ...THREAD, appliedTagIds: Object.freeze([]) });
+      },
+    });
+
+    await expect(
+      provisionDiscordAssetThread(
+        state.deps,
+        { ...INPUT, appliedTagIds: Object.freeze([]) },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      outcome: "provisioned",
+      thread: { appliedTagIds: [] },
+    });
+
+    expect(state.created).toEqual([
+      {
+        forumChannelId: FORUM_ID,
+        title: "Bitcoin // $BTC",
+        appliedTagIds: [],
+        starterLogoBytes: LOGO.bytes,
+        starterLogoFilename: "btc.png",
+      },
+    ]);
+  });
+
   it("rejects invalid titles before any side effect", async () => {
     const state = fixture();
 

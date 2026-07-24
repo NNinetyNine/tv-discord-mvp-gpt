@@ -79,7 +79,10 @@ describe("Operational Registry UI", () => {
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
     expect(html).not.toContain('id="thread-logo"');
     expect(html).toContain('id="thread-logo-state"');
-    expect(html).toContain("20 TAGS MAY BE CONFIGURED FOR THIS FORUM · APPLY UP TO 5 TAGS TO EACH POST");
+    expect(html).toContain("Tags are optional in VisionX");
+    expect(html).toContain(
+      "Up to 20 tags may be configured for a forum and up to 5 may be applied to one post.",
+    );
     expect(html).toContain('id="thread-tag-count"');
     expect(js).toContain("updateThreadTagCount");
     expect(html).toContain("Manage or replace the logo in Registry");

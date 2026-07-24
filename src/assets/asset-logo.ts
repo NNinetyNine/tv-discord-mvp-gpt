@@ -5,8 +5,6 @@ import { readDecodedImageFacts } from "../validation/inspect-image.ts";
 export const ASSET_LOGO_POLICY = Object.freeze({
   format: "png" as const,
   maximumBytes: 4 * 1024 * 1024,
-  minimumDimension: 64,
-  maximumDimension: 2048,
   maximumFrames: 1,
 });
 
@@ -16,8 +14,6 @@ export type AssetLogoValidationFailureReason =
   | "unreadable_image"
   | "unsupported_format"
   | "missing_dimensions"
-  | "dimensions_too_small"
-  | "dimensions_too_large"
   | "animated_image";
 
 export interface AssetLogoValidationFailure {
@@ -95,25 +91,6 @@ export async function validateAssetLogo(
     );
   }
 
-  if (
-    decoded.width < ASSET_LOGO_POLICY.minimumDimension ||
-    decoded.height < ASSET_LOGO_POLICY.minimumDimension
-  ) {
-    return failure(
-      "dimensions_too_small",
-      `Asset logo dimensions must be at least ${ASSET_LOGO_POLICY.minimumDimension} × ${ASSET_LOGO_POLICY.minimumDimension} pixels.`,
-    );
-  }
-
-  if (
-    decoded.width > ASSET_LOGO_POLICY.maximumDimension ||
-    decoded.height > ASSET_LOGO_POLICY.maximumDimension
-  ) {
-    return failure(
-      "dimensions_too_large",
-      `Asset logo dimensions must not exceed ${ASSET_LOGO_POLICY.maximumDimension} × ${ASSET_LOGO_POLICY.maximumDimension} pixels.`,
-    );
-  }
 
   const pageOrFrameCount = decoded.pageOrFrameCount ?? 1;
   if (pageOrFrameCount > ASSET_LOGO_POLICY.maximumFrames) {

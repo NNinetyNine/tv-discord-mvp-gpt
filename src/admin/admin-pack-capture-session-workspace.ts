@@ -22,6 +22,8 @@ const HASH = /^[a-f0-9]{64}$/u;
 const PNG_NAME = /^[^\u0000-\u001f\u007f/\\]{1,240}\.png$/iu;
 const EXPORT_STAMP = /_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.png$/iu;
 const SESSION_VERSION = 1 as const;
+const DOWNLOADS_CONFIGURATION_VERSION = 1 as const;
+const DOWNLOADS_CONFIGURATION_FILE = ".downloads-root.json";
 const DEFAULT_MAX_SPAN_MS = 60 * 60 * 1000;
 const CLOCK_TOLERANCE_MS = 5 * 60 * 1000;
 
@@ -42,6 +44,12 @@ export interface PackCaptureCandidate {
   readonly state: "pending" | "accepted";
   readonly acceptedAt: string | null;
   readonly acceptedRevision: number | null;
+}
+
+interface DownloadsConfiguration {
+  readonly schemaVersion: typeof DOWNLOADS_CONFIGURATION_VERSION;
+  readonly recordType: "visionx.pack-capture-downloads-root";
+  readonly path: string;
 }
 
 interface StoredSession {
@@ -256,7 +264,7 @@ function parseSession(value: unknown, expectedPackId: string): StoredSession {
   });
 }
 
-async function writeAtomic(path: string, value: StoredSession): Promise<void> {
+async function writeAtomic(path: string, value: unknown): Promise<void> {
   const temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
   const handle = await open(
     temporary,
@@ -279,11 +287,35 @@ async function writeAtomic(path: string, value: StoredSession): Promise<void> {
 
 export class AdminPackCaptureSessionWorkspace {
   readonly root: string;
-  readonly downloadsRoot: string | null;
+  readonly #workspaceRoot: string;
+  #downloadsRoot: string | null;
 
-  private constructor(root: string, downloadsRoot: string | null) {
+  private constructor(root: string, workspaceRoot: string, downloadsRoot: string | null) {
     this.root = root;
-    this.downloadsRoot = downloadsRoot;
+    this.#workspaceRoot = workspaceRoot;
+    this.#downloadsRoot = downloadsRoot;
+  }
+
+  get downloadsRoot(): string | null {
+    return this.#downloadsRoot;
+  }
+
+  static async #canonicalDownloadsRoot(workspaceRoot: string, requestedRoot: string): Promise<string> {
+    const requested = requestedRoot.trim();
+    if (requested.length === 0) {
+      throw new AdminError("chart_downloads_root_invalid", "Chart Downloads folder is required.");
+    }
+    let stat: Awaited<ReturnType<typeof lstat>>;
+    try { stat = await lstat(resolve(requested)); }
+    catch { throw new AdminError("chart_downloads_root_invalid", "Chart Downloads folder is unavailable."); }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new AdminError("chart_downloads_root_invalid", "Chart Downloads folder must be a non-symlink directory.");
+    }
+    const canonicalDownloads = await realpath(resolve(requested));
+    if (pathInside(workspaceRoot, canonicalDownloads) || pathInside(canonicalDownloads, workspaceRoot)) {
+      throw new AdminError("path_collision", "Chart Downloads folder and administration workspace must be separate.");
+    }
+    return canonicalDownloads;
   }
 
   static async open(workspaceRoot: string, downloadsRoot?: string): Promise<AdminPackCaptureSessionWorkspace> {
@@ -294,20 +326,56 @@ export class AdminPackCaptureSessionWorkspace {
     if (!pathInside(canonicalWorkspace, canonicalRoot)) {
       throw new AdminError("workspace_path_unsafe", "Capture sessions escape the administration workspace.");
     }
-    if (downloadsRoot === undefined) {
-      return new AdminPackCaptureSessionWorkspace(canonicalRoot, null);
+
+    const configurationPath = join(canonicalRoot, DOWNLOADS_CONFIGURATION_FILE);
+    let configuredRoot: string | null = null;
+    try {
+      const value = JSON.parse(await readFile(configurationPath, "utf8")) as Partial<DownloadsConfiguration>;
+      if (
+        value.schemaVersion !== DOWNLOADS_CONFIGURATION_VERSION ||
+        value.recordType !== "visionx.pack-capture-downloads-root" ||
+        typeof value.path !== "string"
+      ) throw new AdminError("chart_downloads_root_invalid", "Saved Chart Downloads configuration is invalid.");
+      configuredRoot = await AdminPackCaptureSessionWorkspace.#canonicalDownloadsRoot(canonicalWorkspace, value.path);
+    } catch (error) {
+      const missing = typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+      const recoverable = error instanceof SyntaxError || error instanceof AdminError;
+      if (!missing && !recoverable) throw error;
+      configuredRoot = null;
     }
-    let stat;
-    try { stat = await lstat(resolve(downloadsRoot)); }
-    catch { throw new AdminError("chart_downloads_root_invalid", "Chart Downloads folder is unavailable."); }
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw new AdminError("chart_downloads_root_invalid", "Chart Downloads folder must be a non-symlink directory.");
+
+    if (configuredRoot === null && downloadsRoot !== undefined) {
+      configuredRoot = await AdminPackCaptureSessionWorkspace.#canonicalDownloadsRoot(canonicalWorkspace, downloadsRoot);
+      await writeAtomic(configurationPath, Object.freeze({
+        schemaVersion: DOWNLOADS_CONFIGURATION_VERSION,
+        recordType: "visionx.pack-capture-downloads-root" as const,
+        path: configuredRoot,
+      }));
     }
-    const canonicalDownloads = await realpath(resolve(downloadsRoot));
-    if (pathInside(canonicalWorkspace, canonicalDownloads) || pathInside(canonicalDownloads, canonicalWorkspace)) {
-      throw new AdminError("path_collision", "Chart Downloads folder and administration workspace must be separate.");
+    return new AdminPackCaptureSessionWorkspace(canonicalRoot, canonicalWorkspace, configuredRoot);
+  }
+
+  async configureDownloadsRoot(requestedRoot: string): Promise<string> {
+    const canonical = await AdminPackCaptureSessionWorkspace.#canonicalDownloadsRoot(this.#workspaceRoot, requestedRoot);
+    await writeAtomic(join(this.root, DOWNLOADS_CONFIGURATION_FILE), Object.freeze({
+      schemaVersion: DOWNLOADS_CONFIGURATION_VERSION,
+      recordType: "visionx.pack-capture-downloads-root" as const,
+      path: canonical,
+    }));
+    this.#downloadsRoot = canonical;
+    return canonical;
+  }
+
+  async clearAllSessions(): Promise<number> {
+    let removed = 0;
+    for (const entry of await readdir(this.root, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name.startsWith(".")) continue;
+      const packId = basename(entry.name, ".json");
+      if (!IDENTIFIER.test(packId)) continue;
+      await rm(join(this.root, entry.name), { force: true });
+      removed += 1;
     }
-    return new AdminPackCaptureSessionWorkspace(canonicalRoot, canonicalDownloads);
+    return removed;
   }
 
   #path(packId: string): string {
@@ -330,15 +398,15 @@ export class AdminPackCaptureSessionWorkspace {
   }
 
   async #snapshot(): Promise<Readonly<Record<string, BaselineFile>>> {
-    if (this.downloadsRoot === null) {
+    if (this.#downloadsRoot === null) {
       throw new AdminError("chart_downloads_not_configured", "Configure a Chart Downloads folder before starting a capture session.");
     }
     const result: Record<string, BaselineFile> = {};
-    for (const entry of await readdir(this.downloadsRoot, { withFileTypes: true })) {
+    for (const entry of await readdir(this.#downloadsRoot, { withFileTypes: true })) {
       if (!entry.isFile() || !PNG_NAME.test(entry.name)) continue;
-      const path = join(this.downloadsRoot, entry.name);
+      const path = join(this.#downloadsRoot, entry.name);
       const canonical = await realpath(path);
-      if (!pathInside(this.downloadsRoot, canonical)) continue;
+      if (!pathInside(this.#downloadsRoot, canonical)) continue;
       const stat = await lstat(canonical);
       if (stat.isSymbolicLink() || !stat.isFile() || stat.size <= 0) continue;
       const bytes = await readFile(canonical);
@@ -352,7 +420,7 @@ export class AdminPackCaptureSessionWorkspace {
   }
 
   async start(pack: Pack, now = new Date()): Promise<PackCaptureSessionState> {
-    if (this.downloadsRoot === null) {
+    if (this.#downloadsRoot === null) {
       throw new AdminError("chart_downloads_not_configured", "Configure a Chart Downloads folder before starting a capture session.");
     }
     const session: StoredSession = Object.freeze({
@@ -376,8 +444,8 @@ export class AdminPackCaptureSessionWorkspace {
   #publicState(pack: Pack, session: StoredSession | null): PackCaptureSessionState {
     if (session === null) {
       return Object.freeze({
-        configured: this.downloadsRoot !== null,
-        downloadsFolder: this.downloadsRoot,
+        configured: this.#downloadsRoot !== null,
+        downloadsFolder: this.#downloadsRoot,
         active: false,
         sessionId: null,
         packId: pack.id,
@@ -389,7 +457,7 @@ export class AdminPackCaptureSessionWorkspace {
         missingAssetIds: Object.freeze([...pack.assets]),
         exportSpanMinutes: null,
         publishReady: false,
-        readinessReason: this.downloadsRoot === null
+        readinessReason: this.#downloadsRoot === null
           ? "downloads_folder_not_configured"
           : "session_not_started",
         candidates: Object.freeze([]),
@@ -413,8 +481,8 @@ export class AdminPackCaptureSessionWorkspace {
           ? "export_window_exceeded"
           : "ready";
     return Object.freeze({
-      configured: this.downloadsRoot !== null,
-      downloadsFolder: this.downloadsRoot,
+      configured: this.#downloadsRoot !== null,
+      downloadsFolder: this.#downloadsRoot,
       active: true,
       sessionId: session.sessionId,
       packId: pack.id,
@@ -432,7 +500,7 @@ export class AdminPackCaptureSessionWorkspace {
   }
 
   async planScan(pack: Pack, resolver: Resolver, now = new Date()): Promise<PackCaptureScanPlan> {
-    if (this.downloadsRoot === null) {
+    if (this.#downloadsRoot === null) {
       throw new AdminError("chart_downloads_not_configured", "Configure a Chart Downloads folder before scanning.");
     }
     const session = await this.#read(pack.id);
@@ -445,11 +513,11 @@ export class AdminPackCaptureSessionWorkspace {
     const ignored: PackCaptureScanPlan["ignored"][number][] = [];
     const eligible = new Map<string, PlannedPackCapture>();
 
-    for (const entry of await readdir(this.downloadsRoot, { withFileTypes: true })) {
+    for (const entry of await readdir(this.#downloadsRoot, { withFileTypes: true })) {
       if (!entry.isFile() || !PNG_NAME.test(entry.name)) continue;
-      const sourcePath = join(this.downloadsRoot, entry.name);
+      const sourcePath = join(this.#downloadsRoot, entry.name);
       const canonical = await realpath(sourcePath);
-      if (!pathInside(this.downloadsRoot, canonical)) continue;
+      if (!pathInside(this.#downloadsRoot, canonical)) continue;
       const stat = await lstat(canonical);
       if (stat.isSymbolicLink() || !stat.isFile() || stat.size <= 0) continue;
       const sourceBytes = await readFile(canonical);

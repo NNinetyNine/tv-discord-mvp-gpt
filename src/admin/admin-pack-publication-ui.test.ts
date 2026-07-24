@@ -29,7 +29,8 @@ describe("Multi-Pack publication UI", () => {
   it("surfaces blockers, interrupted Release policies, partial completion, and cleanup warnings", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
-    expect(js).toContain('case "capture_session_not_ready"');
+    expect(js).not.toContain('case "capture_session_not_ready"');
+    expect(html).toContain("Capture-session review remains optional.");
     expect(js).toContain('case "interrupted_release_exists"');
     expect(js).toContain('case "published_release_cleanup_required"');
     expect(js).toContain("ALLOW SUPERSEDE");

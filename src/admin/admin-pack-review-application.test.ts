@@ -60,20 +60,20 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(js).not.toContain("capturePackChartFromFile(");
   });
 
-  it("keeps Pack revision acceptance session-scoped while publication remains separately governed", async () => {
+  it("stages capture revisions automatically while publication remains separately governed", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
 
     expect(html).toContain("PACK WORKSPACE");
     expect(html).toContain("CURRENT ANALYSES &amp; REMAINING REQUIRED");
     expect(html).toContain("PUBLICATION QUEUE");
+    expect(html).toContain("Capture-session review remains optional.");
     expect(html).toContain("REVIEW PUBLICATION");
     expect(html).toContain("PUBLISH SELECTED PACKS");
-    expect(html).toContain("ACCEPT REVISION");
-    expect(html).toContain('id="workspace-streamlined-confirmation"');
-    expect(html).toContain("DEFAULTS OFF FOR EACH NEW SESSION");
-    expect(js).toContain("streamlinedRevisionConfirmation");
-    expect(js).toContain("Publishing, deletion, reset, Discord, Server, Registry, and Pack changes still require explicit confirmation");
+    expect(html).not.toContain('id="workspace-streamlined-confirmation"');
+    expect(js).not.toContain("streamlinedRevisionConfirmation");
+    expect(js).toContain("stageCaptureCandidates");
+    expect(js).toContain("verified and staged automatically");
     expect(js).toContain('api(`/api/v1/pack-workspace/previews?${query.toString()}`');
     expect(js).toContain('api(`/api/v1/pack-workspace/previews/${encodeURIComponent(preview.previewId)}/accept`');
     expect(js).toContain('api("/api/v1/pack-workspace/publication/preview"');
@@ -82,19 +82,23 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(js).not.toContain("publishPack(");
   });
 
-  it("makes one-click folder synchronization primary while preserving collapsible manual import", async () => {
+  it("makes configurable folder synchronization primary while preserving collapsible manual import", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
 
     expect(html).toContain("AUTOMATED PACK CAPTURE");
     expect(html).toContain("SYNC DOWNLOADS &amp; UPDATE PACK");
+    expect(html).toContain('id="workspace-configure-downloads"');
+    expect(html).toContain('id="workspace-downloads-input"');
     expect(html).toMatch(/<details class="workspace-import">/u);
     expect(html).not.toMatch(/<details class="workspace-import" open>/u);
     expect(html).toContain("IMPORT &amp; REVIEW ONE PNG");
+    expect(js).toContain('api("/api/v1/pack-workspace/capture-session/downloads-folder"');
+    expect(js).toContain('method: "PUT"');
     expect(js).toContain('api("/api/v1/pack-workspace/capture-session/start"');
     expect(js).toContain('api("/api/v1/pack-workspace/capture-session/scan"');
     expect(js).toContain("No newer or changed chart exports were found, so no revisions were created.");
-    expect(js).toContain("acceptStreamlinedCaptureCandidates");
+    expect(js).toContain("stageCaptureCandidates");
     expect(js).not.toContain("/publish");
   });
 
@@ -119,18 +123,25 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(resetControls).not.toContain("/publish");
   });
 
-  it("exposes confirmed revision previews and one-revision deletion in Pack Progress", async () => {
+  it("opens Pack Progress previews directly in navigable Quick Look with one-revision deletion", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
 
     expect(html).toContain("ASSET &amp; PREVIEW");
     expect(html).toContain("REVISION HISTORY");
+    expect(html).toContain("Choose PREVIEW beside an Asset to open Quick Look immediately.");
     expect(html).toContain("Delete removes exactly one Workspace revision");
-    expect(js).toContain("data-toggle-workspace-history");
-    expect(js).toContain("REVIEW &amp; CONFIRM");
     expect(html).toContain('id="workspace-quick-look"');
-    expect(js).toContain("openWorkspaceQuickLook");
+    expect(html).toContain('id="workspace-quick-look-previous-asset"');
+    expect(html).toContain('id="workspace-quick-look-next-asset"');
+    expect(html).toContain('id="workspace-quick-look-action"');
     expect(js).toContain("data-workspace-quick-look");
+    expect(js).toContain("revision-count-pill");
+    expect(js).toContain("moveWorkspaceQuickLookAsset");
+    expect(js).toContain("moveWorkspaceQuickLookRevision");
+    expect(js).toContain("applyWorkspaceQuickLookAction");
+    expect(js).not.toContain("data-toggle-workspace-history");
+    expect(js).not.toContain(" KEPT");
     expect(js).toContain('confirmation: "delete_revision"');
     expect(js).toContain("expectedCurrentRevision: asset.revisions");
     expect(js).toContain("Only this revision will be removed.");
@@ -152,6 +163,8 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(html).toContain("INSPECT &amp; ADOPT");
     expect(html).toContain("REMOVE BINDING");
     expect(html).toContain("CREATE NEW FORUM POST");
+    expect(html).toContain("TAGS OPTIONAL · UP TO 20 CONFIGURED · APPLY UP TO 5");
+    expect(html).toContain('id="thread-existing-post"');
     expect(html).toContain("EXPLICIT CONFIRMATION REQUIRED");
     expect(html).toContain("NO DISCORD CONTENT CHANGE");
     expect(js).toContain('api("/api/v1/thread-management")');
@@ -164,6 +177,8 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(js).toContain('confirmation: "inspect_forum_tags"');
     expect(js).toContain('confirmation: "provision_new_thread"');
     expect(js).toContain("logo.evidence.sha256");
+    expect(js).toContain("result.forum.requiresTag");
+    expect(js).toContain('destination.scrollIntoView({ behavior: "smooth", block: "start" })');
     expect(js).toContain("window.confirm(");
     expect(js).not.toContain("/api/v1/thread-management/publish");
   });

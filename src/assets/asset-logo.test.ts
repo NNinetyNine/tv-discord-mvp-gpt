@@ -90,30 +90,19 @@ describe("validateAssetLogo", () => {
     });
   });
 
-  it("rejects dimensions below the minimum", async () => {
-    const bytes = await makeImage(
-      "png",
-      ASSET_LOGO_POLICY.minimumDimension - 1,
-      ASSET_LOGO_POLICY.minimumDimension - 1,
-    );
+  it("accepts small and large PNG dimensions without a pixel-size policy", async () => {
+    const small = await makeImage("png", 16, 24);
+    const large = await makeImage("png", 2200, 32, false);
 
-    await expect(validateAssetLogo(bytes)).resolves.toMatchObject({
-      ok: false,
-      reason: "dimensions_too_small",
+    await expect(validateAssetLogo(small)).resolves.toMatchObject({
+      ok: true,
+      width: 16,
+      height: 24,
     });
-  });
-
-  it("rejects dimensions above the maximum", async () => {
-    const bytes = await makeImage(
-      "png",
-      ASSET_LOGO_POLICY.maximumDimension + 1,
-      ASSET_LOGO_POLICY.maximumDimension + 1,
-      false,
-    );
-
-    await expect(validateAssetLogo(bytes)).resolves.toMatchObject({
-      ok: false,
-      reason: "dimensions_too_large",
+    await expect(validateAssetLogo(large)).resolves.toMatchObject({
+      ok: true,
+      width: 2200,
+      height: 32,
     });
   });
 

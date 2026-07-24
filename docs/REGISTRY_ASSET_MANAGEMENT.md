@@ -57,10 +57,12 @@ Each current Asset may have one canonical PNG at:
 assets/asset-logos/<assetId>.png
 ```
 
-Logo creation and replacement validate the PNG, require the exact current logo hash,
-write through a no-follow temporary file, atomically replace the destination, sync the
-containing directory, and reread the result. Removal also requires the exact current
-hash. A stale browser cannot overwrite or remove a newer logo.
+Logo creation and replacement validate a one-frame PNG up to 4 MiB, but impose no
+pixel-dimension range; any decoded positive width and height are accepted. They require
+the exact current logo hash, write through a no-follow temporary file, atomically
+replace the destination, sync the containing directory, and reread the result. Removal
+also requires the exact current hash. A stale browser cannot overwrite or remove a
+newer logo.
 
 Pack selection no longer asks for inline identity or logo fields. Downstream workflows
 reuse the logo through the stable Asset ID. Retirement intentionally retains an
@@ -92,7 +94,9 @@ points to a live thread under the configured Pack forum. It is read-only. Replac
 and removal remain separate explicit operations.
 
 Discord forums may expose up to 20 available tags, while a forum post may apply at most
-five. The UI displays that distinction and continues to enforce the applied-tag limit.
+five. Applying none is supported unless the inspected forum enables Discord's Require
+Tag setting. The UI displays that distinction and continues to enforce the applied-tag
+limit.
 
 ## Pack filters and bulk CSV onboarding
 

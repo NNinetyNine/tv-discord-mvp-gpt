@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -565,6 +565,28 @@ describe("Admin HTTP server", () => {
 
     const after = await Promise.all(canonicalPaths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
     expect(after).toEqual(before);
+  });
+
+  it("configures and persists the local Chart Downloads folder through Workspace", async () => {
+    const downloads = await mkdtemp(join(tmpdir(), "visionx-admin-downloads-configure-test-"));
+    cleanup.push(downloads);
+    const canonicalDownloads = await realpath(downloads);
+    const { server } = await start();
+
+    const configured = await jsonRequest(server.url, "/api/v1/pack-workspace/capture-session/downloads-folder", {
+      method: "PUT",
+      body: JSON.stringify({ path: downloads }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(configured.response.status).toBe(200);
+    expect(configured.body.data).toMatchObject({
+      downloadsFolder: canonicalDownloads,
+      clearedSessionCount: 0,
+      discardedPendingPreviewCount: 0,
+      effects: { workspaceChanged: false, stagingChanged: false, released: false, discordContacted: false },
+    });
+    const state = await jsonRequest(server.url, "/api/v1/pack-workspace/capture-session?packId=crypto");
+    expect(state.body.data).toMatchObject({ configured: true, downloadsFolder: canonicalDownloads, active: false });
   });
 
   it("starts and scans one governed Pack capture session without creating no-op revisions", async () => {

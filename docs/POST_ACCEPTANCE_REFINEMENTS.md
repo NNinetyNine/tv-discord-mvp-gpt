@@ -6,19 +6,22 @@ Status: implementation boundary following the Step 544 seven-workspace acceptanc
 
 - Automated Pack Capture is the primary one-click Downloads synchronization path.
 - The manual PNG importer is a collapsed fallback inside that workflow.
-- A session-only toggle may streamline acceptance of already validated, changed
-  capture candidates. It defaults off whenever a new capture session is loaded.
+- Step 547 supersedes the session-only acceptance toggle: validated changed
+  capture candidates are staged automatically, while Quick Look remains available
+  for optional review and recovery.
 - Publishing, revision deletion, Workspace reset, Discord writes, Server changes,
   Registry changes, and Pack changes keep their explicit confirmation gates.
 - Publication selection is performed directly through Pack pills; bulk Select All
   and Clear controls are removed.
-- Revision history exposes Quick Look navigation, receipts, and explicit
-  one-revision deletion. Redundant Captured and filename presentation is removed.
+- Revision history exposes direct Quick Look navigation, separate Asset and
+  Revision controls, receipts, and explicit one-revision deletion. The table uses
+  one `REV n` count pill and omits redundant `KEPT` presentation.
 
 ## Threads
 
-A forum may configure 20 tags; one post may apply at most 5. The UI displays a
-live `N / 5 selected` counter and enforces the applied-tag boundary.
+A forum may configure 20 tags; one post may apply at most 5. Tags are optional
+unless the inspected Discord forum enables Require Tag. The UI displays a live
+`N / 5 selected` counter and enforces the applied-tag boundary.
 
 ## Server
 

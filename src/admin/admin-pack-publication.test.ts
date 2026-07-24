@@ -178,11 +178,23 @@ describe("Admin multi-Pack publication", () => {
     const preview = await service.preparePackPublication({ packIds: ["alpha", "beta"] });
     expect(preview.valid).toBe(false);
     expect(preview.packs.find((pack) => pack.id === "beta")?.publication.blockers.map((item) => item.code))
-      .toEqual(expect.arrayContaining(["pack_incomplete", "missing_staged_images", "capture_session_not_ready"]));
+      .toEqual(expect.arrayContaining(["pack_incomplete", "missing_staged_images"]));
+    expect(preview.packs.find((pack) => pack.id === "beta")?.publication.blockers.map((item) => item.code))
+      .not.toContain("capture_session_not_ready");
     await expect(service.applyPackPublication(preview.previewId, preview.confirmation))
       .rejects.toMatchObject({ code: "pack_publication_blocked" });
     expect(publisher.attempts).toEqual([]);
     expect(service.releases.listReleases("alpha")).toEqual([]);
+  });
+
+  it("does not require capture-session review evidence once Pack assets are captured and staged", async () => {
+    const { service } = await createPublicationService();
+    await seedReadyPacks(service, ["alpha"]);
+    await rm(join(service.packCaptureSessions.root, "alpha.json"), { force: true });
+
+    const preview = await service.preparePackPublication({ packIds: ["alpha"] });
+    expect(preview).toMatchObject({ valid: true, selectedPackIds: ["alpha"] });
+    expect(preview.packs[0]?.publication.blockers).toEqual([]);
   });
 
   it("rejects a stale combined preview before the first external action", async () => {

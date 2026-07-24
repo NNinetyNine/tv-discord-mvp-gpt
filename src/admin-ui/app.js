@@ -16,9 +16,6 @@ const state = {
   packSourceFile: null,
   packPreview: null,
   packBusy: false,
-  streamlinedRevisionConfirmation: false,
-  streamlinedCaptureSessionId: null,
-  expandedWorkspaceAssets: new Set(),
   workspaceQuickLookItems: [],
   workspaceQuickLookIndex: 0,
   workspaceQuickLookReturnFocus: null,
@@ -468,7 +465,7 @@ function selectedThreadTagIds() {
 }
 
 function threadTagLegend() {
-  return '<legend><span>20 TAGS MAY BE CONFIGURED FOR THIS FORUM · APPLY UP TO 5 TAGS TO EACH POST</span><strong id="thread-tag-count">0 / 5 SELECTED</strong></legend>';
+  return '<legend><span>TAGS OPTIONAL · UP TO 20 CONFIGURED · APPLY UP TO 5</span><strong id="thread-tag-count">0 / 5 SELECTED</strong></legend>';
 }
 
 function updateThreadTagCount() {
@@ -549,7 +546,8 @@ function updateThreadAdoptButton() {
     title.length > 0 &&
     title === title.trim() &&
     title.length <= 100 &&
-    tagIds.length <= 5
+    tagIds.length <= 5 &&
+    (!state.threadForumInspection?.forum.requiresTag || tagIds.length > 0)
   );
   qs("#thread-verify-routing").disabled = !(
     !state.threadBusy &&
@@ -672,7 +670,11 @@ function renderThreadManagement() {
       qs("#thread-id").value = selected?.threadId ?? "";
       resetThreadProvisioning({ keepForum: true });
       renderThreadManagement();
-      qs("#thread-adoption-heading").scrollIntoView({ behavior: "smooth", block: "start" });
+      const destination = qs("#thread-existing-post");
+      requestAnimationFrame(() => {
+        destination.scrollIntoView({ behavior: "smooth", block: "start" });
+        destination.focus({ preventScroll: true });
+      });
     });
   });
 
@@ -693,7 +695,10 @@ function renderThreadManagement() {
   } else if (unbound.length === 0) {
     qs("#thread-provisioning-state").textContent = "PACK ROUTING COMPLETE";
   } else if (state.threadForumInspection?.packId === pack.id) {
-    qs("#thread-provisioning-state").textContent = `${state.threadForumInspection.forum.name.toUpperCase()} · ${state.threadForumInspection.forum.availableTags.length} TAGS INSPECTED`;
+    const inspectedForum = state.threadForumInspection.forum;
+    qs("#thread-provisioning-state").textContent = inspectedForum.requiresTag
+      ? `${inspectedForum.name.toUpperCase()} · DISCORD REQUIRES A TAG`
+      : `${inspectedForum.name.toUpperCase()} · TAGS OPTIONAL · ${inspectedForum.availableTags.length} AVAILABLE`;
   } else if (!state.threadBusy) {
     qs("#thread-provisioning-state").textContent = "INSPECT THE CURRENT FORUM TAGS";
   }
@@ -974,17 +979,21 @@ async function inspectThreadForum() {
       );
       state.threadLogo = logo;
       qs("#thread-logo-state").textContent = `${logo.evidence.width}×${logo.evidence.height} · REGISTRY LOGO VERIFIED`;
-      qs("#thread-provisioning-state").textContent = `${result.forum.name.toUpperCase()} · ${result.forum.availableTags.length} TAGS INSPECTED`;
+      qs("#thread-provisioning-state").textContent = result.forum.requiresTag
+        ? `${result.forum.name.toUpperCase()} · DISCORD REQUIRES A TAG`
+        : `${result.forum.name.toUpperCase()} · TAGS OPTIONAL · ${result.forum.availableTags.length} AVAILABLE`;
       showMessage(
-        `Current tags were loaded from ${result.forum.name}, and ${asset.displayName}'s canonical Registry logo was verified for provisioning. Discord content and local bindings were unchanged.`,
-        false,
+        result.forum.requiresTag
+          ? `${result.forum.name} currently enforces Discord’s Require Tag setting. Select a tag, or turn that channel setting off in Discord to create tagless posts. ${asset.displayName}'s canonical Registry logo is verified.`
+          : `${result.forum.name} allows tagless posts. Optional tags and ${asset.displayName}'s canonical Registry logo are ready for provisioning. Discord content and local bindings were unchanged.`,
+        result.forum.requiresTag,
       );
     } catch (logoError) {
       state.threadLogo = null;
       qs("#thread-logo-state").textContent = logoError.code === "asset_logo_not_found"
         ? "ADD CANONICAL LOGO IN REGISTRY"
         : "REGISTRY LOGO COULD NOT BE VERIFIED";
-      qs("#thread-provisioning-state").textContent = `${result.forum.name.toUpperCase()} · TAGS LOADED · LOGO REQUIRED`;
+      qs("#thread-provisioning-state").textContent = `${result.forum.name.toUpperCase()} · OPTIONAL TAGS LOADED · LOGO REQUIRED`;
       showMessage(
         logoError.code === "asset_logo_not_found"
           ? `Current tags were loaded from ${result.forum.name}, but ${asset.displayName} has no canonical Registry logo. Add one in Registry before provisioning.`
@@ -1881,17 +1890,6 @@ function publicationBlockerLabel(blocker) {
       return `INTERRUPTED RELEASE ${blocker.releaseId} · ${blocker.postedCount}/${blocker.totalCount} POSTED`;
     case "published_release_cleanup_required":
       return `PUBLISHED RELEASE ${blocker.releaseId} STILL MATCHES THE ACTIVE PACK WORKSPACE · LOCAL RESET REPAIR REQUIRED`;
-    case "capture_session_not_ready": {
-      const reasons = {
-        downloads_folder_not_configured: "DOWNLOADS FOLDER IS NOT CONFIGURED",
-        session_not_started: "ANALYSIS SESSION HAS NOT BEEN STARTED",
-        assets_missing: `SESSION MISSING ${blocker.missingAssetIds.map((id) => id.toUpperCase()).join(", ")}`,
-        previews_pending: `${blocker.pendingCount} SESSION PREVIEW${blocker.pendingCount === 1 ? "" : "S"} AWAITING ACCEPTANCE`,
-        export_window_exceeded: `SESSION EXPORT WINDOW ${blocker.exportSpanMinutes} MIN EXCEEDS ${blocker.maxSpanMinutes} MIN`,
-        ready: "CAPTURE SESSION STATE CHANGED",
-      };
-      return reasons[blocker.reason] ?? "CAPTURE SESSION IS NOT PUBLICATION READY";
-    }
     case "discord_unavailable":
       return "DISCORD BOT TOKEN IS NOT AVAILABLE TO THIS ADMINISTRATION PROCESS";
     default:
@@ -2123,78 +2121,50 @@ function updateWorkspacePreviewButton() {
   qs("#workspace-reset-pack").hidden = locked || pack === null || pack.capturedCount === 0;
   qs("#workspace-start-session").disabled = locked || pack === null || !state.packCaptureSession?.configured;
   qs("#workspace-scan-session").disabled = locked || pack === null || !state.packCaptureSession?.active;
-  const streamlined = qs("#workspace-streamlined-confirmation");
-  streamlined.checked = state.streamlinedRevisionConfirmation;
-  streamlined.disabled = locked || pack === null || !state.packCaptureSession?.active;
+  qs("#workspace-configure-downloads").disabled = locked;
+  qs("#workspace-downloads-input").disabled = locked;
+  qs("#workspace-downloads-cancel").disabled = locked;
+  qs("#workspace-downloads-apply").disabled = locked || qs("#workspace-downloads-input").value.trim().length === 0;
   qsa("[data-reset-workspace-asset]").forEach((button) => { button.hidden = locked; });
-  qsa("[data-delete-workspace-revision]").forEach((button) => { button.disabled = locked; });
+  qs("#workspace-quick-look-action").disabled = locked;
 }
 
 function captureSessionReason(session) {
   const labels = {
-    downloads_folder_not_configured: "DOWNLOADS FOLDER NOT CONFIGURED",
-    session_not_started: "START A SESSION BEFORE DOWNLOADING",
-    assets_missing: `${session.missingAssetIds.length} ASSET${session.missingAssetIds.length === 1 ? "" : "S"} MISSING FROM THIS SESSION`,
-    previews_pending: `${session.pendingCount} PREVIEW${session.pendingCount === 1 ? "" : "S"} AWAITING ACCEPTANCE`,
-    export_window_exceeded: `EXPORT WINDOW ${session.exportSpanMinutes} MIN EXCEEDS ${session.maxSpanMinutes} MIN`,
-    ready: "ALL REQUIRED ASSETS ACCEPTED FROM ONE CURRENT SESSION",
+    downloads_folder_not_configured: "CONFIGURE THE LOCAL CHART DOWNLOADS FOLDER",
+    session_not_started: "START A SESSION BEFORE DOWNLOADING NEW CHARTS",
+    assets_missing: `${session.missingAssetIds.length} ASSET${session.missingAssetIds.length === 1 ? "" : "S"} NOT YET CAPTURED IN THIS SESSION`,
+    previews_pending: `${session.pendingCount} REVISION${session.pendingCount === 1 ? "" : "S"} NEED MANUAL QUICK LOOK AFTER AUTOMATIC STAGING FAILED`,
+    export_window_exceeded: `SESSION EXPORT WINDOW IS ${session.exportSpanMinutes} MINUTES · PUBLISHING REMAINS AVAILABLE ONCE ASSETS ARE STAGED`,
+    ready: "SESSION COVERAGE COMPLETE · REVIEW REMAINS OPTIONAL",
   };
-  return labels[session.readinessReason] ?? "SESSION BLOCKED";
-}
-
-function reviewQueuedCapture(assetId) {
-  const pack = selectedWorkspacePack();
-  const session = state.packCaptureSession;
-  const asset = pack?.assets.find((candidate) => candidate.id === assetId) ?? null;
-  const candidate = session?.candidates.find((item) => item.assetId === assetId && item.state === "pending") ?? null;
-  if (pack === null || asset === null || candidate === null || state.packBusy || state.packPreview !== null) return;
-  const dateMatch = /_(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}-\d{2}\.png$/iu.exec(candidate.filename);
-  state.packPreview = {
-    previewId: candidate.previewId,
-    packId: pack.id,
-    asset,
-    timeframe: pack.timeframe,
-    dataAsOf: dateMatch?.[1] ?? candidate.exportedAt.slice(0, 10),
-    sourceBasename: candidate.filename,
-    outputSha256: candidate.sourceSha256,
-    nextRevision: asset.revisions + 1,
-    publicationUrl: `/api/v1/pack-workspace/previews/${candidate.previewId}/publication.png`,
-    receiptUrl: `/api/v1/pack-workspace/previews/${candidate.previewId}/receipt.json`,
-  };
-  qs("#workspace-preview").hidden = false;
-  qs("#workspace-preview-heading").textContent = `${asset.id.toUpperCase()} REVISION ${asset.revisions + 1} READY`;
-  qs("#workspace-preview-context").textContent = `${pack.timeframe} · EXPORTED ${candidate.exportedAt}`;
-  qs("#workspace-preview-image").src = state.packPreview.publicationUrl;
-  qs("#workspace-preview-caption").textContent = `${asset.displayName} · SOURCE SHA-256 ${candidate.sourceSha256}`;
-  qs("#workspace-preview-receipt").href = state.packPreview.receiptUrl;
-  qs("#workspace-accept").textContent = `ACCEPT REVISION ${asset.revisions + 1}`;
-  qs("#workspace-review-state").textContent = "AWAITING ACCEPTANCE";
-  updateWorkspacePreviewButton();
+  return labels[session.readinessReason] ?? "SESSION STATUS UNAVAILABLE";
 }
 
 function renderCaptureSession(session) {
-  const sessionIdentity = session.active ? session.sessionId : null;
-  if (state.streamlinedCaptureSessionId !== sessionIdentity) {
-    state.streamlinedCaptureSessionId = sessionIdentity;
-    state.streamlinedRevisionConfirmation = false;
-  }
   state.packCaptureSession = session;
-  qs("#workspace-streamlined-confirmation").checked = state.streamlinedRevisionConfirmation;
   qs("#workspace-downloads-folder").textContent = session.downloadsFolder ?? "NOT CONFIGURED";
+  qs("#workspace-downloads-input").value = session.downloadsFolder ?? "";
   qs("#workspace-session-started").textContent = session.startedAt ?? "NOT STARTED";
-  qs("#workspace-session-progress").textContent = `${session.acceptedCount} ACCEPTED · ${session.pendingCount} PENDING`;
-  qs("#workspace-session-readiness").textContent = session.publishReady ? "READY" : "BLOCKED";
+  qs("#workspace-session-progress").textContent = `${session.acceptedCount} STAGED · ${session.pendingCount} PENDING`;
+  qs("#workspace-session-readiness").textContent = !session.configured
+    ? "CONFIGURE FOLDER"
+    : !session.active
+      ? "NOT STARTED"
+      : session.publishReady
+        ? "COMPLETE"
+        : "IN PROGRESS";
   qs("#workspace-session-state").textContent = session.active ? `SESSION ${session.sessionId.slice(0, 8).toUpperCase()}` : "NO ACTIVE SESSION";
   qs("#workspace-session-guidance").textContent = captureSessionReason(session);
   const pending = session.candidates.filter((candidate) => candidate.state === "pending");
   const results = qs("#workspace-scan-results");
   results.hidden = pending.length === 0;
   results.innerHTML = pending.length === 0 ? "" : `
-    <p>${pending.length} CHANGED ASSET${pending.length === 1 ? "" : "S"} ${state.streamlinedRevisionConfirmation ? "READY FOR AUTOMATIC ACCEPTANCE" : "QUEUED FOR REVIEW"}</p>
-    <ul>${pending.map((candidate) => `<li><button class="outline-action" type="button" data-review-scanned-asset="${escapeAttribute(candidate.assetId)}">${escapeHtml(candidate.assetId.toUpperCase())} · REVIEW</button></li>`).join("")}</ul>
+    <p>${pending.length} REVISION${pending.length === 1 ? "" : "S"} COULD NOT BE STAGED AUTOMATICALLY</p>
+    <ul>${pending.map((candidate) => `<li><button class="outline-action" type="button" data-open-pending-quick-look="${escapeAttribute(candidate.assetId)}">${escapeHtml(candidate.assetId.toUpperCase())} · OPEN QUICK LOOK</button></li>`).join("")}</ul>
   `;
-  qsa("[data-review-scanned-asset]").forEach((button) => {
-    button.addEventListener("click", () => reviewQueuedCapture(button.dataset.reviewScannedAsset));
+  qsa("[data-open-pending-quick-look]").forEach((button) => {
+    button.addEventListener("click", () => openWorkspaceQuickLook(`${button.dataset.openPendingQuickLook}:pending`, button));
   });
   renderPackWorkspace();
   updateWorkspacePreviewButton();
@@ -2205,6 +2175,42 @@ async function loadCaptureSession() {
   if (pack === null) return;
   const query = new URLSearchParams({ packId: pack.id });
   renderCaptureSession(await api(`/api/v1/pack-workspace/capture-session?${query.toString()}`));
+}
+
+function openDownloadsConfiguration() {
+  if (state.packBusy) return;
+  qs("#workspace-downloads-configuration").hidden = false;
+  qs("#workspace-downloads-input").value = state.packCaptureSession?.downloadsFolder ?? "";
+  updateWorkspacePreviewButton();
+  requestAnimationFrame(() => qs("#workspace-downloads-input").focus());
+}
+
+function closeDownloadsConfiguration() {
+  qs("#workspace-downloads-configuration").hidden = true;
+  qs("#workspace-downloads-input").value = state.packCaptureSession?.downloadsFolder ?? "";
+  updateWorkspacePreviewButton();
+}
+
+async function configureDownloadsFolder() {
+  const path = qs("#workspace-downloads-input").value.trim();
+  if (path.length === 0 || state.packBusy) return;
+  if (!window.confirm("Use this local folder for future capture sessions?\n\nAny active capture-session baselines and pending previews will be cleared. Confirmed revisions, staged images, publication readiness, Archive custody, and Discord remain unchanged.")) return;
+  state.packBusy = true;
+  updateWorkspacePreviewButton();
+  try {
+    const result = await api("/api/v1/pack-workspace/capture-session/downloads-folder", {
+      method: "PUT",
+      body: JSON.stringify({ path }),
+    });
+    closeDownloadsConfiguration();
+    await loadCaptureSession();
+    showMessage(`Chart Downloads folder configured: ${result.downloadsFolder}. ${result.clearedSessionCount} prior session${result.clearedSessionCount === 1 ? " was" : "s were"} cleared; confirmed revisions and staging were preserved.`, false);
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    state.packBusy = false;
+    updateWorkspacePreviewButton();
+  }
 }
 
 async function startCaptureSession() {
@@ -2228,7 +2234,7 @@ async function startCaptureSession() {
   }
 }
 
-async function acceptStreamlinedCaptureCandidates(candidates) {
+async function stageCaptureCandidates(candidates) {
   const accepted = [];
   const failed = [];
   for (const candidate of candidates) {
@@ -2257,23 +2263,18 @@ async function scanCaptureSession() {
       method: "POST",
       body: JSON.stringify({ packId: pack.id }),
     });
-    renderCaptureSession(result.session);
     const queued = result.scan.queued.length;
-    if (queued > 0 && state.streamlinedRevisionConfirmation) {
-      qs("#workspace-session-state").textContent = "VERIFYING & STAGING CHANGED ASSETS";
-      const accepted = await acceptStreamlinedCaptureCandidates(result.scan.queued);
-      if (accepted.failed.length > 0) {
-        showMessage(`${accepted.accepted.length} changed Asset${accepted.accepted.length === 1 ? " was" : "s were"} accepted; ${accepted.failed.length} require manual review. ${accepted.failed.map((item) => `${item.assetId.toUpperCase()}: ${item.message}`).join(" ")}`);
-      } else {
-        showMessage(`${accepted.accepted.length} changed Asset${accepted.accepted.length === 1 ? " was" : "s were"} verified and staged automatically. Unchanged Assets were left untouched. Nothing was sent to Discord.`, false);
-      }
+    if (queued === 0) {
+      renderCaptureSession(result.session);
+      showMessage("Synchronization complete. No newer or changed chart exports were found, so no revisions were created.", false);
     } else {
-      showMessage(
-        queued === 0
-          ? "Synchronization complete. No newer or changed chart exports were found, so no revisions were created."
-          : `Synchronization complete. ${queued} changed Asset${queued === 1 ? " is" : "s are"} queued for review; unchanged Assets were left untouched.`,
-        false,
-      );
+      qs("#workspace-session-state").textContent = "VERIFYING & STAGING CHANGED ASSETS";
+      const staged = await stageCaptureCandidates(result.scan.queued);
+      if (staged.failed.length > 0) {
+        showMessage(`${staged.accepted.length} changed Asset${staged.accepted.length === 1 ? " was" : "s were"} staged automatically; ${staged.failed.length} remain available in Quick Look. ${staged.failed.map((item) => `${item.assetId.toUpperCase()}: ${item.message}`).join(" ")}`);
+      } else {
+        showMessage(`${staged.accepted.length} changed Asset${staged.accepted.length === 1 ? " was" : "s were"} verified and staged automatically. Review is optional in Quick Look; unchanged Assets were left untouched and Discord was not contacted.`, false);
+      }
     }
   } catch (error) {
     showMessage(error.message);
@@ -2305,18 +2306,26 @@ function workspaceQuickLookItems(pack) {
     if (pending !== null) {
       items.push(Object.freeze({
         key: `${asset.id}:pending`,
+        kind: "pending",
+        previewId: pending.previewId,
+        revision: asset.revisions + 1,
         assetId: asset.id,
-        heading: `${asset.id.toUpperCase()} · NEXT REVISION`,
+        assetName: asset.displayName,
+        heading: `${asset.id.toUpperCase()} · REVISION ${asset.revisions + 1} · PENDING`,
         imageUrl: `/api/v1/pack-workspace/previews/${pending.previewId}/publication.png`,
         receiptUrl: `/api/v1/pack-workspace/previews/${pending.previewId}/receipt.json`,
         alt: `${asset.displayName} pending Pack render`,
-        caption: `${asset.displayName} · AWAITING CONFIRMATION · EXPORTED ${pending.exportedAt} · SOURCE SHA-256 ${pending.sourceSha256}`,
+        caption: `${asset.displayName} · AUTOMATIC STAGING NEEDS REVIEW · EXPORTED ${pending.exportedAt} · SOURCE SHA-256 ${pending.sourceSha256}`,
       }));
     }
     for (const revision of [...asset.revisionHistory].sort((left, right) => right.revision - left.revision)) {
       items.push(Object.freeze({
         key: `${asset.id}:${revision.revision}`,
+        kind: "revision",
+        previewId: revision.previewId,
+        revision: revision.revision,
         assetId: asset.id,
+        assetName: asset.displayName,
         heading: `${asset.id.toUpperCase()} · REVISION ${revision.revision}${revision.current ? " · CURRENT" : ""}`,
         imageUrl: revision.publicationUrl,
         receiptUrl: revision.receiptUrl,
@@ -2328,17 +2337,36 @@ function workspaceQuickLookItems(pack) {
   return items;
 }
 
+function workspaceQuickLookAssetIds() {
+  return [...new Set(state.workspaceQuickLookItems.map((item) => item.assetId))];
+}
+
+function workspaceQuickLookItemsForAsset(assetId) {
+  return state.workspaceQuickLookItems.filter((item) => item.assetId === assetId);
+}
+
 function renderWorkspaceQuickLook() {
   const item = state.workspaceQuickLookItems[state.workspaceQuickLookIndex] ?? null;
   if (item === null) return;
+  const assetIds = workspaceQuickLookAssetIds();
+  const assetIndex = assetIds.indexOf(item.assetId);
+  const revisions = workspaceQuickLookItemsForAsset(item.assetId);
+  const revisionIndex = revisions.findIndex((candidate) => candidate.key === item.key);
   qs("#workspace-quick-look-heading").textContent = item.heading;
   qs("#workspace-quick-look-image").src = item.imageUrl;
   qs("#workspace-quick-look-image").alt = item.alt;
   qs("#workspace-quick-look-caption").textContent = item.caption;
   qs("#workspace-quick-look-receipt").href = item.receiptUrl;
-  qs("#workspace-quick-look-position").textContent = `${state.workspaceQuickLookIndex + 1} OF ${state.workspaceQuickLookItems.length}`;
-  qs("#workspace-quick-look-previous").disabled = state.workspaceQuickLookItems.length < 2;
-  qs("#workspace-quick-look-next").disabled = state.workspaceQuickLookItems.length < 2;
+  qs("#workspace-quick-look-asset-position").textContent = `ASSET ${assetIndex + 1} OF ${assetIds.length}`;
+  qs("#workspace-quick-look-position").textContent = `REVISION ${revisionIndex + 1} OF ${revisions.length}`;
+  qs("#workspace-quick-look-previous-asset").disabled = assetIds.length < 2;
+  qs("#workspace-quick-look-next-asset").disabled = assetIds.length < 2;
+  qs("#workspace-quick-look-previous").disabled = revisions.length < 2;
+  qs("#workspace-quick-look-next").disabled = revisions.length < 2;
+  const action = qs("#workspace-quick-look-action");
+  action.className = item.kind === "pending" ? "primary-action" : "danger-action";
+  action.textContent = item.kind === "pending" ? `STAGE REVISION ${item.revision}` : `DELETE REVISION ${item.revision}`;
+  action.disabled = state.packBusy;
 }
 
 function openWorkspaceQuickLook(key, trigger = null) {
@@ -2356,6 +2384,23 @@ function openWorkspaceQuickLook(key, trigger = null) {
   requestAnimationFrame(() => qs("#workspace-quick-look").focus());
 }
 
+function refreshWorkspaceQuickLook(preferredKey = null, preferredAssetId = null) {
+  if (qs("#workspace-quick-look").hidden) return;
+  const items = workspaceQuickLookItems(selectedWorkspacePack());
+  if (items.length === 0) {
+    closeWorkspaceQuickLook();
+    return;
+  }
+  const prior = state.workspaceQuickLookItems[state.workspaceQuickLookIndex] ?? null;
+  const key = preferredKey ?? prior?.key ?? null;
+  const assetId = preferredAssetId ?? prior?.assetId ?? null;
+  let index = key === null ? -1 : items.findIndex((item) => item.key === key);
+  if (index < 0 && assetId !== null) index = items.findIndex((item) => item.assetId === assetId);
+  state.workspaceQuickLookItems = items;
+  state.workspaceQuickLookIndex = index < 0 ? 0 : index;
+  renderWorkspaceQuickLook();
+}
+
 function closeWorkspaceQuickLook() {
   if (qs("#workspace-quick-look").hidden) return;
   qs("#workspace-quick-look").hidden = true;
@@ -2370,10 +2415,25 @@ function closeWorkspaceQuickLook() {
   if (target instanceof HTMLElement && document.contains(target)) target.focus();
 }
 
-function moveWorkspaceQuickLook(delta) {
-  const count = state.workspaceQuickLookItems.length;
-  if (count < 2) return;
-  state.workspaceQuickLookIndex = (state.workspaceQuickLookIndex + delta + count) % count;
+function moveWorkspaceQuickLookRevision(delta) {
+  const item = state.workspaceQuickLookItems[state.workspaceQuickLookIndex] ?? null;
+  if (item === null) return;
+  const revisions = workspaceQuickLookItemsForAsset(item.assetId);
+  if (revisions.length < 2) return;
+  const current = revisions.findIndex((candidate) => candidate.key === item.key);
+  const next = revisions[(current + delta + revisions.length) % revisions.length];
+  state.workspaceQuickLookIndex = state.workspaceQuickLookItems.findIndex((candidate) => candidate.key === next.key);
+  renderWorkspaceQuickLook();
+}
+
+function moveWorkspaceQuickLookAsset(delta) {
+  const item = state.workspaceQuickLookItems[state.workspaceQuickLookIndex] ?? null;
+  if (item === null) return;
+  const assetIds = workspaceQuickLookAssetIds();
+  if (assetIds.length < 2) return;
+  const current = assetIds.indexOf(item.assetId);
+  const nextAssetId = assetIds[(current + delta + assetIds.length) % assetIds.length];
+  state.workspaceQuickLookIndex = state.workspaceQuickLookItems.findIndex((candidate) => candidate.assetId === nextAssetId);
   renderWorkspaceQuickLook();
 }
 
@@ -2383,10 +2443,16 @@ function handleWorkspaceQuickLookKeydown(event) {
     closeWorkspaceQuickLook();
   } else if (event.key === "ArrowLeft") {
     event.preventDefault();
-    moveWorkspaceQuickLook(-1);
+    moveWorkspaceQuickLookRevision(-1);
   } else if (event.key === "ArrowRight") {
     event.preventDefault();
-    moveWorkspaceQuickLook(1);
+    moveWorkspaceQuickLookRevision(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveWorkspaceQuickLookAsset(-1);
+  } else if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveWorkspaceQuickLookAsset(1);
   } else if (event.key === "Tab") {
     const focusable = qsa('#workspace-quick-look a[href], #workspace-quick-look button:not([disabled])')
       .filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
@@ -2407,48 +2473,32 @@ function handleWorkspaceQuickLookKeydown(event) {
   }
 }
 
-function workspaceRevisionPanel(pack, asset) {
-  const pending = pendingCaptureFor(asset.id);
-  const history = [...asset.revisionHistory].sort((left, right) => right.revision - left.revision);
-  const cards = [];
-  if (pending !== null) {
-    cards.push(`<article class="workspace-revision-card pending">
-      <header><strong>NEXT REVISION · AWAITING CONFIRMATION</strong><span>${escapeHtml(pending.exportedAt)}</span></header>
-      <img loading="lazy" src="/api/v1/pack-workspace/previews/${escapeAttribute(pending.previewId)}/publication.png" alt="${escapeAttribute(asset.displayName)} pending Pack render">
-      <p>SOURCE SHA-256 ${escapeHtml(pending.sourceSha256)}</p>
-      <div class="workspace-revision-actions">
-        <button class="outline-action compact-action" type="button" data-workspace-quick-look="${escapeAttribute(`${asset.id}:pending`)}">QUICK LOOK</button>
-        <a class="outline-action download-link compact-action" href="/api/v1/pack-workspace/previews/${escapeAttribute(pending.previewId)}/receipt.json" target="_blank" rel="noreferrer">RECEIPT</a>
-        <button class="primary-action compact-action" type="button" data-confirm-pending-revision="${escapeAttribute(asset.id)}">REVIEW &amp; CONFIRM</button>
-      </div>
-    </article>`);
+async function applyWorkspaceQuickLookAction() {
+  const item = state.workspaceQuickLookItems[state.workspaceQuickLookIndex] ?? null;
+  if (item === null || state.packBusy) return;
+  if (item.kind === "revision") {
+    await deleteWorkspaceRevision(item.assetId, item.revision);
+    return;
   }
-  for (const revision of history) {
-    cards.push(`<article class="workspace-revision-card${revision.current ? " current" : ""}">
-      <header><strong>REVISION ${revision.revision} · CONFIRMED${revision.current ? " · CURRENT" : ""}</strong><span>${escapeHtml(revision.acceptedAt)}</span></header>
-      <img loading="lazy" src="${escapeAttribute(revision.publicationUrl)}" alt="${escapeAttribute(asset.displayName)} revision ${revision.revision} render">
-      <p>${escapeHtml(revision.timeframe)} · DATA AS OF ${escapeHtml(revision.dataAsOf)}</p>
-      <div class="workspace-revision-actions">
-        <button class="outline-action compact-action" type="button" data-workspace-quick-look="${escapeAttribute(`${asset.id}:${revision.revision}`)}">QUICK LOOK</button>
-        <a class="outline-action download-link compact-action" href="${escapeAttribute(revision.receiptUrl)}" target="_blank" rel="noreferrer">RECEIPT</a>
-        <button class="danger-action compact-action" type="button" data-delete-workspace-revision="${revision.revision}" data-revision-asset="${escapeAttribute(asset.id)}">DELETE REVISION ${revision.revision}</button>
-      </div>
-    </article>`);
+  state.packBusy = true;
+  renderWorkspaceQuickLook();
+  try {
+    const result = await api(`/api/v1/pack-workspace/previews/${encodeURIComponent(item.previewId)}/accept`, {
+      method: "POST",
+      body: "{}",
+    });
+    await loadPackWorkspace();
+    refreshWorkspaceQuickLook(`${item.assetId}:${result.revisions}`, item.assetId);
+    showMessage(`${item.assetId.toUpperCase()} revision ${result.revisions} was staged. Review was optional and Discord was not contacted.`, false);
+  } catch (error) {
+    showMessage(error.message);
+    await loadPackWorkspace().catch(() => undefined);
+    refreshWorkspaceQuickLook(item.key, item.assetId);
+  } finally {
+    state.packBusy = false;
+    updateWorkspacePreviewButton();
+    if (!qs("#workspace-quick-look").hidden) renderWorkspaceQuickLook();
   }
-  return `<tr class="workspace-revision-row"><td colspan="5">
-    <section class="workspace-revision-panel" aria-label="${escapeAttribute(asset.displayName)} revision history">
-      <p class="workspace-revision-summary">${cards.length} REVISION ITEM${cards.length === 1 ? "" : "S"} · ROUTINE ACCEPTANCE MAY BE STREAMLINED FOR THIS CAPTURE SESSION ONLY</p>
-      <div class="workspace-revision-grid">${cards.join("") || '<p class="empty-state">NO REVISION EVIDENCE</p>'}</div>
-    </section>
-  </td></tr>`;
-}
-
-function toggleWorkspaceAssetHistory(assetId) {
-  const pack = selectedWorkspacePack();
-  if (pack === null || !pack.assets.some((asset) => asset.id === assetId)) return;
-  if (state.expandedWorkspaceAssets.has(assetId)) state.expandedWorkspaceAssets.delete(assetId);
-  else state.expandedWorkspaceAssets.add(assetId);
-  renderPackWorkspace();
 }
 
 async function deleteWorkspaceRevision(assetId, revision) {
@@ -2480,6 +2530,7 @@ async function deleteWorkspaceRevision(assetId, revision) {
       },
     );
     await loadPackWorkspace();
+    refreshWorkspaceQuickLook(null, asset.id);
     qs("#workspace-review-state").textContent = `${asset.id.toUpperCase()} REVISION ${revision} DELETED`;
     showMessage(
       result.restoredRevision === null
@@ -2491,9 +2542,11 @@ async function deleteWorkspaceRevision(assetId, revision) {
     qs("#workspace-review-state").textContent = "REVISION DELETE NOT APPLIED";
     showMessage(error.message);
     await loadPackWorkspace().catch(() => undefined);
+    refreshWorkspaceQuickLook(null, asset.id);
   } finally {
     state.packBusy = false;
     updateWorkspacePreviewButton();
+    if (!qs("#workspace-quick-look").hidden) renderWorkspaceQuickLook();
   }
 }
 
@@ -2534,31 +2587,18 @@ function renderPackWorkspace() {
     const status = workspaceAssetStatus(asset);
     const className = status === "CURRENT ANALYSIS" ? "valid" : status === "REQUIRED" ? "pending" : "blocked";
     const pending = pendingCaptureFor(asset.id);
-    const expandable = asset.revisionHistory.length > 0 || pending !== null;
-    const expanded = state.expandedWorkspaceAssets.has(asset.id);
-    const primary = `<tr>
-      <td><span class="workspace-asset-name">${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)}</span>${expandable ? `<button class="workspace-preview-pill" type="button" data-toggle-workspace-history="${escapeAttribute(asset.id)}" aria-expanded="${expanded}">${expanded ? "HIDE" : "PREVIEW"}${pending === null ? "" : " · PENDING"}</button>` : ""}</td>
+    const history = [...asset.revisionHistory].sort((left, right) => right.revision - left.revision);
+    const quickLookKey = pending !== null ? `${asset.id}:pending` : history[0] === undefined ? null : `${asset.id}:${history[0].revision}`;
+    return `<tr>
+      <td><span class="workspace-asset-name">${escapeHtml(asset.id.toUpperCase())} · ${escapeHtml(asset.displayName)}</span>${quickLookKey === null ? "" : `<button class="workspace-preview-pill" type="button" data-workspace-quick-look="${escapeAttribute(quickLookKey)}">PREVIEW${pending === null ? "" : " · PENDING"}</button>`}</td>
       <td>${escapeHtml(asset.tradingViewSymbol || "—")}</td>
       <td><span class="workspace-status ${className}">${escapeHtml(status)}</span></td>
-      <td>${asset.revisions > 0 ? `REV ${asset.revisions}` : "—"}${asset.revisionHistory.length > 0 ? ` · ${asset.revisionHistory.length} KEPT` : ""}</td>
+      <td>${asset.revisions > 0 ? `<span class="revision-count-pill">REV ${asset.revisions}</span>` : "—"}</td>
       <td>${asset.captured ? `<button class="danger-action compact-action" type="button" data-reset-workspace-asset="${escapeAttribute(asset.id)}">RESET</button>` : ""}</td>
     </tr>`;
-    return primary + (expanded ? workspaceRevisionPanel(pack, asset) : "");
   }).join("");
-  qsa("[data-toggle-workspace-history]").forEach((button) => {
-    button.addEventListener("click", () => toggleWorkspaceAssetHistory(button.dataset.toggleWorkspaceHistory));
-  });
   qsa("[data-workspace-quick-look]").forEach((button) => {
     button.addEventListener("click", () => openWorkspaceQuickLook(button.dataset.workspaceQuickLook, button));
-  });
-  qsa("[data-confirm-pending-revision]").forEach((button) => {
-    button.addEventListener("click", () => reviewQueuedCapture(button.dataset.confirmPendingRevision));
-  });
-  qsa("[data-delete-workspace-revision]").forEach((button) => {
-    button.addEventListener("click", () => void deleteWorkspaceRevision(
-      button.dataset.revisionAsset,
-      Number(button.dataset.deleteWorkspaceRevision),
-    ));
   });
   qsa("[data-reset-workspace-asset]").forEach((button) => {
     button.addEventListener("click", () => void resetWorkspaceAsset(button.dataset.resetWorkspaceAsset));
@@ -2792,7 +2832,6 @@ function renderServerConfiguration() {
     : state.serverInspection.operationallyReady ? "SERVER READY" : "SERVER BLOCKED";
   qs("#server-test-current").disabled = state.serverBusy || !configuration.connectionTestAvailable;
   qs("#server-review-configuration").disabled = state.serverBusy;
-  qs("#server-review-migration").disabled = state.serverBusy;
   qs("#server-add-route").disabled = state.serverBusy;
   qs("#server-new-route-name").disabled = state.serverBusy;
   qs("#server-new-route-channel").disabled = state.serverBusy;
@@ -2941,11 +2980,11 @@ function renderServerPreview() {
     return;
   }
   qs("#server-preview").hidden = false;
-  qs("#server-preview-heading").textContent = preview.mode === "migration" ? "SERVER MIGRATION REVIEW" : "SERVER CONFIGURATION REVIEW";
+  qs("#server-preview-heading").textContent = "SERVER CONFIGURATION REVIEW";
   qs("#server-preview-state").textContent = preview.valid ? "READY FOR CONFIRMATION" : "BLOCKED";
   qs("#server-preview-state").className = `workspace-status ${preview.valid ? "valid" : "blocked"}`;
   qs("#server-preview-summary").innerHTML = `<p><strong>${preview.changedRouteCount}</strong> ROUTE${preview.changedRouteCount === 1 ? "" : "S"} CHANGE · <strong>${preview.affectedPackIds.length}</strong> AFFECTED PACK${preview.affectedPackIds.length === 1 ? "" : "S"} · <strong>${preview.bindingsToReestablish}</strong> THREAD BINDING${preview.bindingsToReestablish === 1 ? "" : "S"} TO RE-ESTABLISH</p>
-    <p>${preview.mode === "migration" ? "Exact before-and-after installation evidence will be preserved before the rollback-protected route and binding transaction." : "No thread bindings may depend on a normal route change."}</p>`;
+    <p>No thread bindings may depend on a normal route change.</p>`;
   const issues = qs("#server-preview-issues");
   issues.hidden = preview.issues.length === 0;
   issues.innerHTML = preview.issues.length === 0 ? "" : `<ul>${preview.issues.map((issue) => `<li>${escapeHtml(issue.message)}</li>`).join("")}</ul>`;
@@ -2970,7 +3009,7 @@ function renderServerPreview() {
     </article>`;
   }).join("");
   qs("#server-confirmation").placeholder = preview.confirmation;
-  qs("#server-apply").textContent = preview.mode === "migration" ? "APPLY SERVER MIGRATION" : "APPLY SERVER CONFIGURATION";
+  qs("#server-apply").textContent = "APPLY SERVER CONFIGURATION";
   updateServerApplyButton();
 }
 
@@ -2979,16 +3018,16 @@ function updateServerApplyButton() {
   qs("#server-apply").disabled = state.serverBusy || preview === null || !preview.valid || qs("#server-confirmation").value !== preview.confirmation;
 }
 
-async function reviewServerChange(mode) {
+async function reviewServerChange() {
   if (state.serverBusy) return;
   clearMessage();
   state.serverBusy = true;
   state.serverInspection = null;
   clearServerPreview();
   renderServerConfiguration();
-  qs("#server-readiness").textContent = mode === "migration" ? "VALIDATING MIGRATION" : "VALIDATING CONFIGURATION";
+  qs("#server-readiness").textContent = "VALIDATING CONFIGURATION";
   try {
-    state.serverPreview = await api(mode === "migration" ? "/api/v1/server-migration/preview" : "/api/v1/server-configuration/preview", {
+    state.serverPreview = await api("/api/v1/server-configuration/preview", {
       method: "POST",
       body: JSON.stringify({ routes: serverRouteValues() }),
     });
@@ -3009,7 +3048,7 @@ async function applyServerChange() {
   clearMessage();
   state.serverBusy = true;
   renderServerConfiguration();
-  qs("#server-readiness").textContent = preview.mode === "migration" ? "APPLYING SERVER MIGRATION" : "APPLYING SERVER CONFIGURATION";
+  qs("#server-readiness").textContent = "APPLYING SERVER CONFIGURATION";
   updateServerApplyButton();
   try {
     const result = await api(`/api/v1/server-configuration/previews/${encodeURIComponent(preview.previewId)}/apply`, {
@@ -3023,12 +3062,7 @@ async function applyServerChange() {
       loadChannels(),
       ...(state.packMaintenance === null ? [] : [loadPackMaintenance()]),
     ]);
-    showMessage(
-      result.mode === "migration"
-        ? `Server migration applied. ${result.bindingsToReestablish} affected thread binding${result.bindingsToReestablish === 1 ? "" : "s"} must now be re-established. Backup identity: ${result.backupId}.`
-        : "Server configuration applied. No Discord content or credentials changed.",
-      false,
-    );
+    showMessage("Server configuration applied. No Discord content or credentials changed.", false);
   } catch (error) {
     showMessage(error.message);
   } finally {
@@ -3468,20 +3502,17 @@ qs("#workspace-source").addEventListener("change", (event) => {
 qs("#workspace-preview-button").addEventListener("click", () => void runPackPreview());
 qs("#workspace-start-session").addEventListener("click", () => void startCaptureSession());
 qs("#workspace-scan-session").addEventListener("click", () => void scanCaptureSession());
-qs("#workspace-streamlined-confirmation").addEventListener("change", (event) => {
-  state.streamlinedRevisionConfirmation = event.target.checked;
-  if (state.packCaptureSession !== null) renderCaptureSession(state.packCaptureSession);
-  showMessage(
-    state.streamlinedRevisionConfirmation
-      ? "Routine validated revision acceptance is streamlined for this capture session only. Publishing, deletion, reset, Discord, Server, Registry, and Pack changes still require explicit confirmation."
-      : "Routine revision confirmations are explicit again for this capture session.",
-    false,
-  );
-});
+qs("#workspace-configure-downloads").addEventListener("click", openDownloadsConfiguration);
+qs("#workspace-downloads-cancel").addEventListener("click", closeDownloadsConfiguration);
+qs("#workspace-downloads-input").addEventListener("input", updateWorkspacePreviewButton);
+qs("#workspace-downloads-apply").addEventListener("click", () => void configureDownloadsFolder());
 qs("#workspace-quick-look-close").addEventListener("click", closeWorkspaceQuickLook);
 qs("#workspace-quick-look-backdrop").addEventListener("click", closeWorkspaceQuickLook);
-qs("#workspace-quick-look-previous").addEventListener("click", () => moveWorkspaceQuickLook(-1));
-qs("#workspace-quick-look-next").addEventListener("click", () => moveWorkspaceQuickLook(1));
+qs("#workspace-quick-look-previous-asset").addEventListener("click", () => moveWorkspaceQuickLookAsset(-1));
+qs("#workspace-quick-look-next-asset").addEventListener("click", () => moveWorkspaceQuickLookAsset(1));
+qs("#workspace-quick-look-previous").addEventListener("click", () => moveWorkspaceQuickLookRevision(-1));
+qs("#workspace-quick-look-next").addEventListener("click", () => moveWorkspaceQuickLookRevision(1));
+qs("#workspace-quick-look-action").addEventListener("click", () => void applyWorkspaceQuickLookAction());
 qs("#workspace-quick-look").addEventListener("keydown", handleWorkspaceQuickLookKeydown);
 qs("#workspace-accept").addEventListener("click", () => void acceptPackPreview());
 qs("#workspace-discard").addEventListener("click", () => void discardPackPreview());
@@ -3508,8 +3539,7 @@ qs("#thread-verify-routing").addEventListener("click", () => void verifyPackRout
 qs("#server-test-current").addEventListener("click", () => void testCurrentServer());
 qs("#server-reset-routes").addEventListener("click", resetServerRouteDrafts);
 qs("#server-add-route").addEventListener("click", addServerRouteDraft);
-qs("#server-review-configuration").addEventListener("click", () => void reviewServerChange("configuration"));
-qs("#server-review-migration").addEventListener("click", () => void reviewServerChange("migration"));
+qs("#server-review-configuration").addEventListener("click", () => void reviewServerChange());
 qs("#server-confirmation").addEventListener("input", updateServerApplyButton);
 qs("#server-apply").addEventListener("click", () => void applyServerChange());
 qs("#operator-run-export-audit").addEventListener("click", () => void runExportAudit());

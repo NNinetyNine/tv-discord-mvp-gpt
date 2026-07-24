@@ -440,7 +440,6 @@ export interface AdminPackWorkspaceRevisionState {
 
 export type AdminPackPublicationBlocker =
   | PackPublishBlocker
-  | { readonly code: "capture_session_not_ready"; readonly reason: PackCaptureSessionState["readinessReason"]; readonly missingAssetIds: readonly string[]; readonly pendingCount: number; readonly exportSpanMinutes: number | null; readonly maxSpanMinutes: number }
   | { readonly code: "discord_unavailable" };
 
 export interface AdminPackPublicationState {
@@ -733,6 +732,7 @@ export interface AdminThreadForumInspectionResult {
   readonly packId: string;
   readonly forum: {
     readonly name: string;
+    readonly requiresTag: boolean;
     readonly availableTags: readonly {
       readonly id: string;
       readonly name: string;
@@ -1822,6 +1822,7 @@ export class AdminService {
       packId: pack.id,
       forum: Object.freeze({
         name: facts.name,
+        requiresTag: facts.requiresTag,
         availableTags: Object.freeze(facts.availableTags.map((tag) => Object.freeze({
           id: tag.id,
           name: tag.name,
@@ -2749,18 +2750,7 @@ export class AdminService {
       (blocker): blocker is Extract<PackPublishBlocker, { readonly code: "interrupted_release_exists" }> =>
         blocker.code === "interrupted_release_exists",
     ) ?? null;
-    const captureSession = await this.packCaptureSessions.state(pack);
     const blockers: AdminPackPublicationBlocker[] = [...ordinary.blockers];
-    if (!captureSession.publishReady) {
-      blockers.push(Object.freeze({
-        code: "capture_session_not_ready" as const,
-        reason: captureSession.readinessReason,
-        missingAssetIds: captureSession.missingAssetIds,
-        pendingCount: captureSession.pendingCount,
-        exportSpanMinutes: captureSession.exportSpanMinutes,
-        maxSpanMinutes: captureSession.maxSpanMinutes,
-      }));
-    }
     if (this.#openPublisherSession === undefined) {
       blockers.push(Object.freeze({ code: "discord_unavailable" as const }));
     }
@@ -2868,7 +2858,6 @@ export class AdminService {
           stagedSha256,
         }));
       }
-      const session = await this.packCaptureSessions.state(pack);
       const releases = this.releases.listReleases(pack.id)
         .map((release) => Object.freeze({
           releaseId: release.releaseId,
@@ -2881,15 +2870,6 @@ export class AdminService {
         .sort((left, right) => left.startedAt.localeCompare(right.startedAt) || left.releaseId.localeCompare(right.releaseId));
       packEvidence.push(Object.freeze({
         packId,
-        session: Object.freeze({
-          sessionId: session.sessionId,
-          publishReady: session.publishReady,
-          readinessReason: session.readinessReason,
-          acceptedCount: session.acceptedCount,
-          pendingCount: session.pendingCount,
-          missingAssetIds: session.missingAssetIds,
-          exportSpanMinutes: session.exportSpanMinutes,
-        }),
         assets: Object.freeze(assets),
         releases: Object.freeze(releases),
       }));
@@ -3204,6 +3184,40 @@ export class AdminService {
       throw new AdminError("pack_not_found", `Pack ${packId} was not found.`, 404, { packId });
     }
     return this.packCaptureSessions.state(pack);
+  }
+
+  async configurePackCaptureDownloadsFolder(path: string): Promise<Readonly<Record<string, unknown>>> {
+    return this.#withPackMutationLock(async () => {
+      await this.refresh();
+      const pendingPreviewIds: string[] = [];
+      for (const pack of this.#state.packs) {
+        const session = await this.packCaptureSessions.state(pack);
+        pendingPreviewIds.push(...session.candidates
+          .filter((candidate) => candidate.state === "pending")
+          .map((candidate) => candidate.previewId));
+      }
+      const downloadsFolder = await this.packCaptureSessions.configureDownloadsRoot(path);
+      let discardedPendingPreviewCount = 0;
+      for (const previewId of pendingPreviewIds) {
+        try {
+          await this.packRenders.discardPreview(previewId);
+          discardedPendingPreviewCount += 1;
+        } catch { /* stale previews are safe to ignore while resetting capture sessions */ }
+      }
+      const clearedSessionCount = await this.packCaptureSessions.clearAllSessions();
+      return Object.freeze({
+        schemaVersion: 1,
+        downloadsFolder,
+        clearedSessionCount,
+        discardedPendingPreviewCount,
+        effects: Object.freeze({
+          workspaceChanged: false,
+          stagingChanged: false,
+          released: false,
+          discordContacted: false,
+        }),
+      });
+    });
   }
 
   async startPackCaptureSession(packId: string): Promise<Readonly<Record<string, unknown>>> {

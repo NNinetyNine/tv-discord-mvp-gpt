@@ -114,8 +114,10 @@ Discord.
 
 ### Automated Pack capture
 
-Configure the folder containing TradingView PNG downloads when starting the
-loopback administration service:
+The folder containing TradingView PNG downloads can be configured from
+**Workspace → Automated Pack Capture** and is persisted in the administration
+workspace. It may also be seeded when starting the loopback administration
+service:
 
 ```bash
 npm run admin -- \
@@ -137,15 +139,15 @@ SHA-256 baseline of the current folder. **Scan and Update Pack** then:
 - leaves unchanged Assets untouched, so a repeat scan creates no artificial
   revisions.
 
-Publication readiness requires one accepted candidate for every required Pack
-Asset from the same capture session. The earliest and latest embedded export
-timestamps must be no more than 60 minutes apart. The current release UI still
-keeps publication unavailable; this readiness result is the fail-closed gate
-for the later controlled publication milestone.
+Synchronization verifies and stages each eligible changed candidate
+automatically. Complete same-session coverage and the 60-minute export span are
+shown as operational evidence, not as a publication gate. Publication readiness
+instead follows Pack completeness, current staging, routing, Release custody,
+and Discord availability.
 
 The manual **Import & Review** surface remains available as a collapsible
-recovery path. Manual imports do not satisfy automated capture-session
-readiness because they carry no session baseline evidence.
+recovery path. Pack Progress opens Quick Look directly for optional review,
+separate Asset and revision navigation, receipts, and one-revision deletion.
 
 ### Pack capture and staging
 

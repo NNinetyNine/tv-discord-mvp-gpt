@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -64,6 +64,22 @@ describe("Admin Pack capture sessions", () => {
     });
   });
 
+  it("persists a configurable Downloads folder and can clear only capture-session baselines", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "visionx-capture-session-workspace-"));
+    const downloads = await mkdtemp(join(tmpdir(), "visionx-chart-downloads-configured-"));
+    cleanup.push(workspace, downloads);
+    const sessions = await AdminPackCaptureSessionWorkspace.open(workspace);
+
+    expect(await sessions.configureDownloadsRoot(downloads)).toBe(await realpath(downloads));
+    expect((await sessions.state(pack)).configured).toBe(true);
+    await sessions.start(pack, now(10, 0));
+    expect(await sessions.clearAllSessions()).toBe(1);
+    expect(await sessions.state(pack)).toMatchObject({ configured: true, active: false });
+
+    const reopened = await AdminPackCaptureSessionWorkspace.open(workspace);
+    expect(reopened.downloadsRoot).toBe(await realpath(downloads));
+  });
+
   it("snapshots the folder baseline so pre-session charts are never queued", async () => {
     const { downloads, sessions } = await fixture();
     await writeFile(join(downloads, "BTCUSD_2026-07-22_09-00-00.png"), Buffer.from("old btc"));
@@ -126,7 +142,7 @@ describe("Admin Pack capture sessions", () => {
     expect(update.unchangedAssetIds).toEqual(["eth"]);
   });
 
-  it("gates publication on one accepted same-session set within the maximum export span", async () => {
+  it("reports complete same-session coverage within the maximum export span", async () => {
     const { downloads, sessions } = await fixture();
     const started = await sessions.start(pack, now(10, 0));
     await writeFile(join(downloads, "BTCUSD_2026-07-23_10-05-00.png"), Buffer.from("btc"));

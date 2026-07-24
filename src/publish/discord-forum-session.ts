@@ -47,6 +47,7 @@ export interface DiscordForumTagFacts {
 export interface DiscordForumFacts {
   readonly forumChannelId: string;
   readonly name: string;
+  readonly requiresTag: boolean;
   readonly availableTags: readonly DiscordForumTagFacts[];
 }
 
@@ -161,6 +162,7 @@ export async function inspectDiscordForum(
   return Object.freeze({
     forumChannelId,
     name: candidate.name,
+    requiresTag: candidate.flags.has(1 << 4),
     availableTags: Object.freeze(candidate.availableTags.map((tag) => Object.freeze({
       id: tag.id,
       name: tag.name,
@@ -233,9 +235,9 @@ export function buildDiscordForumProvisioningOperations(
       const thread =
         await candidate.threads.create({
           name: input.title,
-          appliedTags: [
-            ...input.appliedTagIds,
-          ],
+          ...(input.appliedTagIds.length === 0 ? {} : {
+            appliedTags: [...input.appliedTagIds],
+          }),
           message: {
             files: [
               {

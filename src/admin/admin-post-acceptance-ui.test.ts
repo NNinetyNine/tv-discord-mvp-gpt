@@ -2,16 +2,17 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-describe("Step 545 post-acceptance Administration refinements", () => {
-  it("keeps routine capture streamlining session-scoped and high-risk boundaries explicit", async () => {
+describe("Step 547 Administration workflow refinements", () => {
+  it("makes staged revisions publication-ready without a review confirmation gate", async () => {
     const [html, js] = await Promise.all([
       readFile(resolve("src/admin-ui/index.html"), "utf8"),
       readFile(resolve("src/admin-ui/app.js"), "utf8"),
     ]);
-    expect(html).toContain('id="workspace-streamlined-confirmation"');
-    expect(html).toContain("DEFAULTS OFF FOR EACH NEW SESSION");
-    expect(js).toContain("streamlinedCaptureSessionId");
-    expect(js).toContain("acceptStreamlinedCaptureCandidates");
+    expect(html).not.toContain('id="workspace-streamlined-confirmation"');
+    expect(html).toContain("Capture-session review remains optional.");
+    expect(js).not.toContain("streamlinedCaptureSessionId");
+    expect(js).toContain("stageCaptureCandidates");
+    expect(js).toContain("Review is optional in Quick Look");
     expect(js).toContain("window.confirm(`Start a new");
     expect(js).toContain("Delete ${asset.id.toUpperCase()} revision");
     expect(js).toContain("Reset ${asset.id.toUpperCase()}");
@@ -28,7 +29,11 @@ describe("Step 545 post-acceptance Administration refinements", () => {
     expect(html).not.toContain('id="publication-clear"');
     expect(html).not.toContain('<th scope="col">CAPTURED</th>');
     expect(html).toContain('id="workspace-quick-look"');
+    expect(html).toContain('id="workspace-quick-look-previous-asset"');
+    expect(html).toContain('id="workspace-quick-look-action"');
     expect(js).toContain("openWorkspaceQuickLook");
+    expect(js).toContain("moveWorkspaceQuickLookAsset");
+    expect(js).toContain("revision-count-pill");
     expect(js).not.toContain("revision.sourceBasename");
     expect(js).not.toContain("pending.filename)} · SOURCE");
   });
@@ -39,11 +44,13 @@ describe("Step 545 post-acceptance Administration refinements", () => {
       readFile(resolve("src/admin-ui/styles.css"), "utf8"),
       readFile(resolve("src/admin-ui/app.js"), "utf8"),
     ]);
-    expect(html).toContain("20 tags may be configured for this forum. Apply up to 5 tags to each post.");
+    expect(html).toContain("Tags are optional in VisionX");
     expect(html).toContain('id="thread-tag-count"');
     expect(html).toContain('id="server-new-route-name"');
     expect(html).toContain('id="server-new-route-channel"');
     expect(html).toContain("DISCORD CHANNEL ID");
+    expect(html).not.toContain("SERVER MIGRATION");
+    expect(html).toContain('id="workspace-configure-downloads"');
     expect(js).toContain("routeRemovalBlocker");
     expect(html).toContain("No archived Releases are available.");
     expect(js).toContain('qs("#archive-table-wrap").hidden = empty');

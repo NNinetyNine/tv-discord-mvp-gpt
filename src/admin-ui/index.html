@@ -66,7 +66,7 @@
           <div><p class="micro-label">DELIBERATE MULTI-PACK RELEASE</p><h2 id="workspace-publication-heading">PUBLICATION QUEUE</h2></div>
           <span id="publication-selection-state" class="context-fact">NO PACKS SELECTED</span>
         </header>
-        <p class="window-help">Select one or more Packs. VisionX reviews every selected Pack together and enables one publication confirmation only when all are complete, staged, within the accepted capture session, fully routed, and free from unresolved Release blockers.</p>
+        <p class="window-help">Select one or more Packs. VisionX reviews every selected Pack together and enables one publication confirmation when all Assets are complete and staged, fully routed, and free from unresolved Release blockers. Capture-session review remains optional.</p>
         <div id="publication-pack-pills" class="publication-pack-pills" role="group" aria-label="Packs selected for publication"></div>
         <div class="publication-queue-actions">
           <span>SELECT OR DESELECT EACH PACK DIRECTLY</span>
@@ -95,20 +95,21 @@
         </header>
         <p class="window-help">Start the session before downloading charts. Scans queue only new or genuinely newer TradingView exports; unchanged files never create revisions.</p>
         <div class="workspace-session-grid">
-          <div class="derived-channel"><span>DOWNLOADS FOLDER</span><strong id="workspace-downloads-folder">—</strong></div>
+          <div class="derived-channel workspace-downloads-channel"><span>DOWNLOADS FOLDER</span><strong id="workspace-downloads-folder">—</strong><button id="workspace-configure-downloads" class="inline-link-action" type="button">CONFIGURE</button></div>
           <div class="derived-channel"><span>SESSION STARTED</span><strong id="workspace-session-started">—</strong></div>
           <div class="derived-channel"><span>SESSION EVIDENCE</span><strong id="workspace-session-progress">0 / 0</strong></div>
-          <div class="derived-channel"><span>PUBLICATION GATE</span><strong id="workspace-session-readiness">BLOCKED</strong></div>
+          <div class="derived-channel"><span>SESSION COVERAGE</span><strong id="workspace-session-readiness">INCOMPLETE</strong></div>
+        </div>
+        <div id="workspace-downloads-configuration" class="workspace-downloads-configuration" hidden>
+          <label><span>LOCAL CHART DOWNLOADS FOLDER</span><input id="workspace-downloads-input" autocomplete="off" placeholder="/Users/name/Downloads"></label>
+          <button id="workspace-downloads-cancel" class="outline-action" type="button">CANCEL</button>
+          <button id="workspace-downloads-apply" class="primary-action" type="button">USE THIS FOLDER</button>
         </div>
         <div class="workspace-session-actions">
-          <label class="workspace-streamlined-toggle">
-            <input id="workspace-streamlined-confirmation" type="checkbox">
-            <span><strong>STREAMLINE ROUTINE REVISION CONFIRMATIONS</strong><small>SESSION ONLY · DEFAULTS OFF FOR EACH NEW SESSION · VALIDATED CHANGED ASSETS ARE ACCEPTED INTO STAGING AUTOMATICALLY</small></span>
-          </label>
           <button id="workspace-start-session" class="outline-action" type="button">START NEW SESSION</button>
           <button id="workspace-scan-session" class="primary-action" type="button" disabled>SYNC DOWNLOADS &amp; UPDATE PACK</button>
         </div>
-        <p id="workspace-session-guidance" class="workspace-remaining">CONFIGURE A CHART DOWNLOADS FOLDER WHEN STARTING THE ADMIN SERVICE</p>
+        <p id="workspace-session-guidance" class="workspace-remaining">CONFIGURE A LOCAL CHART DOWNLOADS FOLDER</p>
         <div id="workspace-scan-results" class="workspace-scan-results" hidden></div>
         <details class="workspace-import">
           <summary class="window-header">
@@ -149,7 +150,7 @@
           <div><p class="micro-label">PACK PROGRESS</p><h2 id="workspace-members-heading">CURRENT ANALYSES &amp; REMAINING REQUIRED</h2></div>
           <span id="workspace-member-count" class="context-fact">0 ASSETS</span>
         </header>
-        <p class="window-help">Use the pill beside an Asset to inspect confirmed renders and queued revisions. Delete removes exactly one Workspace revision; deleting the current revision restores the prior confirmed render when one exists.</p>
+        <p class="window-help">Choose PREVIEW beside an Asset to open Quick Look immediately. Navigate Assets and their revisions independently. Delete removes exactly one Workspace revision and restores the prior confirmed render when one exists.</p>
         <div class="table-wrap workspace-table-wrap" role="region" aria-labelledby="workspace-members-heading" tabindex="0">
           <table>
             <caption class="visually-hidden">Pack asset progress and revision actions</caption>
@@ -166,7 +167,7 @@
           <div><p class="micro-label">PERSISTENT FORUM ROUTING</p><h1 id="thread-routing-heading">DISCORD THREAD ROUTING</h1></div>
           <span id="thread-mode" class="context-fact">LOADING CAPABILITIES</span>
         </header>
-        <p class="window-help">Adopt a verified existing post or explicitly provision one new post. VisionX verifies Pack membership, forum identity, tags, logo evidence, and persistent binding custody before completion.</p>
+        <p class="window-help">Adopt a verified existing post or explicitly provision one new post. VisionX verifies Pack membership, forum identity, optional tags, logo evidence, and persistent binding custody before completion.</p>
         <div class="thread-overview-grid">
           <label><span>PACK</span><select id="thread-pack"><option value="">LOADING PACKS</option></select></label>
           <div class="derived-channel"><span>PACK COVERAGE</span><strong id="thread-coverage">0 / 0</strong></div>
@@ -176,7 +177,7 @@
         <p id="thread-total-context" class="workspace-remaining">LOADING THREAD BINDINGS</p>
       </section>
 
-      <section class="window thread-adoption" aria-labelledby="thread-adoption-heading">
+      <section id="thread-existing-post" class="window thread-adoption" aria-labelledby="thread-adoption-heading" tabindex="-1">
         <header class="window-header">
           <div><p class="micro-label">EXISTING FORUM POST</p><h2 id="thread-adoption-heading">BINDING MANAGEMENT</h2></div>
           <span class="context-fact">NO DISCORD CONTENT CHANGE</span>
@@ -201,7 +202,7 @@
           <div><p class="micro-label">NEW FORUM POST</p><h2 id="thread-provisioning-heading">CREATE NEW FORUM POST</h2></div>
           <span class="context-fact">EXPLICIT CONFIRMATION REQUIRED</span>
         </header>
-        <p class="window-help">Use this only when the Asset has no existing forum post. VisionX loads the forum first so optional tags are current, verifies the Asset’s canonical Registry logo, then creates one post from the exact title and that logo and records its Thread ID. A forum with no tags is valid. 20 tags may be configured for this forum. Apply up to 5 tags to each post. Manage or replace the logo in Registry rather than uploading a separate thread image.</p>
+        <p class="window-help">Use this only when the Asset has no existing forum post. VisionX loads the forum first so optional tags are current, verifies the Asset’s canonical Registry logo, then creates one post from the exact title and that logo and records its Thread ID. Tags are optional in VisionX, and a forum with no tags is valid. Discord’s own Require Tag setting must be off for tagless posts. Up to 20 tags may be configured for a forum and up to 5 may be applied to one post. Manage or replace the logo in Registry rather than uploading a separate thread image.</p>
         <div class="thread-provisioning-fields">
           <button id="thread-inspect-forum" class="outline-action" type="button" disabled>LOAD FORUM &amp; OPTIONAL TAGS</button>
           <label><span>EXACT POST TITLE</span><input id="thread-title" autocomplete="off" maxlength="100" placeholder="Akash Network // $AKT"></label>
@@ -209,7 +210,7 @@
           <button id="thread-provision-button" class="primary-action" type="button" disabled>PROVISION POST</button>
         </div>
         <fieldset id="thread-tags" class="thread-tags" disabled>
-          <legend><span>20 TAGS MAY BE CONFIGURED FOR THIS FORUM · APPLY UP TO 5 TAGS TO EACH POST</span><strong id="thread-tag-count">0 / 5 SELECTED</strong></legend>
+          <legend><span>TAGS OPTIONAL · UP TO 20 CONFIGURED · APPLY UP TO 5</span><strong id="thread-tag-count">0 / 5 SELECTED</strong></legend>
           <p id="thread-tags-empty">INSPECT THE FORUM TO LOAD CURRENT TAGS</p>
         </fieldset>
         <div class="renderer-guidance">
@@ -275,7 +276,7 @@
           <div><p class="micro-label">LOGICAL ROUTES TO DISCORD FORUMS</p><h2 id="server-routes-heading">ROUTING &amp; DESTINATIONS</h2></div>
           <span id="server-route-count" class="context-fact">0 ROUTES</span>
         </header>
-        <p class="window-help">Every Pack resolves through a logical route. Add route mappings here, or remove only routes that no Pack, Registry Asset, or persistent binding uses. This manages VisionX mappings—not Discord channel creation or deletion. Use Server Migration when bindings must be re-established on another Discord server or channel.</p>
+        <p class="window-help">Every Pack resolves through a logical route. Add route mappings here, or remove only routes that no Pack, Registry Asset, or persistent binding uses. This manages VisionX mappings—not Discord channel creation or deletion.</p>
         <div class="server-route-builder">
           <label><span>NEW LOGICAL ROUTE</span><input id="server-new-route-name" maxlength="64" autocomplete="off" placeholder="research"></label>
           <label><span>DISCORD CHANNEL ID</span><input id="server-new-route-channel" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="123456789012345678"></label>
@@ -291,23 +292,6 @@
         <div class="server-route-actions">
           <button id="server-reset-routes" class="outline-action" type="button">RESTORE CURRENT VALUES</button>
           <button id="server-review-configuration" class="primary-action" type="button">REVIEW CONFIGURATION</button>
-        </div>
-      </section>
-
-      <section class="window server-migration" aria-labelledby="server-migration-heading">
-        <header class="window-header">
-          <div><p class="micro-label">CONTROLLED INSTALLATION MOVE</p><h2 id="server-migration-heading">SERVER MIGRATION</h2></div>
-          <span class="context-fact">BACKUP BEFORE SOURCE CHANGE</span>
-        </header>
-        <p class="window-help">Migration validates every target forum in one guild, preserves exact before-and-after evidence in the Administration workspace, uses a rollback-protected source transaction, and removes only thread bindings owned by Packs whose destination changed. Discord posts are never deleted; affected routes must be rebound or provisioned afterward.</p>
-        <div class="server-migration-facts">
-          <div><strong>CREDENTIALS</strong><span>Remain outside repository files and are not copied.</span></div>
-          <div><strong>THREAD ROUTES</strong><span>Only changed Pack destinations are cleared; unaffected bindings are preserved.</span></div>
-          <div><strong>ARCHIVE</strong><span>Release custody remains unchanged and is not moved by server migration.</span></div>
-          <div><strong>DISCORD CONTENT</strong><span>No posts, tags, channels, roles, or webhooks are created or deleted.</span></div>
-        </div>
-        <div class="server-route-actions">
-          <button id="server-review-migration" class="danger-action" type="button">REVIEW AS SERVER MIGRATION</button>
         </div>
       </section>
 
@@ -588,11 +572,21 @@
       <img id="workspace-quick-look-image" alt="">
       <figcaption id="workspace-quick-look-caption"></figcaption>
     </figure>
-    <div class="workspace-quick-look-actions">
-      <button id="workspace-quick-look-previous" class="outline-action" type="button">PREVIOUS</button>
-      <span id="workspace-quick-look-position" class="context-fact">1 OF 1</span>
+    <div class="workspace-quick-look-navigation">
+      <div class="workspace-quick-look-actions">
+        <button id="workspace-quick-look-previous-asset" class="outline-action" type="button">PREVIOUS ASSET</button>
+        <span id="workspace-quick-look-asset-position" class="context-fact">ASSET 1 OF 1</span>
+        <button id="workspace-quick-look-next-asset" class="outline-action" type="button">NEXT ASSET</button>
+      </div>
+      <div class="workspace-quick-look-actions">
+        <button id="workspace-quick-look-previous" class="outline-action" type="button">PREVIOUS REVISION</button>
+        <span id="workspace-quick-look-position" class="context-fact">REVISION 1 OF 1</span>
+        <button id="workspace-quick-look-next" class="outline-action" type="button">NEXT REVISION</button>
+      </div>
+    </div>
+    <div class="workspace-quick-look-actions workspace-quick-look-footer-actions">
       <a id="workspace-quick-look-receipt" class="outline-action download-link" target="_blank" rel="noreferrer">VIEW RECEIPT</a>
-      <button id="workspace-quick-look-next" class="outline-action" type="button">NEXT</button>
+      <button id="workspace-quick-look-action" class="danger-action" type="button">DELETE REVISION</button>
     </div>
   </aside>
 

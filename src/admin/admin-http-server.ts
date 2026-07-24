@@ -747,6 +747,15 @@ async function routeApi(
     exactSearchParameters(url, ["packId"], "Pack capture-session state request");
     return ok(response, await service.packCaptureSessionState(url.searchParams.get("packId") ?? ""));
   }
+  if (pathname === "/api/v1/pack-workspace/capture-session/downloads-folder") {
+    if (method !== "PUT") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
+    exactSearchParameters(url, [], "Chart Downloads configuration request");
+    const body = await readJsonBody(request);
+    if (!isRecord(body)) throw new AdminError("invalid_request", "Chart Downloads configuration body must be an object.");
+    exactFields(body, ["path"], "Chart Downloads configuration body");
+    if (typeof body.path !== "string") throw new AdminError("invalid_request", "Chart Downloads path must be a string.");
+    return ok(response, await service.configurePackCaptureDownloadsFolder(body.path));
+  }
   if (pathname === "/api/v1/pack-workspace/capture-session/start") {
     if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
     const body = await readJsonBody(request);
