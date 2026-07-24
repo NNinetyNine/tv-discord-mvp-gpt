@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import sharp from "sharp";
 
+import { ADMIN_CANONICAL_FIXTURE_ROOT, copyAdminCanonicalFixture } from "../test-support/admin-canonical-fixture.ts";
 import { AdminService } from "./admin-service.ts";
 import { ADMIN_CSP, ADMIN_REQUEST_BODY_LIMIT, startAdminHttpServer, type RunningAdminHttpServer } from "./admin-http-server.ts";
 import { PACK_DRAFT_TYPE } from "./admin-types.ts";
@@ -19,8 +20,9 @@ afterEach(async () => {
 async function start(options: { readonly chartDownloadsRoot?: string; readonly repositoryRoot?: string } = {}) {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "visionx-admin-http-test-"));
   cleanup.push(workspaceRoot);
+  const repositoryRoot = options.repositoryRoot ?? ADMIN_CANONICAL_FIXTURE_ROOT;
   const service = await AdminService.create({
-    repositoryRoot: options.repositoryRoot ?? resolve("."),
+    repositoryRoot,
     workspaceRoot,
     ...(options.chartDownloadsRoot === undefined ? {} : {
       chartDownloadsRoot: options.chartDownloadsRoot,
@@ -28,17 +30,13 @@ async function start(options: { readonly chartDownloadsRoot?: string; readonly r
   });
   const server = await startAdminHttpServer({ service, host: "127.0.0.1", port: 0 });
   servers.push(server);
-  return { service, server };
+  return { repositoryRoot, service, server };
 }
 
 async function mutableRepository(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "visionx-admin-http-registry-source-"));
   cleanup.push(root);
-  await Promise.all([
-    cp(resolve("definitions"), join(root, "definitions"), { recursive: true }),
-    cp(resolve("config"), join(root, "config"), { recursive: true }),
-    mkdir(join(root, "assets"), { recursive: true }),
-  ]);
+  await copyAdminCanonicalFixture(root);
   return root;
 }
 
@@ -82,7 +80,7 @@ describe("Admin HTTP server", () => {
 
   it("rejects a non-loopback host", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "visionx-admin-http-test-")); cleanup.push(workspaceRoot);
-    const service = await AdminService.create({ repositoryRoot: resolve("."), workspaceRoot });
+    const service = await AdminService.create({ repositoryRoot: ADMIN_CANONICAL_FIXTURE_ROOT, workspaceRoot });
     await expect(startAdminHttpServer({ service, host: "0.0.0.0", port: 0 })).rejects.toMatchObject({ code: "invalid_arguments" });
   });
 
@@ -266,8 +264,8 @@ describe("Admin HTTP server", () => {
   });
 
   it("renders and downloads a standalone publication without canonical source mutation", async () => {
-    const { service, server } = await start();
-    const canonicalPaths = ["definitions/registry.json", "definitions/packs.json", "config/channels.json"].map((path) => resolve(path));
+    const { repositoryRoot, service, server } = await start();
+    const canonicalPaths = ["definitions/registry.json", "definitions/packs.json", "config/channels.json"].map((path) => resolve(repositoryRoot, path));
     const before = await Promise.all(canonicalPaths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
 
     const options = await jsonRequest(server.url, "/api/v1/standalone-render/options");
@@ -362,8 +360,8 @@ describe("Admin HTTP server", () => {
   });
 
   it("reviews before staging, accepts revisions, and exposes exact Pack progress without publishing", async () => {
-    const { service, server } = await start();
-    const canonicalPaths = ["definitions/registry.json", "definitions/packs.json", "config/channels.json"].map((path) => resolve(path));
+    const { repositoryRoot, service, server } = await start();
+    const canonicalPaths = ["definitions/registry.json", "definitions/packs.json", "config/channels.json"].map((path) => resolve(repositoryRoot, path));
     const before = await Promise.all(canonicalPaths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
 
     const initial = await jsonRequest(server.url, "/api/v1/pack-workspace");
@@ -782,8 +780,8 @@ describe("Admin HTTP server", () => {
   });
 
   it("refreshes current source state without modifying canonical bytes", async () => {
-    const { server } = await start();
-    const paths = ["definitions/registry.json", "definitions/packs.json", "config/channels.json"].map((path) => resolve(path));
+    const { repositoryRoot, server } = await start();
+    const paths = ["definitions/registry.json", "definitions/packs.json", "config/channels.json"].map((path) => resolve(repositoryRoot, path));
     const before = await Promise.all(paths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
     const result = await jsonRequest(server.url, "/api/v1/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     expect(result.body.data.registryAssetCount).toBe(132);

@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { serializePackDraft, type PackDraft } from "../admin/admin-types.ts";
+import { ADMIN_CANONICAL_FIXTURE_ROOT } from "../test-support/admin-canonical-fixture.ts";
 import { buildRegistry } from "../registry/registry.ts";
 import { buildPacks } from "./packs.ts";
 import {
@@ -24,9 +25,9 @@ import {
 } from "./pack-draft-promotion.ts";
 
 function fixture() {
-  const registryBytes = readFileSync(resolve("definitions/registry.json"));
-  const packsBytes = readFileSync(resolve("definitions/packs.json"));
-  const channelsBytes = readFileSync(resolve("config/channels.json"));
+  const registryBytes = readFileSync(resolve(ADMIN_CANONICAL_FIXTURE_ROOT, "definitions/registry.json"));
+  const packsBytes = readFileSync(resolve(ADMIN_CANONICAL_FIXTURE_ROOT, "definitions/packs.json"));
+  const channelsBytes = readFileSync(resolve(ADMIN_CANONICAL_FIXTURE_ROOT, "config/channels.json"));
   const channels = JSON.parse(channelsBytes.toString("utf8")) as Record<string, unknown>;
   const registry = buildRegistry(JSON.parse(registryBytes.toString("utf8")), channels);
   const assets = registry.all();

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildRegistry } from "../registry/registry.ts";
+import { copyAdminCanonicalFixture } from "../test-support/admin-canonical-fixture.ts";
 import { AdminService } from "./admin-service.ts";
 import { startAdminHttpServer, type RunningAdminHttpServer } from "./admin-http-server.ts";
 
@@ -21,11 +22,7 @@ async function fixture() {
   const repositoryRoot = await mkdtemp(join(tmpdir(), "visionx-asset-admin-repository-"));
   const workspaceRoot = await mkdtemp(join(tmpdir(), "visionx-asset-admin-workspace-"));
   cleanup.push(repositoryRoot, workspaceRoot);
-  await mkdir(join(repositoryRoot, "definitions"));
-  await mkdir(join(repositoryRoot, "config"));
-  for (const path of ["definitions/registry.json", "definitions/packs.json", "config/channels.json"] as const) {
-    await cp(resolve(path), join(repositoryRoot, path));
-  }
+  await copyAdminCanonicalFixture(repositoryRoot);
   const before = {
     registry: await readFile(join(repositoryRoot, "definitions/registry.json")),
     packs: await readFile(join(repositoryRoot, "definitions/packs.json")),

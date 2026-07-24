@@ -1,17 +1,18 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import sharp from "sharp";
 
+import { ADMIN_CANONICAL_FIXTURE_ROOT, copyAdminCanonicalFixture } from "../test-support/admin-canonical-fixture.ts";
 import { AdminService } from "./admin-service.ts";
 import { PACK_DRAFT_TYPE } from "./admin-types.ts";
 
 const cleanup: string[] = [];
 afterEach(async () => { await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
 
-async function createService(repositoryRoot = resolve(".")) {
+async function createService(repositoryRoot = ADMIN_CANONICAL_FIXTURE_ROOT) {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "visionx-admin-service-test-"));
   cleanup.push(workspaceRoot);
   return AdminService.create({ repositoryRoot, workspaceRoot });
@@ -20,11 +21,7 @@ async function createService(repositoryRoot = resolve(".")) {
 async function mutableRepository(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "visionx-admin-registry-source-"));
   cleanup.push(root);
-  await Promise.all([
-    cp(resolve("definitions"), join(root, "definitions"), { recursive: true }),
-    cp(resolve("config"), join(root, "config"), { recursive: true }),
-    mkdir(join(root, "assets"), { recursive: true }),
-  ]);
+  await copyAdminCanonicalFixture(root);
   return root;
 }
 
@@ -242,6 +239,7 @@ describe("AdminService", () => {
 
   it("stores canonical Registry logos with exact-current hash protection", async () => {
     const root = await mutableRepository();
+    await rm(join(root, "assets/asset-logos/btc.png"), { force: true });
     const service = await createService(root);
     const bytes = await sharp({
       create: { width: 96, height: 96, channels: 4, background: { r: 20, g: 40, b: 60, alpha: 1 } },
@@ -315,8 +313,7 @@ describe("AdminService", () => {
   it("reports stale draft references after refresh without mutating the draft", async () => {
     const sourceRoot = await mkdtemp(join(tmpdir(), "visionx-admin-source-copy-"));
     cleanup.push(sourceRoot);
-    await import("node:fs/promises").then(({ cp }) => cp(resolve("definitions"), join(sourceRoot, "definitions"), { recursive: true }));
-    await import("node:fs/promises").then(({ cp }) => cp(resolve("config"), join(sourceRoot, "config"), { recursive: true }));
+    await copyAdminCanonicalFixture(sourceRoot);
     const service = await createService(sourceRoot);
     await service.createDraft({ schemaVersion: 1, draftType: PACK_DRAFT_TYPE, id: "qa-pack", displayName: "QA Pack", assetIds: ["aapl"], revision: 1 });
     const draftBefore = await service.exportDraft("qa-pack");
@@ -335,9 +332,9 @@ describe("AdminService", () => {
   });
 
   it("does not mutate canonical source bytes while managing drafts", async () => {
-    const registryPath = resolve("definitions/registry.json");
-    const packsPath = resolve("definitions/packs.json");
-    const channelsPath = resolve("config/channels.json");
+    const registryPath = resolve(ADMIN_CANONICAL_FIXTURE_ROOT, "definitions/registry.json");
+    const packsPath = resolve(ADMIN_CANONICAL_FIXTURE_ROOT, "definitions/packs.json");
+    const channelsPath = resolve(ADMIN_CANONICAL_FIXTURE_ROOT, "config/channels.json");
     const before = await Promise.all([registryPath, packsPath, channelsPath].map(async (path) => sha256(await readFile(path))));
     const service = await createService();
     await service.createDraft({ schemaVersion: 1, draftType: PACK_DRAFT_TYPE, id: "qa-pack", displayName: "QA Pack", assetIds: [], revision: 1 });

@@ -1,4 +1,4 @@
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import type {
   DiscordServerAdministrationSession,
   DiscordServerRouteFacts,
 } from "../publish/discord-server-session.ts";
+import { copyAdminCanonicalFixture } from "../test-support/admin-canonical-fixture.ts";
 import { AdminService } from "./admin-service.ts";
 
 const cleanup: string[] = [];
@@ -17,10 +18,7 @@ afterEach(async () => {
 async function mutableRepository(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "visionx-server-config-repo-"));
   cleanup.push(root);
-  await Promise.all([
-    cp(resolve("definitions"), join(root, "definitions"), { recursive: true }),
-    cp(resolve("config"), join(root, "config"), { recursive: true }),
-  ]);
+  await copyAdminCanonicalFixture(root);
   return root;
 }
 

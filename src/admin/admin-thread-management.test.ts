@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -14,6 +14,7 @@ import type {
   DiscordForumAdministrationSession,
   DiscordForumSession,
 } from "../publish/discord-forum-session.ts";
+import { ADMIN_CANONICAL_FIXTURE_ROOT, copyAdminCanonicalFixture } from "../test-support/admin-canonical-fixture.ts";
 import { parseAssetThreadBindings } from "../wiring/asset-threads.ts";
 import { startAdminHttpServer, type RunningAdminHttpServer } from "./admin-http-server.ts";
 import {
@@ -43,9 +44,7 @@ afterEach(async () => {
 async function temporaryRepository(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "visionx-admin-threads-source-"));
   cleanup.push(root);
-  await cp(resolve("definitions"), join(root, "definitions"), { recursive: true });
-  await cp(resolve("config"), join(root, "config"), { recursive: true });
-  await mkdir(join(root, "assets"), { recursive: true });
+  await copyAdminCanonicalFixture(root);
   return root;
 }
 
@@ -194,7 +193,7 @@ function provisioningSessionFactory(options: {
 
 describe("Administration Discord thread routing", () => {
   it("reports exact canonical routing coverage without exposing forum snowflakes", async () => {
-    const service = await createService(resolve("."));
+    const service = await createService(ADMIN_CANONICAL_FIXTURE_ROOT);
     const state = await service.threadManagementState();
     const crypto = state.packs.find((pack) => pack.id === "crypto");
 

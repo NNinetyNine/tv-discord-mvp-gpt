@@ -1,9 +1,10 @@
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { startAdminHttpServer, type RunningAdminHttpServer } from "./admin-http-server.ts";
+import { copyAdminCanonicalFixture } from "../test-support/admin-canonical-fixture.ts";
 import { AdminService } from "./admin-service.ts";
 
 const cleanup: string[] = [];
@@ -19,8 +20,7 @@ async function start() {
   const downloadsRoot = await mkdtemp(join(tmpdir(), "visionx-hidden-tools-http-downloads-"));
   cleanup.push(repositoryRoot, workspaceRoot, downloadsRoot);
   await Promise.all([
-    cp(resolve("definitions"), join(repositoryRoot, "definitions"), { recursive: true }),
-    cp(resolve("config"), join(repositoryRoot, "config"), { recursive: true }),
+    copyAdminCanonicalFixture(repositoryRoot),
     writeFile(join(downloadsRoot, "AAPL_2026-07-23_22-00-00.png"), "chart"),
   ]);
   const service = await AdminService.create({ repositoryRoot, workspaceRoot, chartDownloadsRoot: downloadsRoot });
