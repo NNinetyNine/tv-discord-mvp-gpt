@@ -4636,7 +4636,15 @@ export class AdminService {
 
   async preparePackMaintenance(value: unknown): Promise<AdminPackMaintenancePreview> {
     await this.refresh();
-    const request = parsePackMaintenanceInput(value);
+    let normalizedValue = value;
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      if (record.operation === "update" && typeof record.packId === "string" && (record.logicalChannel === "" || record.logicalChannel === undefined)) {
+        const current = this.#state.byPackId.get(record.packId);
+        if (current !== undefined) normalizedValue = { ...record, logicalChannel: current.channel };
+      }
+    }
+    const request = parsePackMaintenanceInput(normalizedValue);
     const preview = await this.#currentPackMaintenancePreview(request);
     this.#packMaintenancePreviews.clear();
     this.#packMaintenancePreviews.set(preview.previewId, Object.freeze({ request, preview }));

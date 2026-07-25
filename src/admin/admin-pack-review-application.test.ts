@@ -70,7 +70,8 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(html).toContain("PUBLICATION QUEUE");
     expect(html).toContain("Capture-session review remains optional.");
     expect(html).toContain("REVIEW PUBLICATION");
-    expect(html).toContain("PUBLISH SELECTED PACKS");
+    expect(html).toContain("PUBLISH PACK");
+    expect(js).toContain('return packCount === 1 ? "PUBLISH PACK" : "PUBLISH SELECTED PACKS"');
     expect(html).not.toContain('id="workspace-streamlined-confirmation"');
     expect(js).not.toContain("streamlinedRevisionConfirmation");
     expect(js).toContain("stageCaptureCandidates");
@@ -91,7 +92,7 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(html).toContain("SYNC DOWNLOADS &amp; UPDATE PACK");
     expect(html).toContain('id="workspace-configure-downloads"');
     expect(html).toContain('id="workspace-downloads-input"');
-    expect(html).toMatch(/id="workspace-start-session"[\s\S]*id="workspace-scan-session"[\s\S]*id="workspace-manual-fallback"/u);
+    expect(html).toMatch(/id="workspace-manual-fallback"[\s\S]*id="workspace-start-session"[\s\S]*id="workspace-scan-session"/u);
     expect(html).toContain('id="workspace-import"');
     expect(html).not.toContain('<details class="workspace-import">');
     expect(js).toContain("setManualFallbackOpen");

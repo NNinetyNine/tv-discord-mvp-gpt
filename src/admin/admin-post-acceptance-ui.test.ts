@@ -24,7 +24,7 @@ describe("Step 547 Administration workflow refinements", () => {
       readFile(resolve("src/admin-ui/index.html"), "utf8"),
       readFile(resolve("src/admin-ui/app.js"), "utf8"),
     ]);
-    expect(html).toMatch(/AUTOMATED PACK CAPTURE[\s\S]*id="workspace-start-session"[\s\S]*id="workspace-scan-session"[\s\S]*id="workspace-manual-fallback"[\s\S]*id="workspace-import"[\s\S]*IMPORT &amp; REVIEW ONE PNG/u);
+    expect(html).toMatch(/AUTOMATED PACK CAPTURE[\s\S]*id="workspace-manual-fallback"[\s\S]*id="workspace-start-session"[\s\S]*id="workspace-scan-session"[\s\S]*id="workspace-import"[\s\S]*IMPORT &amp; REVIEW ONE PNG/u);
     expect(html).not.toContain('<details class="workspace-import">');
     expect(html).not.toContain('id="publication-select-ready"');
     expect(html).not.toContain('id="publication-clear"');

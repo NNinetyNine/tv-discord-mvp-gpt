@@ -41,6 +41,8 @@ const state = {
   packMaintenanceAssetIds: [],
   packMaintenanceOrder: [],
   packMaintenanceHeldAssetId: "",
+  packMaintenanceDisplayName: "",
+  packMaintenanceLogicalChannel: "",
   packMaintenancePreview: null,
   packMaintenanceBusy: false,
   releaseArchive: null,
@@ -49,7 +51,7 @@ const state = {
   registryPackId: "",
   registryPacks: [],
   registryOffset: 0,
-  registryLimit: 25,
+  registryLimit: 20,
   registryTotal: 0,
   registryAssets: [],
   registrySelectedAsset: null,
@@ -115,6 +117,7 @@ function announceView(view) {
 }
 
 function setModalIsolation(active) {
+  closeVisionxSelect();
   const shell = [qs("#app-header"), qs("#primary-nav"), qs("#app-footer"), ...qsa("#main-content > [data-view-panel]")];
   for (const element of shell) {
     if (element === null) continue;
@@ -360,6 +363,199 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 }
 function escapeAttribute(value) { return escapeHtml(value).replace(/`/g, "&#96;"); }
+
+const visionxSelectComponents = new Map();
+let openVisionxSelect = null;
+let visionxNativeSelectVault = null;
+
+function visionxSelectLabel(select) {
+  const known = visionxSelectComponents.get(select)?.labelText;
+  if (known) return known;
+  const label = select.closest("label");
+  const text = label?.querySelector(":scope > span")?.textContent?.trim();
+  return text || select.getAttribute("aria-label") || select.id || "SELECT OPTION";
+}
+
+function getVisionxNativeSelectVault() {
+  if (visionxNativeSelectVault !== null) return visionxNativeSelectVault;
+  visionxNativeSelectVault = document.createElement("div");
+  visionxNativeSelectVault.hidden = true;
+  visionxNativeSelectVault.setAttribute("aria-hidden", "true");
+  document.body.append(visionxNativeSelectVault);
+  return visionxNativeSelectVault;
+}
+
+function closeVisionxSelect(select = openVisionxSelect, restoreFocus = false) {
+  if (select === null) return;
+  const component = visionxSelectComponents.get(select);
+  if (component === undefined) return;
+  component.menu.hidden = true;
+  component.button.setAttribute("aria-expanded", "false");
+  component.root.classList.remove("open");
+  if (openVisionxSelect === select) openVisionxSelect = null;
+  if (restoreFocus) component.button.focus({ preventScroll: true });
+}
+
+function positionVisionxSelectMenu(select) {
+  const component = visionxSelectComponents.get(select);
+  if (component === undefined || component.menu.hidden) return;
+  const rect = component.button.getBoundingClientRect();
+  const padding = 12;
+  const gap = 6;
+  const availableBelow = Math.max(0, window.innerHeight - rect.bottom - padding - gap);
+  const availableAbove = Math.max(0, rect.top - padding - gap);
+  const useAbove = availableBelow < 180 && availableAbove > availableBelow;
+  const width = Math.min(Math.max(rect.width, 220), Math.max(220, window.innerWidth - (padding * 2)));
+  const left = Math.min(Math.max(padding, rect.left), Math.max(padding, window.innerWidth - width - padding));
+  const available = Math.max(96, Math.min(360, useAbove ? availableAbove : availableBelow));
+  component.menu.dataset.placement = useAbove ? "above" : "below";
+  component.menu.style.left = `${Math.round(left)}px`;
+  component.menu.style.width = `${Math.round(width)}px`;
+  component.menu.style.maxHeight = `${Math.floor(available)}px`;
+  component.menu.style.top = useAbove ? "auto" : `${Math.round(rect.bottom + gap)}px`;
+  component.menu.style.bottom = useAbove ? `${Math.round(window.innerHeight - rect.top + gap)}px` : "auto";
+}
+
+function selectVisionxOption(select, value) {
+  if (select.disabled) return;
+  select.value = value;
+  select.dispatchEvent(new Event("input", { bubbles: true }));
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  syncVisionxSelect(select);
+  closeVisionxSelect(select, true);
+}
+
+function focusVisionxSelectOption(select, direction = 0) {
+  const component = visionxSelectComponents.get(select);
+  if (component === undefined) return;
+  const options = [...component.menu.querySelectorAll("button:not(:disabled)")];
+  if (options.length === 0) return;
+  const active = document.activeElement;
+  let index = options.indexOf(active);
+  if (index < 0) index = Math.max(0, options.findIndex((option) => option.getAttribute("aria-selected") === "true"));
+  index = Math.min(options.length - 1, Math.max(0, index + direction));
+  options[index].focus({ preventScroll: true });
+  options[index].scrollIntoView({ block: "nearest" });
+}
+
+function openVisionxSelectMenu(select, focusOption = false) {
+  const component = visionxSelectComponents.get(select);
+  if (component === undefined || select.disabled) return;
+  if (openVisionxSelect !== null && openVisionxSelect !== select) closeVisionxSelect(openVisionxSelect);
+  syncVisionxSelect(select);
+  component.menu.hidden = false;
+  component.button.setAttribute("aria-expanded", "true");
+  component.root.classList.add("open");
+  openVisionxSelect = select;
+  positionVisionxSelectMenu(select);
+  if (focusOption) requestAnimationFrame(() => focusVisionxSelectOption(select));
+}
+
+function syncVisionxSelect(select) {
+  const component = visionxSelectComponents.get(select);
+  if (component === undefined) return;
+  const selected = select.selectedOptions[0] ?? select.options[0] ?? null;
+  const placeholder = selected === null || selected.value === "";
+  component.value.textContent = selected?.textContent?.trim() || "SELECT OPTION";
+  component.button.disabled = select.disabled;
+  component.button.classList.toggle("placeholder", placeholder);
+  component.button.setAttribute("aria-label", `${visionxSelectLabel(select)}: ${component.value.textContent}`);
+  component.menu.innerHTML = [...select.options].map((option, index) => `
+    <button class="visionx-select-option${option.value === select.value ? " selected" : ""}" type="button" role="option" aria-selected="${option.value === select.value}" data-visionx-select-index="${index}"${option.disabled ? " disabled" : ""}>
+      <span>${escapeHtml(option.textContent?.trim() || option.value)}</span>
+      <i aria-hidden="true">${option.value === select.value ? "✓" : ""}</i>
+    </button>`).join("");
+  component.menu.querySelectorAll("[data-visionx-select-index]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const option = select.options[Number(button.dataset.visionxSelectIndex)];
+      if (option !== undefined && !option.disabled) selectVisionxOption(select, option.value);
+    });
+  });
+  if (!component.menu.hidden) positionVisionxSelectMenu(select);
+}
+
+function enhanceVisionxSelect(select) {
+  if (visionxSelectComponents.has(select)) return;
+  const labelText = visionxSelectLabel(select);
+  const root = document.createElement("span");
+  root.className = "visionx-select";
+  select.before(root);
+  select.classList.add("visionx-native-select");
+  select.tabIndex = -1;
+  select.setAttribute("aria-hidden", "true");
+  getVisionxNativeSelectVault().append(select);
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "visionx-select-button";
+  button.setAttribute("aria-haspopup", "listbox");
+  button.setAttribute("aria-expanded", "false");
+  const value = document.createElement("span");
+  value.className = "visionx-select-value";
+  const chevron = document.createElement("span");
+  chevron.className = "visionx-select-chevron";
+  chevron.setAttribute("aria-hidden", "true");
+  chevron.textContent = "⌄";
+  button.append(value, chevron);
+  root.append(button);
+
+  const menu = document.createElement("div");
+  menu.className = "visionx-select-menu";
+  menu.id = `${select.id || `visionx-select-${visionxSelectComponents.size + 1}`}-menu`;
+  menu.setAttribute("role", "listbox");
+  menu.setAttribute("aria-label", labelText);
+  menu.hidden = true;
+  document.body.append(menu);
+  button.setAttribute("aria-controls", menu.id);
+
+  const observer = new MutationObserver(() => syncVisionxSelect(select));
+  observer.observe(select, { childList: true, subtree: true, attributes: true, attributeFilter: ["disabled", "label", "selected"] });
+  visionxSelectComponents.set(select, { root, button, value, menu, observer, labelText });
+
+  button.addEventListener("focus", () => syncVisionxSelect(select));
+  select.addEventListener("input", () => syncVisionxSelect(select));
+  select.addEventListener("change", () => syncVisionxSelect(select));
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (menu.hidden) openVisionxSelectMenu(select);
+    else closeVisionxSelect(select);
+  });
+  button.addEventListener("keydown", (event) => {
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      if (menu.hidden) openVisionxSelectMenu(select, true);
+      else if (event.key === "Home") focusVisionxSelectOption(select, -1000);
+      else if (event.key === "End") focusVisionxSelectOption(select, 1000);
+      else focusVisionxSelectOption(select, event.key === "ArrowDown" ? 1 : -1);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeVisionxSelect(select, true);
+    }
+  });
+  menu.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      focusVisionxSelectOption(select, event.key === "ArrowDown" ? 1 : -1);
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      focusVisionxSelectOption(select, event.key === "Home" ? -1000 : 1000);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeVisionxSelect(select, true);
+    } else if (event.key === "Tab") {
+      closeVisionxSelect(select);
+    }
+  });
+  syncVisionxSelect(select);
+}
+
+function refreshVisionxSelects() {
+  qsa("select").forEach(enhanceVisionxSelect);
+  visionxSelectComponents.forEach((_component, select) => syncVisionxSelect(select));
+}
 
 function setPreviewUnavailable(text = "Complete the Pack and member details to see the exact change.") {
   state.preview = null;
@@ -1708,11 +1904,10 @@ async function retireRegistryAssetFromUi() {
       return;
     }
     const phrase = `RETIRE ${asset.id.toUpperCase()}`;
-    const typed = window.prompt(`Type ${phrase} to retire ${asset.displayName}.\n\nThe canonical logo is retained for recovery.`);
-    if (typed !== phrase) return;
+    if (!window.confirm(`Retire ${asset.displayName} from the canonical Registry?\n\nThe Asset must already be unowned by Packs and thread routes. Its canonical logo will be retained for recovery.`)) return;
     await api(`/api/v1/assets/${encodeURIComponent(asset.id)}/retire`, {
       method: "POST",
-      body: JSON.stringify({ previewId: preview.previewId, confirmation: typed }),
+      body: JSON.stringify({ previewId: preview.previewId, confirmation: phrase }),
     });
     state.registrySelectedAsset = null;
     state.registryLogo = null;
@@ -1809,23 +2004,23 @@ function selectRendererAsset(asset) {
 function positionRendererAssetResults() {
   const panel = qs("#renderer-asset-results");
   const input = qs("#renderer-asset-search");
-  if (panel.hidden) return;
+  const container = input.closest(".renderer-asset-search");
+  if (panel.hidden || container === null) return;
   const rect = input.getBoundingClientRect();
+  const containerRect = container.getBoundingClientRect();
   const viewportPadding = 12;
   const gap = 7;
   const availableBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding - gap);
   const availableAbove = Math.max(0, rect.top - viewportPadding - gap);
   const useAbove = availableBelow < 180 && availableAbove > availableBelow;
   const available = Math.max(72, Math.min(352, useAbove ? availableAbove : availableBelow));
-  const width = Math.max(220, Math.min(rect.width, window.innerWidth - (viewportPadding * 2)));
-  const left = Math.min(Math.max(viewportPadding, rect.left), window.innerWidth - width - viewportPadding);
   panel.dataset.placement = useAbove ? "above" : "below";
-  panel.style.left = `${Math.round(left)}px`;
+  panel.style.left = `${Math.round(rect.left - containerRect.left)}px`;
   panel.style.right = "auto";
-  panel.style.width = `${Math.round(width)}px`;
+  panel.style.width = `${Math.round(rect.width)}px`;
   panel.style.maxHeight = `${Math.floor(available)}px`;
-  panel.style.top = useAbove ? "auto" : `${Math.round(rect.bottom + gap)}px`;
-  panel.style.bottom = useAbove ? `${Math.round(window.innerHeight - rect.top + gap)}px` : "auto";
+  panel.style.top = useAbove ? "auto" : `${Math.round(rect.bottom - containerRect.top + gap)}px`;
+  panel.style.bottom = useAbove ? `${Math.round(containerRect.bottom - rect.top + gap)}px` : "auto";
 }
 
 function renderRendererAssetSearch(query) {
@@ -1950,142 +2145,45 @@ function publicationPackLabel(pack) {
   return pack.publication.ready ? "READY" : "BLOCKED";
 }
 
-function publicationBlockerExplanation(blocker, pack) {
-  switch (blocker.code) {
-    case "pack_incomplete":
-      return {
-        detail: `Capture and accept the missing chart${blocker.missingAssetIds.length === 1 ? "" : "s"}: ${blocker.missingAssetIds.map((id) => id.toUpperCase()).join(", ")}. Accepted revisions must make the Pack complete.`,
-        actions: [{ view: "workspace", label: "OPEN PACK WORKSPACE" }],
-      };
-    case "missing_staged_images":
-      return {
-        detail: `The current accepted PNG is not present in staging for ${blocker.missingAssetIds.map((id) => id.toUpperCase()).join(", ")}. Re-synchronise or accept a fresh preview for each Asset.`,
-        actions: [{ view: "workspace", label: "REPAIR STAGING" }],
-      };
-    case "channel_unresolved":
-      return {
-        detail: `Logical route ${pack.logicalChannel.toUpperCase()} has no usable Discord forum ID. Add or correct that route, then review publication again.`,
-        actions: [{ view: "server", label: "OPEN SERVER ROUTING" }],
-      };
-    case "asset_threads_unresolved":
-      return {
-        detail: `Persistent thread IDs are missing for ${blocker.missingAssetIds.map((id) => id.toUpperCase()).join(", ")}. Adopt or provision each thread under the configured forum.`,
-        actions: [{ view: "threads", label: "OPEN THREAD BINDINGS" }],
-      };
-    case "interrupted_release_exists":
-      return {
-        detail: `Release ${blocker.releaseId} is interrupted with ${blocker.postedCount}/${blocker.totalCount} Discord posts complete. Resume it, or explicitly allow a fresh superseding Release.`,
-        actions: [{ view: "archive", label: "INSPECT RELEASE" }, { view: "workspace", label: "RESUME OR SUPERSEDE" }],
-      };
-    case "published_release_cleanup_required":
-      return {
-        detail: `Published Release ${blocker.releaseId} still matches the active local Pack workspace. Verify the archived Release, then reset the local Pack state before publishing again.`,
-        actions: [{ view: "archive", label: "VERIFY ARCHIVE" }, { view: "workspace", label: "RESET LOCAL PACK" }],
-      };
-    case "discord_unavailable":
-      return {
-        detail: "This Administration process was started without usable Discord publisher authority. Restart it with DISCORD_BOT_TOKEN available, then test the current server connection.",
-        actions: [{ view: "server", label: "OPEN SERVER PREFLIGHT" }],
-      };
-    default:
-      return {
-        detail: "An unknown publication blocker was returned. Refresh canonical state and inspect the technical error before retrying.",
-        actions: [{ view: "workspace", label: "REFRESH WORKSPACE" }],
-      };
-  }
-}
-
-function publicationGateActionButton(action, packId, assetId = "") {
-  return `<button class="outline-action compact-action" type="button" data-publication-gate-view="${escapeAttribute(action.view)}" data-publication-gate-pack="${escapeAttribute(packId)}" data-publication-gate-asset="${escapeAttribute(assetId)}">${escapeHtml(action.label)}</button>`;
-}
-
-async function navigatePublicationGate(button) {
-  const view = button.dataset.publicationGateView;
-  const packId = button.dataset.publicationGatePack;
-  const assetId = button.dataset.publicationGateAsset;
-  await activateView(view, { focusPanel: true });
-  if (view === "workspace" && packId) {
-    qs("#workspace-pack").value = packId;
-    clearPackPreviewView();
-    state.packSourceFile = null;
-    qs("#workspace-source").value = "";
-    setFilePickerName("workspace-source", null);
-    renderPackWorkspace();
-    await loadCaptureSession();
-    qs("#workspace-automation-heading").scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-  if (view === "threads" && packId) {
-    qs("#thread-pack").value = packId;
-    renderThreadManagement();
-    if (assetId) {
-      qs("#thread-asset").value = assetId;
-      qs("#thread-id").value = selectedThreadAsset()?.threadId ?? "";
-      renderThreadManagement();
-    }
-    qs("#thread-adoption-heading").scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-  if (view === "archive" && packId) {
-    qs("#archive-pack-filter").value = packId;
-    renderReleaseArchive();
-  }
-  if (view === "registry" && assetId) {
-    qs("#registry-search").value = assetId;
-    await loadRegistry({ query: assetId, offset: 0 });
-    await selectRegistryAsset(assetId);
-  }
-}
-
 function renderPublicationDiagnostics() {
   const workspace = state.packWorkspace;
   if (workspace === null) return;
   const content = qs("#publication-diagnostics-content");
-  const localBlockerCount = workspace.packs.reduce(
+  const selectedPacks = workspace.packs.filter((pack) => state.publicationSelectedPackIds.has(pack.id));
+  const localBlockerCount = selectedPacks.reduce(
     (total, pack) => total + pack.publication.blockers.filter((blocker) => blocker.code !== "discord_unavailable").length,
     0,
   );
-  const blockerCount = localBlockerCount + (workspace.publishAvailable ? 0 : 1);
+  const blockerCount = selectedPacks.length === 0 ? 0 : localBlockerCount + (workspace.publishAvailable ? 0 : 1);
   const status = qs("#publication-diagnostics-state");
+
+  if (selectedPacks.length === 0) {
+    status.className = "workspace-status pending";
+    status.textContent = "AWAITING SELECTION";
+    content.innerHTML = "<p>Select the Pack or Packs for this Release. Unselected Packs are not evaluated and cannot block publication.</p>";
+    qs("#app-footer").textContent = workspace.publishAvailable
+      ? "VISIONX · LOCAL ADMINISTRATION · DISCORD PUBLISHER AUTHORITY AVAILABLE"
+      : "VISIONX · LOCAL ADMINISTRATION · DISCORD BOT TOKEN REQUIRED FOR PUBLICATION";
+    return;
+  }
+
   status.className = `workspace-status ${blockerCount === 0 ? "valid" : "blocked"}`;
-  status.textContent = blockerCount === 0 ? "LOCAL GATES CLEAR" : `${blockerCount} BLOCKER${blockerCount === 1 ? "" : "S"}`;
+  status.textContent = blockerCount === 0 ? "SELECTED PACKS READY" : `${blockerCount} SELECTED BLOCKER${blockerCount === 1 ? "" : "S"}`;
 
-  const cards = [];
-  if (!workspace.publishAvailable) {
-    const explanation = publicationBlockerExplanation({ code: "discord_unavailable" }, { logicalChannel: "" });
-    cards.push(`<article class="publication-gate-card blocked"><div><span class="publication-gate-code">DISCORD_UNAVAILABLE</span><p>DISCORD PUBLISHER AUTHORITY</p></div><div><strong>BOT TOKEN IS NOT AVAILABLE TO THIS PROCESS</strong><p>${escapeHtml(explanation.detail)}</p></div><div class="publication-gate-actions">${explanation.actions.map((action) => publicationGateActionButton(action, "")).join("")}</div></article>`);
-  }
-
-  for (const pack of workspace.packs) {
+  const cards = selectedPacks.map((pack) => {
     const blockers = pack.publication.blockers.filter((blocker) => blocker.code !== "discord_unavailable");
-    const metadataIssues = pack.assets.filter((asset) => !asset.renderReady);
-    const metadataDetail = metadataIssues.map((asset) => `${asset.id.toUpperCase()} (${asset.reconciliationIssues.map(rendererIssueLabel).join(", ")})`).join("; ");
     if (blockers.length === 0) {
-      cards.push(`<article class="publication-gate-card ready"><div><span class="publication-gate-code">READY</span><p>${escapeHtml(pack.id.toUpperCase())} · ${escapeHtml(pack.logicalChannel.toUpperCase())}</p></div><div><strong>${escapeHtml(pack.displayName.toUpperCase())} LOCAL PUBLICATION GATES ARE CLEAR</strong><p>${pack.publication.capturedCount}/${pack.publication.totalCount} captured · ${pack.publication.stagedCount}/${pack.publication.totalCount} staged · ${pack.publication.resolvedThreadCount}/${pack.publication.totalCount} thread IDs resolved.${metadataIssues.length === 0 ? "" : ` Metadata warning: ${metadataDetail}. These Assets cannot be rendered again until Registry metadata is repaired.`}</p></div><div class="publication-gate-actions">${metadataIssues.length === 0 ? "" : publicationGateActionButton({ view: "registry", label: "REPAIR METADATA" }, pack.id, metadataIssues[0].id)}</div></article>`);
-      continue;
+      return `<article class="publication-gate-card ready"><div><span class="publication-gate-code">READY</span><p>${escapeHtml(pack.id.toUpperCase())}</p></div><div><strong>${escapeHtml(pack.displayName.toUpperCase())} IS READY</strong><p>${pack.publication.capturedCount}/${pack.publication.totalCount} captured · ${pack.publication.stagedCount}/${pack.publication.totalCount} staged · ${pack.publication.resolvedThreadCount}/${pack.publication.totalCount} routed.</p></div></article>`;
     }
-    const details = blockers.map((blocker) => {
-      const explanation = publicationBlockerExplanation(blocker, pack);
-      return `<div><span class="publication-gate-code">${escapeHtml(blocker.code.toUpperCase())}</span><p>${escapeHtml(explanation.detail)}</p></div>`;
-    }).join("");
-    const actions = blockers.flatMap((blocker) => publicationBlockerExplanation(blocker, pack).actions);
-    const uniqueActions = [...new Map(actions.map((action) => [`${action.view}|${action.label}`, action])).values()];
-    const firstThreadAsset = blockers.find((blocker) => blocker.code === "asset_threads_unresolved")?.missingAssetIds?.[0] ?? "";
-    cards.push(`<article class="publication-gate-card blocked"><div><span class="publication-gate-code">${blockers.length} BLOCKER${blockers.length === 1 ? "" : "S"}</span><p>${escapeHtml(pack.id.toUpperCase())} · ${escapeHtml(pack.logicalChannel.toUpperCase())}</p></div><div><strong>${escapeHtml(pack.displayName.toUpperCase())} CANNOT PUBLISH YET</strong>${details}</div><div class="publication-gate-actions">${uniqueActions.map((action) => publicationGateActionButton(action, pack.id, action.view === "threads" ? firstThreadAsset : "")).join("")}</div></article>`);
+    const summary = blockers.map(publicationBlockerLabel).join(" · ");
+    return `<article class="publication-gate-card blocked"><div><span class="publication-gate-code">INCOMPLETE</span><p>${escapeHtml(pack.id.toUpperCase())}</p></div><div><strong>${escapeHtml(pack.displayName.toUpperCase())} CANNOT PUBLISH</strong><p>${escapeHtml(summary)}</p></div></article>`;
+  });
+
+  if (!workspace.publishAvailable) {
+    cards.unshift('<article class="publication-gate-card blocked"><div><span class="publication-gate-code">DISCORD UNAVAILABLE</span><p>SELECTED RELEASE</p></div><div><strong>PUBLISHER AUTHORITY IS NOT AVAILABLE</strong><p>Restart Administration with the Discord bot token available before publishing the selected Pack or Packs.</p></div></article>');
   }
 
-  const liveValidation = workspace.publishAvailable
-    ? "Discord publisher authority is present. Server permissions, forum tags and roles, and live thread state are external facts rather than durable local gates: run Server → Test Current Server and Threads → Verify Pack Routing immediately before publication. The publish operation revalidates canonical local state and reports any Discord rejection without hiding the failed Pack."
-    : "Live Discord permissions, forum ownership, and thread state cannot be tested until the Administration process has a Discord bot token. The local cards above still report Pack, staging, route, binding, Release, and metadata conditions exactly.";
-  const preflightPackId = [...state.publicationSelectedPackIds][0] ?? workspace.packs[0]?.id ?? "";
-  const preflightActions = workspace.publishAvailable
-    ? [
-        publicationGateActionButton({ view: "server", label: "TEST CURRENT SERVER" }, ""),
-        publicationGateActionButton({ view: "threads", label: "VERIFY PACK ROUTING" }, preflightPackId),
-      ]
-    : [publicationGateActionButton({ view: "server", label: "OPEN SERVER PREFLIGHT" }, "")];
-  content.innerHTML = `${cards.join("")}<div class="publication-external-note"><p><strong>LIVE DISCORD PREFLIGHT:</strong> ${escapeHtml(liveValidation)}</p><div class="publication-gate-actions">${preflightActions.join("")}</div></div>`;
-  qsa("[data-publication-gate-view]").forEach((button) => button.addEventListener("click", () => {
-    void navigatePublicationGate(button).catch((error) => showMessage(error.message));
-  }));
+  content.innerHTML = cards.join("");
   qs("#app-footer").textContent = workspace.publishAvailable
     ? "VISIONX · LOCAL ADMINISTRATION · DISCORD PUBLISHER AUTHORITY AVAILABLE"
     : "VISIONX · LOCAL ADMINISTRATION · DISCORD BOT TOKEN REQUIRED FOR PUBLICATION";
@@ -2095,15 +2193,17 @@ function clearPublicationPreview() {
   state.publicationPreview = null;
   qs("#publication-preview").hidden = true;
   qs("#publication-preview-packs").innerHTML = "";
-  qs("#publication-confirmation").value = "";
-  qs("#publication-confirmation").placeholder = "REVIEW PACKS FIRST";
+  qs("#publication-apply-guidance").textContent = "Complete the selected-Pack review before publishing. A standard confirmation will appear immediately before Discord delivery.";
   qs("#publication-apply").disabled = true;
+}
+
+function publicationActionLabel(packCount) {
+  return packCount === 1 ? "PUBLISH PACK" : "PUBLISH SELECTED PACKS";
 }
 
 function updatePublicationApplyButton() {
   const preview = state.publicationPreview;
-  qs("#publication-apply").disabled = state.publicationBusy || preview === null || !preview.valid ||
-    qs("#publication-confirmation").value !== preview.confirmation;
+  qs("#publication-apply").disabled = state.publicationBusy || preview === null || !preview.valid;
 }
 
 function renderPublicationQueue() {
@@ -2137,11 +2237,12 @@ function renderPublicationQueue() {
     ? "NO PACKS SELECTED"
     : `${selectedPacks.length} SELECTED · ${readySelected.length} POTENTIALLY READY`;
   qs("#publication-guidance").textContent = !workspace.publishAvailable
-    ? "DISCORD BOT TOKEN IS MISSING · REVIEW THE PUBLICATION GATES BELOW FOR EVERY OTHER CONDITION"
+    ? "DISCORD BOT TOKEN IS MISSING"
     : selectedPacks.length === 0
       ? "SELECT PACKS TO BUILD ONE GOVERNED PUBLICATION OPERATION"
-      : `${selectedPacks.map((pack) => pack.displayName.toUpperCase()).join(" · ")} · REVIEW ALL TOGETHER BEFORE DISCORD`;
+      : `${selectedPacks.map((pack) => pack.displayName.toUpperCase()).join(" · ")} · ONLY THESE PACKS WILL BE REVIEWED`;
   qs("#publication-review").disabled = state.publicationBusy || selectedPacks.length === 0;
+  qs("#publication-apply").textContent = publicationActionLabel(selectedPacks.length);
   renderPublicationDiagnostics();
 
   qsa("[data-publication-pack]").forEach((button) => button.addEventListener("click", () => {
@@ -2174,7 +2275,7 @@ function renderPublicationPreview(preview) {
   qs("#publication-preview").hidden = false;
   qs("#publication-preview-heading").textContent = `${preview.selectedPackIds.length} PACK${preview.selectedPackIds.length === 1 ? "" : "S"} REVIEWED`;
   qs("#publication-preview-state").className = `workspace-status ${preview.valid ? "valid" : "blocked"}`;
-  qs("#publication-preview-state").textContent = preview.valid ? "READY TO CONFIRM" : "BLOCKED";
+  qs("#publication-preview-state").textContent = preview.valid ? "READY TO PUBLISH" : "BLOCKED";
   qs("#publication-preview-packs").innerHTML = preview.packs.map((pack) => {
     const blockers = pack.publication.blockers;
     return `<article class="publication-preview-card ${pack.publication.ready ? "ready" : "blocked"}">
@@ -2184,9 +2285,12 @@ function renderPublicationPreview(preview) {
       <span class="workspace-status ${pack.publication.ready ? "valid" : "blocked"}">${pack.publication.ready ? "READY" : "BLOCKED"}</span>
     </article>`;
   }).join("");
-  qs("#publication-confirmation").value = "";
-  qs("#publication-confirmation").placeholder = preview.valid ? preview.confirmation : "RESOLVE EVERY BLOCKER";
-  qs("#publication-confirmation").disabled = !preview.valid || state.publicationBusy;
+  qs("#publication-apply").textContent = publicationActionLabel(preview.selectedPackIds.length);
+  qs("#publication-apply-guidance").textContent = preview.valid
+    ? preview.selectedPackIds.length === 1
+      ? `${preview.packs[0]?.displayName.toUpperCase() ?? "THE SELECTED PACK"} is ready. Publishing will create one irreversible Discord delivery after a standard confirmation.`
+      : `${preview.selectedPackIds.length} selected Packs are ready. Publishing will proceed in canonical Pack order after a standard confirmation.`
+    : "Resolve the blocker for each selected Pack, then review the publication again.";
   updatePublicationApplyButton();
 }
 
@@ -2206,8 +2310,10 @@ async function reviewPackPublication() {
     });
     renderPublicationPreview(preview);
     qs("#publication-guidance").textContent = preview.valid
-      ? `TYPE ${preview.confirmation} TO ENABLE THE ONE PUBLICATION ACTION`
-      : "PUBLICATION REMAINS DISABLED UNTIL EVERY SELECTED PACK BLOCKER IS RESOLVED";
+      ? preview.selectedPackIds.length === 1
+        ? `${preview.packs[0]?.displayName.toUpperCase() ?? "THE SELECTED PACK"} IS READY TO PUBLISH`
+        : `${preview.selectedPackIds.length} SELECTED PACKS ARE READY TO PUBLISH`
+      : "ONE OR MORE SELECTED PACKS ARE INCOMPLETE";
   } catch (error) {
     clearPublicationPreview();
     showMessage(error.message);
@@ -2219,7 +2325,12 @@ async function reviewPackPublication() {
 
 async function applyPackPublication() {
   const preview = state.publicationPreview;
-  if (preview === null || !preview.valid || state.publicationBusy || qs("#publication-confirmation").value !== preview.confirmation) return;
+  if (preview === null || !preview.valid || state.publicationBusy) return;
+  const selectedNames = preview.packs.map((pack) => pack.displayName.toUpperCase());
+  const confirmationMessage = preview.selectedPackIds.length === 1
+    ? `Publish ${selectedNames[0] ?? "the selected Pack"}?\n\nThis will send the staged Pack to Discord and create an irreversible Release record.`
+    : `Publish ${preview.selectedPackIds.length} selected Packs?\n\n${selectedNames.join(" · ")} will publish in canonical Pack order. A later Discord failure can leave earlier Packs published and later Packs unattempted.`;
+  if (!window.confirm(confirmationMessage)) return;
   clearMessage();
   state.publicationBusy = true;
   qs("#publication-result").hidden = true;
@@ -3323,7 +3434,7 @@ function currentMaintenancePack() {
 function clearPackMaintenancePreview() {
   state.packMaintenancePreview = null;
   qs("#pack-maintenance-preview").hidden = true;
-  qs("#pack-maintenance-confirmation").value = "";
+  qs("#pack-maintenance-apply-guidance").textContent = "Review a Pack change before applying it. A standard confirmation will appear immediately before the governed update.";
   qs("#pack-maintenance-apply").disabled = true;
 }
 
@@ -3331,15 +3442,9 @@ function setMaintenancePack(packId) {
   const pack = state.packMaintenance?.packs.find((entry) => entry.id === packId) ?? null;
   state.packMaintenanceSelectedId = pack?.id ?? "";
   state.packMaintenanceAssetIds = pack ? [...pack.assetIds] : [];
-  state.packMaintenanceOrder = state.packMaintenance ? state.packMaintenance.packs.map((entry) => entry.id) : [];
   state.packMaintenanceHeldAssetId = "";
-  if (pack) {
-    qs("#pack-maintenance-display").value = pack.displayName;
-    qs("#pack-maintenance-channel").value = pack.logicalChannel;
-  } else {
-    qs("#pack-maintenance-display").value = "";
-    qs("#pack-maintenance-channel").value = "";
-  }
+  state.packMaintenanceDisplayName = pack?.displayName ?? "";
+  state.packMaintenanceLogicalChannel = pack?.logicalChannel ?? "";
   clearPackMaintenancePreview();
   renderPackMaintenance();
 }
@@ -3382,13 +3487,33 @@ function renderPackMaintenance() {
   const data = state.packMaintenance;
   const select = qs("#pack-maintenance-pack");
   if (data === null) return;
-  select.innerHTML = data.packs.map((pack) => `<option value="${escapeAttribute(pack.id)}">${escapeHtml(pack.displayName)} · ${escapeHtml(pack.id.toUpperCase())}</option>`).join("");
+  const packsById = new Map(data.packs.map((pack) => [pack.id, pack]));
+  const orderedPacks = state.packMaintenanceOrder
+    .map((id) => packsById.get(id))
+    .filter((pack) => pack !== undefined);
+  const visiblePacks = orderedPacks.length === data.packs.length ? orderedPacks : data.packs;
+  select.innerHTML = visiblePacks.map((pack, index) => `<option value="${escapeAttribute(pack.id)}">${String(index + 1).padStart(2, "0")} · ${escapeHtml(pack.displayName)} · ${escapeHtml(pack.id.toUpperCase())}</option>`).join("");
   select.value = state.packMaintenanceSelectedId;
   const pack = currentMaintenancePack();
   const disabled = pack === null || state.packMaintenanceBusy;
   for (const id of ["#pack-maintenance-display", "#pack-maintenance-channel", "#pack-maintenance-pack-up", "#pack-maintenance-pack-down", "#pack-maintenance-review", "#pack-maintenance-delete"]) qs(id).disabled = disabled;
-  if (pack === null) return;
+  if (pack === null) {
+    refreshVisionxSelects();
+    return;
+  }
+
   qs("#pack-maintenance-state").textContent = `${data.packs.length} CURRENT PACKS`;
+  qs("#pack-maintenance-display").value = state.packMaintenanceDisplayName;
+  const channelSelect = qs("#pack-maintenance-channel");
+  channelSelect.innerHTML = '<option value="">SELECT CHANNEL</option>' + data.logicalChannels
+    .map((channel) => `<option value="${escapeAttribute(channel)}">${escapeHtml(channel.toUpperCase())}</option>`)
+    .join("");
+  const canonicalChannel = data.logicalChannels.includes(state.packMaintenanceLogicalChannel)
+    ? state.packMaintenanceLogicalChannel
+    : pack.logicalChannel;
+  state.packMaintenanceLogicalChannel = canonicalChannel;
+  channelSelect.value = canonicalChannel;
+
   qs("#pack-maintenance-workspace").textContent = `${pack.state.toUpperCase()} · ${pack.capturedCount} CAPTURED`;
   qs("#pack-maintenance-bindings").textContent = String(pack.boundThreadCount);
   qs("#pack-maintenance-releases").textContent = String(pack.releaseCount);
@@ -3396,6 +3521,11 @@ function renderPackMaintenance() {
   qs("#pack-maintenance-order").textContent = `PACK ORDER ${orderIndex + 1} / ${state.packMaintenanceOrder.length}`;
   qs("#pack-maintenance-pack-up").disabled = disabled || orderIndex <= 0;
   qs("#pack-maintenance-pack-down").disabled = disabled || orderIndex < 0 || orderIndex >= state.packMaintenanceOrder.length - 1;
+  qs("#pack-maintenance-order-preview").innerHTML = state.packMaintenanceOrder.map((packId, index) => {
+    const ordered = packsById.get(packId);
+    const current = packId === pack.id;
+    return `<span class="pack-order-position${current ? " current" : ""}"><b>${String(index + 1).padStart(2, "0")}</b>${escapeHtml(ordered?.displayName ?? packId.toUpperCase())}</span>`;
+  }).join("");
 
   const held = data.heldAssets.filter((asset) => !state.packMaintenanceAssetIds.includes(asset.id));
   const heldSelect = qs("#pack-maintenance-held-asset");
@@ -3412,10 +3542,12 @@ function renderPackMaintenance() {
   qsa("[data-maintenance-up]").forEach((button) => button.addEventListener("click", () => moveMaintenanceMember(Number(button.dataset.maintenanceUp), -1)));
   qsa("[data-maintenance-down]").forEach((button) => button.addEventListener("click", () => moveMaintenanceMember(Number(button.dataset.maintenanceDown), 1)));
   qsa("[data-maintenance-remove]").forEach((button) => button.addEventListener("click", () => removeMaintenanceMember(Number(button.dataset.maintenanceRemove))));
+  refreshVisionxSelects();
 }
 
 async function loadPackMaintenance() {
   state.packMaintenance = await api("/api/v1/packs/maintenance");
+  state.packMaintenanceOrder = state.packMaintenance.packs.map((pack) => pack.id);
   const selected = state.packMaintenance.packs.some((pack) => pack.id === state.packMaintenanceSelectedId)
     ? state.packMaintenanceSelectedId
     : state.packMaintenance.packs[0]?.id ?? "";
@@ -3426,20 +3558,24 @@ function renderPackMaintenancePreview() {
   const preview = state.packMaintenancePreview;
   if (preview === null) return clearPackMaintenancePreview();
   qs("#pack-maintenance-preview").hidden = false;
-  qs("#pack-maintenance-preview-state").textContent = preview.ready ? "READY FOR CONFIRMATION" : "BLOCKED";
+  qs("#pack-maintenance-preview-state").textContent = preview.ready ? "READY TO APPLY" : "BLOCKED";
   qs("#pack-maintenance-preview-state").className = `workspace-status ${preview.ready ? "valid" : "blocked"}`;
   qs("#pack-maintenance-preview-summary").innerHTML = `<p><strong>${escapeHtml(preview.operation.toUpperCase())}</strong> · ${escapeHtml(preview.packDisplayName)} · ${preview.changes.length} CHANGE${preview.changes.length === 1 ? "" : "S"}</p><ul>${preview.changes.map((change) => `<li>${escapeHtml(change.field.replaceAll("Name", " name").replaceAll("Order", " order").toUpperCase())}: ${escapeHtml(JSON.stringify(change.before))} → ${escapeHtml(JSON.stringify(change.after))}</li>`).join("")}</ul>`;
   const blockers = qs("#pack-maintenance-preview-blockers");
   blockers.hidden = preview.blockers.length === 0;
   blockers.innerHTML = preview.blockers.length ? `<ul>${preview.blockers.map((blocker) => `<li>${escapeHtml(blocker.detail)}</li>`).join("")}</ul>` : "";
-  qs("#pack-maintenance-confirmation").placeholder = preview.confirmation;
+  qs("#pack-maintenance-apply-guidance").textContent = preview.ready
+    ? preview.operation === "delete"
+      ? `Pack ${preview.packDisplayName.toUpperCase()} is ready for deletion. Historical Releases will be preserved.`
+      : "The reviewed Pack change is ready to apply. Current source state will be revalidated before mutation."
+    : "Resolve every listed Pack blocker, then review the change again.";
   qs("#pack-maintenance-apply").textContent = preview.operation === "delete" ? "DELETE PACK" : "APPLY PACK CHANGE";
   updatePackMaintenanceApply();
 }
 
 function updatePackMaintenanceApply() {
   const preview = state.packMaintenancePreview;
-  qs("#pack-maintenance-apply").disabled = state.packMaintenanceBusy || preview === null || !preview.ready || qs("#pack-maintenance-confirmation").value !== preview.confirmation;
+  qs("#pack-maintenance-apply").disabled = state.packMaintenanceBusy || preview === null || !preview.ready;
 }
 
 async function reviewPackMaintenance(operation) {
@@ -3453,8 +3589,8 @@ async function reviewPackMaintenance(operation) {
     const change = operation === "delete" ? { operation: "delete", packId: pack.id } : {
       operation: "update",
       packId: pack.id,
-      displayName: qs("#pack-maintenance-display").value,
-      logicalChannel: qs("#pack-maintenance-channel").value,
+      displayName: state.packMaintenanceDisplayName,
+      logicalChannel: state.packMaintenanceLogicalChannel || pack.logicalChannel,
       assetIds: [...state.packMaintenanceAssetIds],
       packOrder: [...state.packMaintenanceOrder],
     };
@@ -3472,7 +3608,11 @@ async function reviewPackMaintenance(operation) {
 
 async function applyPackMaintenance() {
   const preview = state.packMaintenancePreview;
-  if (preview === null || !preview.ready || state.packMaintenanceBusy || qs("#pack-maintenance-confirmation").value !== preview.confirmation) return;
+  if (preview === null || !preview.ready || state.packMaintenanceBusy) return;
+  const confirmationMessage = preview.operation === "delete"
+    ? `Delete Pack ${preview.packDisplayName.toUpperCase()}?\n\nThe current Pack definition will be removed. Historical Releases will be preserved.`
+    : `Apply the reviewed changes to Pack ${preview.packDisplayName.toUpperCase()}?\n\nCurrent Pack definitions will be revalidated immediately before the governed update.`;
+  if (!window.confirm(confirmationMessage)) return;
   clearMessage();
   state.packMaintenanceBusy = true;
   updatePackMaintenanceApply();
@@ -3541,6 +3681,7 @@ async function openReleaseDetail(packId, releaseId) {
 async function activateView(view, options = {}) {
   const nextView = Object.hasOwn(VIEW_LABELS, view) ? view : "workspace";
   const changed = state.activeView !== nextView;
+  if (changed) closeVisionxSelect();
   const generation = ++state.viewActivationGeneration;
   state.activeView = nextView;
   if (changed) clearMessage();
@@ -3571,6 +3712,7 @@ async function activateView(view, options = {}) {
   } finally {
     setViewBusy(nextView, false);
     if (generation === state.viewActivationGeneration) {
+      if (loaded) refreshVisionxSelects();
       if (loaded) announceView(nextView);
       else qs("#view-status").textContent = `${VIEW_LABELS[nextView]} workspace failed to load.`;
       if (loaded && options.focusPanel === true) {
@@ -3684,7 +3826,6 @@ qs("#renderer-watermark").addEventListener("change", (event) => {
 });
 qs("#render-chart").addEventListener("click", () => void runStandaloneRender());
 qs("#publication-review").addEventListener("click", () => void reviewPackPublication());
-qs("#publication-confirmation").addEventListener("input", updatePublicationApplyButton);
 qs("#publication-apply").addEventListener("click", () => void applyPackPublication());
 qs("#workspace-pack").addEventListener("change", () => {
   clearPackPreviewView();
@@ -3752,9 +3893,14 @@ qs("#server-review-configuration").addEventListener("click", () => void reviewSe
 qs("#server-apply").addEventListener("click", () => void applyServerChange());
 qs("#operator-run-export-audit").addEventListener("click", () => void runExportAudit());
 qs("#pack-maintenance-pack").addEventListener("change", (event) => setMaintenancePack(event.target.value));
-for (const id of ["#pack-maintenance-display", "#pack-maintenance-channel"]) {
-  qs(id).addEventListener("input", clearPackMaintenancePreview);
-}
+qs("#pack-maintenance-display").addEventListener("input", (event) => {
+  state.packMaintenanceDisplayName = event.target.value;
+  clearPackMaintenancePreview();
+});
+qs("#pack-maintenance-channel").addEventListener("change", (event) => {
+  state.packMaintenanceLogicalChannel = event.target.value;
+  clearPackMaintenancePreview();
+});
 qs("#pack-maintenance-pack-up").addEventListener("click", () => moveMaintenancePack(-1));
 qs("#pack-maintenance-pack-down").addEventListener("click", () => moveMaintenancePack(1));
 qs("#pack-maintenance-held-asset").addEventListener("change", (event) => {
@@ -3771,11 +3917,22 @@ qs("#pack-maintenance-add-asset").addEventListener("click", () => {
 });
 qs("#pack-maintenance-review").addEventListener("click", () => void reviewPackMaintenance("update"));
 qs("#pack-maintenance-delete").addEventListener("click", () => void reviewPackMaintenance("delete"));
-qs("#pack-maintenance-confirmation").addEventListener("input", updatePackMaintenanceApply);
 qs("#pack-maintenance-apply").addEventListener("click", () => void applyPackMaintenance());
 qs("#archive-pack-filter").addEventListener("change", renderReleaseArchive);
-window.addEventListener("resize", () => requestAnimationFrame(positionRendererAssetResults));
-window.addEventListener("scroll", () => requestAnimationFrame(positionRendererAssetResults), true);
+document.addEventListener("click", (event) => {
+  if (openVisionxSelect === null) return;
+  const component = visionxSelectComponents.get(openVisionxSelect);
+  if (component === undefined) return;
+  if (!component.root.contains(event.target) && !component.menu.contains(event.target)) closeVisionxSelect(openVisionxSelect);
+});
+window.addEventListener("resize", () => requestAnimationFrame(() => {
+  positionRendererAssetResults();
+  if (openVisionxSelect !== null) positionVisionxSelectMenu(openVisionxSelect);
+}));
+window.addEventListener("scroll", () => requestAnimationFrame(() => {
+  positionRendererAssetResults();
+  if (openVisionxSelect !== null) positionVisionxSelectMenu(openVisionxSelect);
+}), true);
 
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
@@ -3788,6 +3945,7 @@ for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
 
 async function start() {
   try {
+    refreshVisionxSelects();
     await refreshStatus();
     await loadChannels();
     restoreInput();

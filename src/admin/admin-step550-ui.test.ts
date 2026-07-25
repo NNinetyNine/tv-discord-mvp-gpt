@@ -40,27 +40,18 @@ describe("Step 550 UI and workflow adjustments", () => {
     expect(js).toContain('V WATERMARK ${result.watermarkEnabled ? "ON" : "OFF"}');
   });
 
-  it("renders every publication blocker with an exact destination and action", async () => {
+  it("keeps publication diagnostics limited to deliberately selected Packs", async () => {
     const [html, js] = await Promise.all([
       readFile(resolve("src/admin-ui/index.html"), "utf8"),
       readFile(resolve("src/admin-ui/app.js"), "utf8"),
     ]);
     expect(html).toContain('id="publication-diagnostics"');
-    for (const code of [
-      "pack_incomplete",
-      "missing_staged_images",
-      "channel_unresolved",
-      "asset_threads_unresolved",
-      "interrupted_release_exists",
-      "published_release_cleanup_required",
-      "discord_unavailable",
-    ]) expect(js).toContain(`case "${code}"`);
-    for (const destination of ["workspace", "server", "threads", "archive", "registry"]) {
-      expect(js).toContain(`view: "${destination}"`);
-    }
-    expect(js).toContain("LIVE DISCORD PREFLIGHT");
-    expect(js).toContain("Test Current Server");
-    expect(js).toContain("Verify Pack Routing");
+    expect(html).toContain("Only the selected Packs are evaluated");
+    expect(js).toContain("const selectedPacks = workspace.packs.filter");
+    expect(js).toContain("Unselected Packs are not evaluated and cannot block publication.");
+    expect(js).toContain("ONE OR MORE SELECTED PACKS ARE INCOMPLETE");
+    expect(js).not.toContain("publicationBlockerExplanation");
+    expect(js).not.toContain("LIVE DISCORD PREFLIGHT");
   });
 
   it("keeps renderer search results above surrounding panels and repositions them within the viewport", async () => {
@@ -68,7 +59,7 @@ describe("Step 550 UI and workflow adjustments", () => {
       readFile(resolve("src/admin-ui/styles.css"), "utf8"),
       readFile(resolve("src/admin-ui/app.js"), "utf8"),
     ]);
-    expect(css).toMatch(/\.renderer-asset-search \.asset-search-results\s*\{[\s\S]*position:\s*fixed;[\s\S]*z-index:\s*60;/u);
+    expect(css).toMatch(/\.renderer-asset-search \.asset-search-results\s*\{[\s\S]*position:\s*absolute;[\s\S]*z-index:\s*60;/u);
     expect(js).toContain("function positionRendererAssetResults()");
     expect(js).toContain("availableBelow < 180 && availableAbove > availableBelow");
     expect(js).toContain('panel.dataset.placement = useAbove ? "above" : "below"');
@@ -85,10 +76,10 @@ describe("Step 550 UI and workflow adjustments", () => {
     expect(html.match(/class="file-picker-name"/gu)?.length).toBe(4);
     expect(css).toContain("grid-template-columns: 9rem minmax(0, 1fr)");
     expect(css).toContain("text-overflow: ellipsis");
-    expect(html).toMatch(/class="workspace-session-actions"[\s\S]*id="workspace-start-session"[\s\S]*id="workspace-scan-session"[\s\S]*id="workspace-manual-fallback"[\s\S]*<\/div>[\s\S]*id="workspace-import"/u);
+    expect(html).toMatch(/class="workspace-session-actions"[\s\S]*id="workspace-manual-fallback"[\s\S]*id="workspace-start-session"[\s\S]*id="workspace-scan-session"[\s\S]*<\/div>[\s\S]*id="workspace-import"/u);
     expect(js).toContain("setManualFallbackOpen");
-    expect(html).toMatch(/class="pack-maintenance-fields"[\s\S]*CURRENT PACK[\s\S]*DISPLAY NAME[\s\S]*LOGICAL CHANNEL[\s\S]*WORKSPACE[\s\S]*THREAD BINDINGS[\s\S]*RELEASES/u);
-    expect(css).toContain("grid-template-columns: repeat(6, minmax(9.5rem, 1fr))");
+    expect(html).toMatch(/class="pack-maintenance-pack-selector"[\s\S]*CURRENT PACK[\s\S]*class="pack-maintenance-fields"[\s\S]*DISPLAY NAME[\s\S]*LOGICAL CHANNEL[\s\S]*WORKSPACE[\s\S]*THREAD BINDINGS[\s\S]*RELEASES/u);
+    expect(css).toContain("grid-template-columns: repeat(5, minmax(10rem, 1fr))");
   });
 
   it("removes typed Server confirmation while retaining validated review and standard confirmation", async () => {

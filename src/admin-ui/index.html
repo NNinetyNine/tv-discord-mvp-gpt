@@ -27,8 +27,8 @@
   <nav id="primary-nav" class="primary-nav" aria-label="Administration workspaces">
     <button id="nav-workspace" type="button" data-view="workspace" aria-controls="view-workspace" aria-current="page" tabindex="0">WORKSPACE</button>
     <button id="nav-threads" type="button" data-view="threads" aria-controls="view-threads" tabindex="-1">THREADS</button>
-    <button id="nav-server" type="button" data-view="server" aria-controls="view-server" tabindex="-1">SERVER</button>
     <button id="nav-packs" type="button" data-view="packs" aria-controls="view-packs" tabindex="-1">PACKS</button>
+    <button id="nav-server" type="button" data-view="server" aria-controls="view-server" tabindex="-1">SERVER</button>
     <button id="nav-archive" type="button" data-view="archive" aria-controls="view-archive" tabindex="-1">ARCHIVE</button>
     <button id="nav-renderer" type="button" data-view="renderer" aria-controls="view-renderer" tabindex="-1">RENDER</button>
     <button id="nav-registry" type="button" data-view="registry" aria-controls="view-registry" tabindex="-1">REGISTRY</button>
@@ -66,11 +66,11 @@
           <div><p class="micro-label">DELIBERATE MULTI-PACK RELEASE</p><h2 id="workspace-publication-heading">PUBLICATION QUEUE</h2></div>
           <span id="publication-selection-state" class="context-fact">NO PACKS SELECTED</span>
         </header>
-        <p class="window-help">Select one or more Packs. VisionX reviews every selected Pack together and enables one publication confirmation when all Assets are complete and staged, fully routed, and free from unresolved Release blockers. Capture-session review remains optional.</p>
+        <p class="window-help">Select one or more Packs for this Release. Only the selected Packs are evaluated; unselected Packs never affect publication eligibility. Capture-session review remains optional.</p>
         <div id="publication-pack-pills" class="publication-pack-pills" role="group" aria-label="Packs selected for publication"></div>
         <section id="publication-diagnostics" class="publication-diagnostics" aria-labelledby="publication-diagnostics-heading" aria-live="polite">
           <header>
-            <div><p class="micro-label">WHY PUBLISHING IS OR IS NOT AVAILABLE</p><h3 id="publication-diagnostics-heading">PUBLICATION GATES</h3></div>
+            <div><p class="micro-label">SELECTED PACK READINESS</p><h3 id="publication-diagnostics-heading">PUBLICATION GATES</h3></div>
             <span id="publication-diagnostics-state" class="workspace-status pending">CHECKING</span>
           </header>
           <div id="publication-diagnostics-content" class="publication-diagnostics-content"><p>Loading publication readiness.</p></div>
@@ -87,9 +87,9 @@
           </header>
           <div id="publication-preview-packs" class="publication-preview-packs"></div>
           <p class="publication-caveat">All selected Packs are revalidated immediately before the first Discord action. Delivery then proceeds in canonical Pack order; a later external failure can leave earlier Packs published and the remaining Packs unattempted, which VisionX reports explicitly.</p>
-          <div class="publication-confirmation">
-            <label><span>TYPE EXACT CONFIRMATION</span><input id="publication-confirmation" autocomplete="off" placeholder="REVIEW PACKS FIRST"></label>
-            <button id="publication-apply" class="primary-action" type="button" disabled>PUBLISH SELECTED PACKS</button>
+          <div class="publication-confirmation publication-confirmation-standard">
+            <p id="publication-apply-guidance">Complete the selected-Pack review before publishing. A standard confirmation will appear immediately before Discord delivery.</p>
+            <button id="publication-apply" class="primary-action" type="button" disabled>PUBLISH PACK</button>
           </div>
         </section>
         <section id="publication-result" class="publication-result" hidden aria-live="polite"></section>
@@ -113,9 +113,12 @@
           <button id="workspace-downloads-apply" class="primary-action" type="button">USE THIS FOLDER</button>
         </div>
         <div class="workspace-session-actions">
+          <button id="workspace-manual-fallback" class="manual-fallback-control" type="button" aria-expanded="false" aria-controls="workspace-import">
+            <span><span class="micro-label">MANUAL FALLBACK</span><strong>IMPORT &amp; REVIEW ONE PNG</strong></span>
+            <span class="manual-fallback-state" aria-hidden="true"></span>
+          </button>
           <button id="workspace-start-session" class="outline-action" type="button">START NEW SESSION</button>
           <button id="workspace-scan-session" class="primary-action" type="button" disabled>SYNC DOWNLOADS &amp; UPDATE PACK</button>
-          <button id="workspace-manual-fallback" class="outline-action" type="button" aria-expanded="false" aria-controls="workspace-import">MANUAL FALLBACK</button>
         </div>
         <p id="workspace-session-guidance" class="workspace-remaining">CONFIGURE A LOCAL CHART DOWNLOADS FOLDER</p>
         <div id="workspace-scan-results" class="workspace-scan-results" hidden></div>
@@ -348,8 +351,10 @@
           <span id="pack-maintenance-state" class="context-fact">LOADING PACKS</span>
         </header>
         <p class="window-help">Rename, reassign the logical route, add held Registry Assets, remove or reorder members, reorder Packs, or delete an Empty Pack. Membership and member-order changes remain Empty-only. Route changes and deletion are blocked while persistent thread bindings exist.</p>
-        <div class="pack-maintenance-fields">
+        <div class="pack-maintenance-pack-selector">
           <label><span>CURRENT PACK</span><select id="pack-maintenance-pack"><option value="">SELECT PACK</option></select></label>
+        </div>
+        <div class="pack-maintenance-fields">
           <label><span>DISPLAY NAME</span><input id="pack-maintenance-display" maxlength="120" autocomplete="off"></label>
           <label><span>LOGICAL CHANNEL</span><select id="pack-maintenance-channel"><option value="">SELECT CHANNEL</option></select></label>
           <div class="derived-channel"><span>WORKSPACE</span><strong id="pack-maintenance-workspace">—</strong></div>
@@ -361,6 +366,7 @@
           <button id="pack-maintenance-pack-down" class="outline-action compact-action" type="button">MOVE PACK LATER</button>
           <span id="pack-maintenance-order" class="context-fact">—</span>
         </div>
+        <div id="pack-maintenance-order-preview" class="pack-order-preview" aria-live="polite"></div>
         <div class="asset-search-picker pack-held-asset">
           <label><span>ADD HELD REGISTRY ASSET</span><select id="pack-maintenance-held-asset"><option value="">SELECT HELD ASSET</option></select></label>
           <button id="pack-maintenance-add-asset" class="outline-action" type="button" disabled>ADD TO PACK</button>
@@ -374,8 +380,8 @@
           <header><div><p class="micro-label">EXACT PACK PREFLIGHT</p><h3>PACK CHANGE REVIEW</h3></div><span id="pack-maintenance-preview-state" class="workspace-status pending">AWAITING REVIEW</span></header>
           <div id="pack-maintenance-preview-summary"></div>
           <div id="pack-maintenance-preview-blockers" class="server-preview-issues" hidden></div>
-          <div class="publication-confirmation">
-            <label><span>TYPE EXACT CONFIRMATION</span><input id="pack-maintenance-confirmation" autocomplete="off" placeholder="REVIEW PACK FIRST"></label>
+          <div class="publication-confirmation publication-confirmation-standard">
+            <p id="pack-maintenance-apply-guidance">Review a Pack change before applying it. A standard confirmation will appear immediately before the governed update.</p>
             <button id="pack-maintenance-apply" class="primary-action" type="button" disabled>APPLY PACK CHANGE</button>
           </div>
         </section>

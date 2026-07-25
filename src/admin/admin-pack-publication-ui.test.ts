@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("Multi-Pack publication UI", () => {
-  it("offers deliberate Pack selection, exact combined review, and one confirmation action", async () => {
+  it("offers deliberate Pack selection, combined review, and one standard confirmation action", async () => {
     const html = await readFile(resolve("src/admin-ui/index.html"), "utf8");
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
     for (const id of [
@@ -13,7 +13,7 @@ describe("Multi-Pack publication UI", () => {
       "publication-review",
       "publication-preview",
       "publication-preview-packs",
-      "publication-confirmation",
+      "publication-apply-guidance",
       "publication-apply",
       "publication-result",
     ]) expect(html).toContain(`id="${id}"`);
@@ -25,7 +25,10 @@ describe("Multi-Pack publication UI", () => {
     expect(js).toContain("publicationSupersedePackIds");
     expect(js).toContain("/api/v1/pack-workspace/publication/preview");
     expect(js).toContain("preview.confirmation");
-    expect(html).toContain("PUBLISH SELECTED PACKS");
+    expect(js).toContain('return packCount === 1 ? "PUBLISH PACK" : "PUBLISH SELECTED PACKS"');
+    expect(js).toContain("window.confirm(confirmationMessage)");
+    expect(html).not.toContain('id="publication-confirmation"');
+    expect(html).toContain("PUBLISH PACK");
   });
 
   it("surfaces blockers, interrupted Release policies, partial completion, and cleanup warnings", async () => {
@@ -42,19 +45,18 @@ describe("Multi-Pack publication UI", () => {
     expect(html).toContain("a later external failure can leave earlier Packs published and the remaining Packs unattempted");
   });
 
-  it("keeps publication disabled when Discord is unavailable without hiding local readiness evidence", async () => {
-    const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
+  it("evaluates only selected Packs while retaining exact selected-Pack evidence", async () => {
+    const [html, js] = await Promise.all([
+      readFile(resolve("src/admin-ui/index.html"), "utf8"),
+      readFile(resolve("src/admin-ui/app.js"), "utf8"),
+    ]);
     expect(js).toContain('"DISCORD BOT TOKEN MISSING"');
     expect(js).toContain('case "discord_unavailable"');
-    expect(js).toContain("DISCORD BOT TOKEN IS MISSING · REVIEW THE PUBLICATION GATES BELOW FOR EVERY OTHER CONDITION");
-    expect(js).toContain("publicationBlockerExplanation");
-    expect(js).toContain('case "pack_incomplete"');
-    expect(js).toContain('case "missing_staged_images"');
-    expect(js).toContain('case "channel_unresolved"');
-    expect(js).toContain('case "asset_threads_unresolved"');
-    expect(js).toContain("LIVE DISCORD PREFLIGHT");
+    expect(js).toContain("const selectedPacks = workspace.packs.filter");
+    expect(html).toContain("Only the selected Packs are evaluated");
     expect(js).toContain("publication.capturedCount");
     expect(js).toContain("publication.stagedCount");
     expect(js).toContain("publication.resolvedThreadCount");
+    expect(js).not.toContain("REVIEW THE PUBLICATION GATES BELOW FOR EVERY OTHER CONDITION");
   });
 });

@@ -37,7 +37,7 @@ describe("VisionX Administration design language", () => {
     expect(css.match(/color: var\(--primary-action-ink\);/gu)?.length ?? 0)
       .toBeGreaterThanOrEqual(2);
     expect(css).toMatch(
-      /#workspace-manual-fallback\[aria-expanded="true"\]\s*\{[^}]*color: var\(--primary-action-ink\);/u,
+      /\.manual-fallback-control\[aria-expanded="true"\]\s*\{[^}]*color: var\(--text\);/u,
     );
     expect(css).toContain("linear-gradient(135deg, #f3d573 0%, #d7aa3b 54%, #b98220 100%)");
 

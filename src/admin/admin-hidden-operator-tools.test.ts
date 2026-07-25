@@ -44,11 +44,15 @@ describe("Administration existing Pack, alias, audit, and Release surfaces", () 
       operation: "update",
       packId: "stocks",
       displayName: "Equities",
-      logicalChannel: "stocks",
+      logicalChannel: "",
       assetIds: [...stocks.assetIds, "aapl"],
       packOrder: nextOrder,
     });
-    expect(preview).toMatchObject({ ready: true, confirmation: "APPLY PACK STOCKS" });
+    expect(preview).toMatchObject({
+      ready: true,
+      confirmation: "APPLY PACK STOCKS",
+      changes: expect.not.arrayContaining([expect.objectContaining({ field: "logicalChannel" })]),
+    });
     await service.applyPackMaintenance(preview.previewId, preview.confirmation);
     expect(service.getPack("stocks")).toMatchObject({ displayName: "Equities", membershipCount: stocks.assetIds.length + 1 });
     expect(service.getPack("stocks").assets.at(-1)?.id).toBe("aapl");
