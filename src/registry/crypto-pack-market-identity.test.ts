@@ -23,6 +23,7 @@ const CRYPTO_IDENTITIES = Object.freeze([
   Object.freeze({ id: "eth", tradingView: "CRYPTO:ETHUSD", currency: "USD", filenameToken: "ETHUSD" }),
   Object.freeze({ id: "btc", tradingView: "CRYPTO:BTCUSD", currency: "USD", filenameToken: "BTCUSD" }),
   Object.freeze({ id: "total3", tradingView: "CRYPTOCAP:TOTAL3", currency: "USD", filenameToken: "TOTAL3" }),
+  Object.freeze({ id: "aio", tradingView: "CRYPTO:AIOUSD", currency: "USD", filenameToken: "AIOUSD" }),
 ]);
 
 function canonicalState() {
@@ -63,8 +64,8 @@ describe("canonical Crypto Pack market identities", () => {
   });
 
   it("has one collision-free canonical identity and filename token per member", () => {
-    expect(new Set(CRYPTO_IDENTITIES.map((identity) => identity.tradingView.toUpperCase())).size).toBe(16);
-    expect(new Set(CRYPTO_IDENTITIES.map((identity) => identity.filenameToken.toUpperCase())).size).toBe(16);
+    expect(new Set(CRYPTO_IDENTITIES.map((identity) => identity.tradingView.toUpperCase())).size).toBe(17);
+    expect(new Set(CRYPTO_IDENTITIES.map((identity) => identity.filenameToken.toUpperCase())).size).toBe(17);
     expect(() => canonicalState()).not.toThrow();
   });
 
@@ -74,13 +75,13 @@ describe("canonical Crypto Pack market identities", () => {
     const cryptoIds = new Set<string>(CRYPTO_IDENTITIES.map((identity) => identity.id));
     const cryptoEntries = audit.assets.filter((asset) => cryptoIds.has(asset.assetId));
 
-    expect(cryptoEntries).toHaveLength(16);
+    expect(cryptoEntries).toHaveLength(17);
     expect(cryptoEntries.every((asset) =>
       asset.marketIdentityStatus === "complete" &&
       asset.currencyStatus === "valid" &&
       asset.issues.length === 0
     )).toBe(true);
-    expect(audit.gaps).toHaveLength(228);
+    expect(audit.gaps).toHaveLength(226);
     expect(audit.gaps.every((gap) => !cryptoIds.has(gap.assetId))).toBe(true);
   });
 });

@@ -46,7 +46,7 @@
   "nflx": { "tradingView": "NFLX",   "display": "Netflix",     "channel": "stocks" },
   "nesn": { "tradingView": "NESN",   "display": "Nestlé",      "channel": "stocks" },
   "hims": { "tradingView": "HIMS",   "display": "Hims & Hers Health", "channel": "stocks" },
-  "1810": { "tradingView": "1810",   "display": "Xiaomi",      "channel": "stocks" },
+  "1810": { "tradingView": "HKEX:1810",   "display": "Xiaomi",      "currency": "HKD", "channel": "stocks" },
   "wday": { "tradingView": "WDAY",   "display": "Workday",     "channel": "stocks" },
   "vsxy": { "tradingView": "VSXY",   "display": "Victoria's Secret", "channel": "stocks" },
   "unh":  { "tradingView": "UNH",    "display": "UnitedHealth", "channel": "stocks" },
@@ -135,6 +135,6 @@
   "xlk":  { "tradingView": "XLK",    "display": "Technology Select Sector SPDR Fund", "channel": "etfs" },
   "xlv":  { "tradingView": "XLV",    "display": "Health Care Select Sector SPDR Fund", "channel": "etfs" },
   "dxy": { "tradingView": "TVC:DXY", "display": "DXY", "currency": "USD", "channel": "forex" },
-  "aio": { "tradingView": "CRYPTO:AIO", "display": "OLAXBT", "currency": "USD", "channel": "crypto" },
+  "aio": { "tradingView": "CRYPTO:AIOUSD", "display": "OLAXBT", "currency": "USD", "channel": "crypto" },
   "spcx": { "tradingView": "NASDAQ:SPCX", "display": "Space Exploration Technologies Corp", "currency": "USD", "channel": "stocks" }
 }

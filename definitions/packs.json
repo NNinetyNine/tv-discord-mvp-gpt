@@ -3,7 +3,7 @@
     "id": "crypto",
     "display": "Crypto",
     "channel": "crypto",
-    "assets": ["akt", "zec", "pepe", "doge", "fet", "xlm", "xrp", "sui", "tao", "trx", "link", "sol", "hype", "eth", "btc", "total3"]
+    "assets": ["akt", "zec", "pepe", "doge", "fet", "xlm", "xrp", "sui", "tao", "trx", "link", "sol", "hype", "eth", "btc", "total3", "aio"]
   },
   {
     "id": "stocks",
