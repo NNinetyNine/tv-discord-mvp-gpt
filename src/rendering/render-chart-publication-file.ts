@@ -26,6 +26,7 @@ export interface RenderChartPublicationFileOptions {
   readonly metadataPath: string;
   readonly outputPath: string;
   readonly receiptPath: string;
+  readonly watermarkEnabled?: boolean;
 }
 
 export interface RenderChartPublicationFileSuccess {
@@ -309,7 +310,9 @@ export async function renderChartPublicationFile(
 
   const sourceHashBefore = hash(sourceBytes);
   const render = dependencies.render ?? renderChartPublication;
-  const rendered = await render(sourceBytes, parsed.metadata);
+  const rendered = await render(sourceBytes, parsed.metadata, {
+    watermarkEnabled: options.watermarkEnabled !== false,
+  });
   if (!rendered.ok) return rendered;
 
   const token = randomBytes(12).toString("hex");

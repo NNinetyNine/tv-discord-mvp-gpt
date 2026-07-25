@@ -151,6 +151,8 @@ export type ChartFrameDetector = (image: DecodedPixelImage) => ChartFrameDetecti
 
 export interface ChartPublicationRenderDependencies {
   readonly detectFrame?: ChartFrameDetector;
+  /** Standalone rendering may omit the centre V watermark. Pack publication keeps the default enabled. */
+  readonly watermarkEnabled?: boolean;
 }
 
 interface BrandingAssets {
@@ -365,6 +367,7 @@ async function buildPublicationPng(
   layout: ChartPublicationLayout,
   metadata: ChartPublicationMetadata,
   branding: BrandingAssets,
+  watermarkEnabled: boolean,
 ): Promise<Buffer> {
   const cropWidth = detection.right - detection.left + 1;
   const cropHeight = detection.bottom - detection.top + 1;
@@ -403,19 +406,20 @@ async function buildPublicationPng(
     throw new Error("Sharp width-driven chart resize did not match deterministic layout dimensions");
   }
 
-  const watermark = await buildWatermark(branding.emblem, layout);
-  const chartWithWatermark = await sharp(resizedChart)
-    .composite([{
-      input: watermark,
-      left: layout.watermark.left - layout.placement.renderedLeft,
-      top: layout.watermark.top - layout.placement.renderedTop,
-    }])
-    .png({
-      compressionLevel: CHART_PUBLICATION_PNG_COMPRESSION_LEVEL,
-      adaptiveFiltering: false,
-      palette: false,
-    })
-    .toBuffer();
+  const chartWithWatermark = watermarkEnabled
+    ? await sharp(resizedChart)
+      .composite([{
+        input: await buildWatermark(branding.emblem, layout),
+        left: layout.watermark.left - layout.placement.renderedLeft,
+        top: layout.watermark.top - layout.placement.renderedTop,
+      }])
+      .png({
+        compressionLevel: CHART_PUBLICATION_PNG_COMPRESSION_LEVEL,
+        adaptiveFiltering: false,
+        palette: false,
+      })
+      .toBuffer()
+    : resizedChart;
 
   const [headerEmblem, footerEmblem, footerWordmark] = await Promise.all([
     resizeBrandAsset(branding.emblem, layout.headerEmblem),
@@ -552,6 +556,7 @@ export async function renderChartPublication(
   if (boundsFailure !== null) return boundsFailure;
 
   const layout = calculateChartPublicationLayout(detection.frameWidth, detection.frameHeight);
+  const watermarkEnabled = dependencies.watermarkEnabled !== false;
   let branding: BrandingAssets;
   let outputPng: Buffer;
   try {
@@ -562,6 +567,7 @@ export async function renderChartPublication(
       layout,
       canonicalMetadata,
       branding,
+      watermarkEnabled,
     );
   } catch (error) {
     return freezeFailure(
@@ -626,6 +632,7 @@ export async function renderChartPublication(
       watermark: {
         assetSha256: CHART_PUBLICATION_BRANDING.emblem.sha256,
         ...layout.watermark,
+        opacity: watermarkEnabled ? layout.watermark.opacity : 0,
       },
     },
     metadata: freezeMetadata(canonicalMetadata),

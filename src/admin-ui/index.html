@@ -68,6 +68,13 @@
         </header>
         <p class="window-help">Select one or more Packs. VisionX reviews every selected Pack together and enables one publication confirmation when all Assets are complete and staged, fully routed, and free from unresolved Release blockers. Capture-session review remains optional.</p>
         <div id="publication-pack-pills" class="publication-pack-pills" role="group" aria-label="Packs selected for publication"></div>
+        <section id="publication-diagnostics" class="publication-diagnostics" aria-labelledby="publication-diagnostics-heading" aria-live="polite">
+          <header>
+            <div><p class="micro-label">WHY PUBLISHING IS OR IS NOT AVAILABLE</p><h3 id="publication-diagnostics-heading">PUBLICATION GATES</h3></div>
+            <span id="publication-diagnostics-state" class="workspace-status pending">CHECKING</span>
+          </header>
+          <div id="publication-diagnostics-content" class="publication-diagnostics-content"><p>Loading publication readiness.</p></div>
+        </section>
         <div class="publication-queue-actions">
           <span>SELECT OR DESELECT EACH PACK DIRECTLY</span>
           <button id="publication-review" class="primary-action" type="button" disabled>REVIEW PUBLICATION</button>
@@ -108,25 +115,26 @@
         <div class="workspace-session-actions">
           <button id="workspace-start-session" class="outline-action" type="button">START NEW SESSION</button>
           <button id="workspace-scan-session" class="primary-action" type="button" disabled>SYNC DOWNLOADS &amp; UPDATE PACK</button>
+          <button id="workspace-manual-fallback" class="outline-action" type="button" aria-expanded="false" aria-controls="workspace-import">MANUAL FALLBACK</button>
         </div>
         <p id="workspace-session-guidance" class="workspace-remaining">CONFIGURE A LOCAL CHART DOWNLOADS FOLDER</p>
         <div id="workspace-scan-results" class="workspace-scan-results" hidden></div>
-        <details class="workspace-import">
-          <summary class="window-header">
+        <section id="workspace-import" class="workspace-import" aria-labelledby="workspace-import-heading" hidden>
+          <header class="window-header">
             <div><p class="micro-label">MANUAL FALLBACK</p><h3 id="workspace-import-heading">IMPORT &amp; REVIEW ONE PNG</h3></div>
             <span id="workspace-review-state" class="context-fact">SELECT AN ASSET</span>
-          </summary>
+          </header>
           <p class="window-help">Use this fallback only when a chart cannot be synchronized from Downloads. Previewing alone changes no Pack state.</p>
           <div class="workspace-import-fields">
             <label><span>PACK ASSET</span><select id="workspace-asset"><option value="">SELECT ASSET</option></select></label>
-            <label class="renderer-file"><span>TRADINGVIEW PNG</span><input id="workspace-source" type="file" accept="image/png"></label>
+            <label class="renderer-file file-picker"><span>TRADINGVIEW PNG</span><span class="file-picker-shell"><input id="workspace-source" type="file" accept="image/png"><span class="file-picker-button" aria-hidden="true">CHOOSE FILE</span><span id="workspace-source-name" class="file-picker-name">NO FILE SELECTED</span></span></label>
             <button id="workspace-preview-button" class="primary-action" type="button" disabled>RENDER PREVIEW</button>
           </div>
           <div class="renderer-guidance">
             <span id="workspace-file-state">SELECT A TRADINGVIEW PNG EXPORT</span>
             <span>ACCEPTANCE STAGES THE RENDERED PUBLICATION · NO DISCORD ACTION</span>
           </div>
-        </details>
+        </section>
       </section>
 
       <section id="workspace-preview" class="window renderer-result" hidden aria-live="polite">
@@ -304,8 +312,8 @@
         <div id="server-preview-issues" class="server-preview-issues" hidden></div>
         <div id="server-preview-routes" class="server-preview-routes"></div>
         <div class="server-confirmation">
-          <label><span>TYPE EXACT CONFIRMATION</span><input id="server-confirmation" autocomplete="off" placeholder="REVIEW ROUTES FIRST"></label>
-          <button id="server-apply" class="primary-action" type="button" disabled>APPLY SERVER CHANGE</button>
+          <p id="server-apply-guidance">Review the validated route, permission, tag, role, and binding evidence above. Applying requires one standard confirmation but no typed phrase.</p>
+          <button id="server-apply" class="primary-action" type="button" disabled>APPLY SERVER CONFIGURATION</button>
         </div>
       </section>
 
@@ -460,7 +468,7 @@
           <div><p class="micro-label">INDEPENDENT TOOL</p><h1 id="renderer-heading">STANDALONE RENDERER</h1></div>
           <span id="renderer-state" class="context-fact">LOCAL ONLY</span>
         </header>
-        <p class="window-help">Render a registered ticker at any supported timeframe. This does not change a Pack, stage a publication, create a Release, or contact Discord.</p>
+        <p class="window-help">Render a registered ticker at any supported timeframe and choose whether the local output includes the V watermark. This does not change a Pack, stage a publication, create a Release, or contact Discord. Watermark-free output remains standalone and cannot enter governed Pack publication.</p>
         <div class="renderer-fields">
           <div class="renderer-asset-search renderer-control">
             <label><span>REGISTRY ASSET</span><input id="renderer-asset-search" type="search" autocomplete="off" placeholder="Search all Registry assets"></label>
@@ -470,7 +478,8 @@
             <button id="renderer-open-registry" class="outline-action compact-action" type="button" hidden>OPEN IN REGISTRY</button>
           </div>
           <label class="renderer-control"><span>TIMEFRAME</span><select id="renderer-timeframe"><option value="">SELECT TIMEFRAME</option></select></label>
-          <label class="renderer-file renderer-control"><span>TRADINGVIEW PNG</span><input id="renderer-source" type="file" accept="image/png"></label>
+          <label class="renderer-file renderer-control file-picker"><span>TRADINGVIEW PNG</span><span class="file-picker-shell"><input id="renderer-source" type="file" accept="image/png"><span class="file-picker-button" aria-hidden="true">CHOOSE FILE</span><span id="renderer-source-name" class="file-picker-name">NO FILE SELECTED</span></span></label>
+          <label class="renderer-watermark-control renderer-control" for="renderer-watermark"><span>V WATERMARK</span><span class="visionx-switch-row"><input id="renderer-watermark" class="visionx-switch-input" type="checkbox" checked><span class="visionx-switch" aria-hidden="true"><span></span></span><strong id="renderer-watermark-state">ON</strong></span></label>
           <button id="render-chart" class="primary-action" type="button" disabled>RENDER CHART</button>
         </div>
         <div class="renderer-guidance">
@@ -542,7 +551,7 @@
             <dl id="registry-asset-facts" class="registry-asset-facts" hidden></dl>
             <div id="registry-primary-controls" class="registry-management-controls" hidden>
               <button id="registry-edit-asset" class="primary-action" type="button">EDIT METADATA</button>
-              <label class="registry-logo-upload"><span>REPLACE CANONICAL LOGO</span><input id="registry-logo-input" type="file" accept="image/png"></label>
+              <label class="registry-logo-upload file-picker"><span>REPLACE CANONICAL LOGO</span><span class="file-picker-shell"><input id="registry-logo-input" type="file" accept="image/png"><span class="file-picker-button" aria-hidden="true">CHOOSE FILE</span><span id="registry-logo-input-name" class="file-picker-name">NO FILE SELECTED</span></span></label>
               <button id="registry-remove-logo" class="outline-action" type="button" hidden>REMOVE LOGO</button>
               <button id="registry-retire-asset" class="danger-action" type="button">RETIRE ASSET</button>
             </div>
@@ -628,7 +637,7 @@
     </header>
     <p id="registry-import-guidance" class="window-help">Import new Assets only. VisionX validates every row, canonical MARKET:SYMBOL identities, channels, and optional Pack membership before one atomic Registry transaction is available.</p>
     <div class="registry-import-fields">
-      <label><span>CSV FILE</span><input id="registry-import-file" type="file" accept=".csv,text/csv"></label>
+      <label class="file-picker"><span>CSV FILE</span><span class="file-picker-shell"><input id="registry-import-file" type="file" accept=".csv,text/csv"><span class="file-picker-button" aria-hidden="true">CHOOSE FILE</span><span id="registry-import-file-name" class="file-picker-name">NO FILE SELECTED</span></span></label>
       <p id="registry-import-file-state">SELECT A UTF-8 CSV FILE</p>
       <details class="technical-details">
         <summary>CSV FORMAT</summary>
@@ -656,6 +665,6 @@
     </div>
   </aside>
 
-  <footer id="app-footer">VISIONX · LOCAL ADMINISTRATION · DISCORD PUBLICATION DISABLED</footer>
+  <footer id="app-footer">VISIONX · LOCAL ADMINISTRATION · CHECKING DISCORD PUBLISHER AUTHORITY</footer>
 </body>
 </html>

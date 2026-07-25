@@ -10,6 +10,7 @@ const state = {
   lookupGeneration: 0,
   renderOptions: null,
   renderSourceFile: null,
+  renderWatermarkEnabled: true,
   renderBusy: false,
   packWorkspace: null,
   packCaptureSession: null,
@@ -153,6 +154,21 @@ function clearMessage() {
   const box = qs("#message");
   box.hidden = true;
   qs("#message-text").textContent = "";
+}
+
+function setFilePickerName(inputId, file, emptyText = "NO FILE SELECTED") {
+  const label = qs(`#${inputId}-name`);
+  if (label === null) return;
+  label.textContent = file?.name ?? emptyText;
+  label.title = file?.name ?? "";
+}
+
+function setManualFallbackOpen(open) {
+  const button = qs("#workspace-manual-fallback");
+  const panel = qs("#workspace-import");
+  button.setAttribute("aria-expanded", String(open));
+  panel.hidden = !open;
+  if (open) requestAnimationFrame(() => qs("#workspace-asset").focus({ preventScroll: true }));
 }
 
 function packFormValue() {
@@ -1436,6 +1452,7 @@ function openRegistryImport() {
   state.registryImportBusy = false;
   qs("#registry-import-dialog").setAttribute("aria-busy", "false");
   qs("#registry-import-file").value = "";
+  setFilePickerName("registry-import-file", null);
   qs("#registry-import-file-state").textContent = "SELECT A UTF-8 CSV FILE";
   qs("#registry-review-import").disabled = true;
   resetRegistryImportPreview();
@@ -1461,6 +1478,7 @@ function closeRegistryImport(options = {}) {
 
 function setRegistryImportFile(file) {
   state.registryImportFile = file;
+  setFilePickerName("registry-import-file", file);
   resetRegistryImportPreview();
   const valid = file !== null && file.size > 0 && file.size <= 2 * 1024 * 1024;
   qs("#registry-review-import").disabled = !valid;
@@ -1639,6 +1657,7 @@ async function storeRegistryLogo(file) {
   if (!asset || !file) return;
   if (!window.confirm(`Store ${file.name} as the canonical logo for ${asset.displayName}?`)) {
     qs("#registry-logo-input").value = "";
+    setFilePickerName("registry-logo-input", null);
     return;
   }
   const expected = state.registryLogo?.evidence?.sha256 ?? "";
@@ -1656,6 +1675,7 @@ async function storeRegistryLogo(file) {
     await loadRegistryLogo(asset.id).catch(() => undefined);
   } finally {
     qs("#registry-logo-input").value = "";
+    setFilePickerName("registry-logo-input", null);
   }
 }
 
@@ -1786,6 +1806,28 @@ function selectRendererAsset(asset) {
   resetStandaloneResult();
 }
 
+function positionRendererAssetResults() {
+  const panel = qs("#renderer-asset-results");
+  const input = qs("#renderer-asset-search");
+  if (panel.hidden) return;
+  const rect = input.getBoundingClientRect();
+  const viewportPadding = 12;
+  const gap = 7;
+  const availableBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding - gap);
+  const availableAbove = Math.max(0, rect.top - viewportPadding - gap);
+  const useAbove = availableBelow < 180 && availableAbove > availableBelow;
+  const available = Math.max(72, Math.min(352, useAbove ? availableAbove : availableBelow));
+  const width = Math.max(220, Math.min(rect.width, window.innerWidth - (viewportPadding * 2)));
+  const left = Math.min(Math.max(viewportPadding, rect.left), window.innerWidth - width - viewportPadding);
+  panel.dataset.placement = useAbove ? "above" : "below";
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.right = "auto";
+  panel.style.width = `${Math.round(width)}px`;
+  panel.style.maxHeight = `${Math.floor(available)}px`;
+  panel.style.top = useAbove ? "auto" : `${Math.round(rect.bottom + gap)}px`;
+  panel.style.bottom = useAbove ? `${Math.round(window.innerHeight - rect.top + gap)}px` : "auto";
+}
+
 function renderRendererAssetSearch(query) {
   const panel = qs("#renderer-asset-results");
   const terms = query.trim().toLocaleLowerCase("en-US").split(/\s+/u).filter(Boolean);
@@ -1810,6 +1852,7 @@ function renderRendererAssetSearch(query) {
     const asset = state.renderOptions.assets.find((entry) => entry.id === button.dataset.rendererAsset);
     if (asset) selectRendererAsset(asset);
   }));
+  requestAnimationFrame(positionRendererAssetResults);
 }
 
 async function loadStandaloneRenderOptions() {
@@ -1850,18 +1893,23 @@ async function runStandaloneRender() {
   qs("#renderer-state").textContent = "RENDERING LOCAL ARTIFACT";
   updateRenderButton();
   try {
-    const query = new URLSearchParams({ assetId, timeframe, filename: file.name });
+    const query = new URLSearchParams({
+      assetId,
+      timeframe,
+      filename: file.name,
+      watermark: state.renderWatermarkEnabled ? "enabled" : "disabled",
+    });
     const result = await api(`/api/v1/standalone-renders?${query.toString()}`, {
       method: "POST",
       headers: { "Content-Type": "image/png" },
       body: file,
     });
-    const downloadStem = `${file.name.replace(/\.png$/iu, "")}-VSX`;
+    const downloadStem = `${file.name.replace(/\.png$/iu, "")}-VSX${result.watermarkEnabled ? "" : "-NO-WATERMARK"}`;
     qs("#renderer-result").hidden = false;
     qs("#renderer-result-heading").textContent = `${result.asset.id.toUpperCase()} RENDER COMPLETE`;
-    qs("#renderer-result-context").textContent = `${result.timeframe} · DATA AS OF ${result.dataAsOf}`;
+    qs("#renderer-result-context").textContent = `${result.timeframe} · DATA AS OF ${result.dataAsOf} · V WATERMARK ${result.watermarkEnabled ? "ON" : "OFF"}`;
     qs("#renderer-image").src = result.publicationUrl;
-    qs("#renderer-caption").textContent = `${result.asset.displayName} · ${result.asset.tradingViewSymbol} · SHA-256 ${result.outputSha256}`;
+    qs("#renderer-caption").textContent = `${result.asset.displayName} · ${result.asset.tradingViewSymbol} · V WATERMARK ${result.watermarkEnabled ? "ENABLED" : "DISABLED"} · SHA-256 ${result.outputSha256}`;
     qs("#download-publication").href = result.publicationUrl;
     qs("#download-publication").download = `${downloadStem}.png`;
     qs("#download-receipt").href = result.receiptUrl;
@@ -1902,6 +1950,147 @@ function publicationPackLabel(pack) {
   return pack.publication.ready ? "READY" : "BLOCKED";
 }
 
+function publicationBlockerExplanation(blocker, pack) {
+  switch (blocker.code) {
+    case "pack_incomplete":
+      return {
+        detail: `Capture and accept the missing chart${blocker.missingAssetIds.length === 1 ? "" : "s"}: ${blocker.missingAssetIds.map((id) => id.toUpperCase()).join(", ")}. Accepted revisions must make the Pack complete.`,
+        actions: [{ view: "workspace", label: "OPEN PACK WORKSPACE" }],
+      };
+    case "missing_staged_images":
+      return {
+        detail: `The current accepted PNG is not present in staging for ${blocker.missingAssetIds.map((id) => id.toUpperCase()).join(", ")}. Re-synchronise or accept a fresh preview for each Asset.`,
+        actions: [{ view: "workspace", label: "REPAIR STAGING" }],
+      };
+    case "channel_unresolved":
+      return {
+        detail: `Logical route ${pack.logicalChannel.toUpperCase()} has no usable Discord forum ID. Add or correct that route, then review publication again.`,
+        actions: [{ view: "server", label: "OPEN SERVER ROUTING" }],
+      };
+    case "asset_threads_unresolved":
+      return {
+        detail: `Persistent thread IDs are missing for ${blocker.missingAssetIds.map((id) => id.toUpperCase()).join(", ")}. Adopt or provision each thread under the configured forum.`,
+        actions: [{ view: "threads", label: "OPEN THREAD BINDINGS" }],
+      };
+    case "interrupted_release_exists":
+      return {
+        detail: `Release ${blocker.releaseId} is interrupted with ${blocker.postedCount}/${blocker.totalCount} Discord posts complete. Resume it, or explicitly allow a fresh superseding Release.`,
+        actions: [{ view: "archive", label: "INSPECT RELEASE" }, { view: "workspace", label: "RESUME OR SUPERSEDE" }],
+      };
+    case "published_release_cleanup_required":
+      return {
+        detail: `Published Release ${blocker.releaseId} still matches the active local Pack workspace. Verify the archived Release, then reset the local Pack state before publishing again.`,
+        actions: [{ view: "archive", label: "VERIFY ARCHIVE" }, { view: "workspace", label: "RESET LOCAL PACK" }],
+      };
+    case "discord_unavailable":
+      return {
+        detail: "This Administration process was started without usable Discord publisher authority. Restart it with DISCORD_BOT_TOKEN available, then test the current server connection.",
+        actions: [{ view: "server", label: "OPEN SERVER PREFLIGHT" }],
+      };
+    default:
+      return {
+        detail: "An unknown publication blocker was returned. Refresh canonical state and inspect the technical error before retrying.",
+        actions: [{ view: "workspace", label: "REFRESH WORKSPACE" }],
+      };
+  }
+}
+
+function publicationGateActionButton(action, packId, assetId = "") {
+  return `<button class="outline-action compact-action" type="button" data-publication-gate-view="${escapeAttribute(action.view)}" data-publication-gate-pack="${escapeAttribute(packId)}" data-publication-gate-asset="${escapeAttribute(assetId)}">${escapeHtml(action.label)}</button>`;
+}
+
+async function navigatePublicationGate(button) {
+  const view = button.dataset.publicationGateView;
+  const packId = button.dataset.publicationGatePack;
+  const assetId = button.dataset.publicationGateAsset;
+  await activateView(view, { focusPanel: true });
+  if (view === "workspace" && packId) {
+    qs("#workspace-pack").value = packId;
+    clearPackPreviewView();
+    state.packSourceFile = null;
+    qs("#workspace-source").value = "";
+    setFilePickerName("workspace-source", null);
+    renderPackWorkspace();
+    await loadCaptureSession();
+    qs("#workspace-automation-heading").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  if (view === "threads" && packId) {
+    qs("#thread-pack").value = packId;
+    renderThreadManagement();
+    if (assetId) {
+      qs("#thread-asset").value = assetId;
+      qs("#thread-id").value = selectedThreadAsset()?.threadId ?? "";
+      renderThreadManagement();
+    }
+    qs("#thread-adoption-heading").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  if (view === "archive" && packId) {
+    qs("#archive-pack-filter").value = packId;
+    renderReleaseArchive();
+  }
+  if (view === "registry" && assetId) {
+    qs("#registry-search").value = assetId;
+    await loadRegistry({ query: assetId, offset: 0 });
+    await selectRegistryAsset(assetId);
+  }
+}
+
+function renderPublicationDiagnostics() {
+  const workspace = state.packWorkspace;
+  if (workspace === null) return;
+  const content = qs("#publication-diagnostics-content");
+  const localBlockerCount = workspace.packs.reduce(
+    (total, pack) => total + pack.publication.blockers.filter((blocker) => blocker.code !== "discord_unavailable").length,
+    0,
+  );
+  const blockerCount = localBlockerCount + (workspace.publishAvailable ? 0 : 1);
+  const status = qs("#publication-diagnostics-state");
+  status.className = `workspace-status ${blockerCount === 0 ? "valid" : "blocked"}`;
+  status.textContent = blockerCount === 0 ? "LOCAL GATES CLEAR" : `${blockerCount} BLOCKER${blockerCount === 1 ? "" : "S"}`;
+
+  const cards = [];
+  if (!workspace.publishAvailable) {
+    const explanation = publicationBlockerExplanation({ code: "discord_unavailable" }, { logicalChannel: "" });
+    cards.push(`<article class="publication-gate-card blocked"><div><span class="publication-gate-code">DISCORD_UNAVAILABLE</span><p>DISCORD PUBLISHER AUTHORITY</p></div><div><strong>BOT TOKEN IS NOT AVAILABLE TO THIS PROCESS</strong><p>${escapeHtml(explanation.detail)}</p></div><div class="publication-gate-actions">${explanation.actions.map((action) => publicationGateActionButton(action, "")).join("")}</div></article>`);
+  }
+
+  for (const pack of workspace.packs) {
+    const blockers = pack.publication.blockers.filter((blocker) => blocker.code !== "discord_unavailable");
+    const metadataIssues = pack.assets.filter((asset) => !asset.renderReady);
+    const metadataDetail = metadataIssues.map((asset) => `${asset.id.toUpperCase()} (${asset.reconciliationIssues.map(rendererIssueLabel).join(", ")})`).join("; ");
+    if (blockers.length === 0) {
+      cards.push(`<article class="publication-gate-card ready"><div><span class="publication-gate-code">READY</span><p>${escapeHtml(pack.id.toUpperCase())} · ${escapeHtml(pack.logicalChannel.toUpperCase())}</p></div><div><strong>${escapeHtml(pack.displayName.toUpperCase())} LOCAL PUBLICATION GATES ARE CLEAR</strong><p>${pack.publication.capturedCount}/${pack.publication.totalCount} captured · ${pack.publication.stagedCount}/${pack.publication.totalCount} staged · ${pack.publication.resolvedThreadCount}/${pack.publication.totalCount} thread IDs resolved.${metadataIssues.length === 0 ? "" : ` Metadata warning: ${metadataDetail}. These Assets cannot be rendered again until Registry metadata is repaired.`}</p></div><div class="publication-gate-actions">${metadataIssues.length === 0 ? "" : publicationGateActionButton({ view: "registry", label: "REPAIR METADATA" }, pack.id, metadataIssues[0].id)}</div></article>`);
+      continue;
+    }
+    const details = blockers.map((blocker) => {
+      const explanation = publicationBlockerExplanation(blocker, pack);
+      return `<div><span class="publication-gate-code">${escapeHtml(blocker.code.toUpperCase())}</span><p>${escapeHtml(explanation.detail)}</p></div>`;
+    }).join("");
+    const actions = blockers.flatMap((blocker) => publicationBlockerExplanation(blocker, pack).actions);
+    const uniqueActions = [...new Map(actions.map((action) => [`${action.view}|${action.label}`, action])).values()];
+    const firstThreadAsset = blockers.find((blocker) => blocker.code === "asset_threads_unresolved")?.missingAssetIds?.[0] ?? "";
+    cards.push(`<article class="publication-gate-card blocked"><div><span class="publication-gate-code">${blockers.length} BLOCKER${blockers.length === 1 ? "" : "S"}</span><p>${escapeHtml(pack.id.toUpperCase())} · ${escapeHtml(pack.logicalChannel.toUpperCase())}</p></div><div><strong>${escapeHtml(pack.displayName.toUpperCase())} CANNOT PUBLISH YET</strong>${details}</div><div class="publication-gate-actions">${uniqueActions.map((action) => publicationGateActionButton(action, pack.id, action.view === "threads" ? firstThreadAsset : "")).join("")}</div></article>`);
+  }
+
+  const liveValidation = workspace.publishAvailable
+    ? "Discord publisher authority is present. Server permissions, forum tags and roles, and live thread state are external facts rather than durable local gates: run Server → Test Current Server and Threads → Verify Pack Routing immediately before publication. The publish operation revalidates canonical local state and reports any Discord rejection without hiding the failed Pack."
+    : "Live Discord permissions, forum ownership, and thread state cannot be tested until the Administration process has a Discord bot token. The local cards above still report Pack, staging, route, binding, Release, and metadata conditions exactly.";
+  const preflightPackId = [...state.publicationSelectedPackIds][0] ?? workspace.packs[0]?.id ?? "";
+  const preflightActions = workspace.publishAvailable
+    ? [
+        publicationGateActionButton({ view: "server", label: "TEST CURRENT SERVER" }, ""),
+        publicationGateActionButton({ view: "threads", label: "VERIFY PACK ROUTING" }, preflightPackId),
+      ]
+    : [publicationGateActionButton({ view: "server", label: "OPEN SERVER PREFLIGHT" }, "")];
+  content.innerHTML = `${cards.join("")}<div class="publication-external-note"><p><strong>LIVE DISCORD PREFLIGHT:</strong> ${escapeHtml(liveValidation)}</p><div class="publication-gate-actions">${preflightActions.join("")}</div></div>`;
+  qsa("[data-publication-gate-view]").forEach((button) => button.addEventListener("click", () => {
+    void navigatePublicationGate(button).catch((error) => showMessage(error.message));
+  }));
+  qs("#app-footer").textContent = workspace.publishAvailable
+    ? "VISIONX · LOCAL ADMINISTRATION · DISCORD PUBLISHER AUTHORITY AVAILABLE"
+    : "VISIONX · LOCAL ADMINISTRATION · DISCORD BOT TOKEN REQUIRED FOR PUBLICATION";
+}
+
 function clearPublicationPreview() {
   state.publicationPreview = null;
   qs("#publication-preview").hidden = true;
@@ -1928,7 +2117,7 @@ function renderPublicationQueue() {
     ? "PUBLICATION IN PROGRESS"
     : workspace.publishAvailable
       ? "PUBLICATION AVAILABLE"
-      : "DISCORD DISABLED";
+      : "DISCORD BOT TOKEN MISSING";
   qs("#publication-pack-pills").innerHTML = workspace.packs.map((pack) => {
     const selected = state.publicationSelectedPackIds.has(pack.id);
     const supersede = state.publicationSupersedePackIds.has(pack.id);
@@ -1948,11 +2137,12 @@ function renderPublicationQueue() {
     ? "NO PACKS SELECTED"
     : `${selectedPacks.length} SELECTED · ${readySelected.length} POTENTIALLY READY`;
   qs("#publication-guidance").textContent = !workspace.publishAvailable
-    ? "START ADMINISTRATION WITH A DISCORD BOT TOKEN TO ENABLE PUBLISHING"
+    ? "DISCORD BOT TOKEN IS MISSING · REVIEW THE PUBLICATION GATES BELOW FOR EVERY OTHER CONDITION"
     : selectedPacks.length === 0
       ? "SELECT PACKS TO BUILD ONE GOVERNED PUBLICATION OPERATION"
       : `${selectedPacks.map((pack) => pack.displayName.toUpperCase()).join(" · ")} · REVIEW ALL TOGETHER BEFORE DISCORD`;
   qs("#publication-review").disabled = state.publicationBusy || selectedPacks.length === 0;
+  renderPublicationDiagnostics();
 
   qsa("[data-publication-pack]").forEach((button) => button.addEventListener("click", () => {
     const packId = button.dataset.publicationPack;
@@ -2969,7 +3159,6 @@ async function testCurrentServer() {
 function clearServerPreview() {
   state.serverPreview = null;
   qs("#server-preview").hidden = true;
-  qs("#server-confirmation").value = "";
   qs("#server-apply").disabled = true;
 }
 
@@ -2981,7 +3170,7 @@ function renderServerPreview() {
   }
   qs("#server-preview").hidden = false;
   qs("#server-preview-heading").textContent = "SERVER CONFIGURATION REVIEW";
-  qs("#server-preview-state").textContent = preview.valid ? "READY FOR CONFIRMATION" : "BLOCKED";
+  qs("#server-preview-state").textContent = preview.valid ? "READY TO APPLY" : "BLOCKED";
   qs("#server-preview-state").className = `workspace-status ${preview.valid ? "valid" : "blocked"}`;
   qs("#server-preview-summary").innerHTML = `<p><strong>${preview.changedRouteCount}</strong> ROUTE${preview.changedRouteCount === 1 ? "" : "S"} CHANGE · <strong>${preview.affectedPackIds.length}</strong> AFFECTED PACK${preview.affectedPackIds.length === 1 ? "" : "S"} · <strong>${preview.bindingsToReestablish}</strong> THREAD BINDING${preview.bindingsToReestablish === 1 ? "" : "S"} TO RE-ESTABLISH</p>
     <p>No thread bindings may depend on a normal route change.</p>`;
@@ -3008,14 +3197,16 @@ function renderServerPreview() {
       <p>REQUIRED PERMISSIONS · ${escapeHtml(permissionFacts)}</p>
     </article>`;
   }).join("");
-  qs("#server-confirmation").placeholder = preview.confirmation;
+  qs("#server-apply-guidance").textContent = preview.valid
+    ? "All current route, permission, tag, role, and binding checks passed. Apply after the standard confirmation."
+    : "Resolve every listed issue, then review the configuration again.";
   qs("#server-apply").textContent = "APPLY SERVER CONFIGURATION";
   updateServerApplyButton();
 }
 
 function updateServerApplyButton() {
   const preview = state.serverPreview;
-  qs("#server-apply").disabled = state.serverBusy || preview === null || !preview.valid || qs("#server-confirmation").value !== preview.confirmation;
+  qs("#server-apply").disabled = state.serverBusy || preview === null || !preview.valid;
 }
 
 async function reviewServerChange() {
@@ -3044,7 +3235,10 @@ async function reviewServerChange() {
 
 async function applyServerChange() {
   const preview = state.serverPreview;
-  if (preview === null || !preview.valid || state.serverBusy || qs("#server-confirmation").value !== preview.confirmation) return;
+  if (preview === null || !preview.valid || state.serverBusy) return;
+  if (!window.confirm(`Apply the reviewed server configuration?
+
+${preview.changedRouteCount} route change${preview.changedRouteCount === 1 ? "" : "s"}; ${preview.bindingsToReestablish} persistent thread binding${preview.bindingsToReestablish === 1 ? "" : "s"} require re-establishment. No Discord content or credentials will be changed.`)) return;
   clearMessage();
   state.serverBusy = true;
   renderServerConfiguration();
@@ -3441,7 +3635,11 @@ qs("#registry-editor-backdrop").addEventListener("click", closeRegistryEditor);
 qs("#registry-editor").addEventListener("keydown", handleRegistryEditorKeydown);
 qs("#registry-review-change").addEventListener("click", () => void reviewRegistryChange());
 qs("#registry-apply-change").addEventListener("click", () => void applyRegistryChange());
-qs("#registry-logo-input").addEventListener("change", (event) => void storeRegistryLogo(event.target.files?.[0] ?? null));
+qs("#registry-logo-input").addEventListener("change", (event) => {
+  const file = event.target.files?.[0] ?? null;
+  setFilePickerName("registry-logo-input", file);
+  void storeRegistryLogo(file);
+});
 qs("#registry-remove-logo").addEventListener("click", () => void removeRegistryLogo());
 qs("#registry-retire-asset").addEventListener("click", () => void retireRegistryAssetFromUi());
 for (const id of ["#registry-field-display", "#registry-field-tradingview", "#registry-field-currency", "#registry-field-channel", "#registry-field-id"]) {
@@ -3473,9 +3671,15 @@ qs("#renderer-timeframe").addEventListener("change", resetStandaloneResult);
 qs("#renderer-source").addEventListener("change", (event) => {
   const file = event.target.files?.[0] ?? null;
   state.renderSourceFile = file;
+  setFilePickerName("renderer-source", file);
   qs("#renderer-file-state").textContent = file === null
     ? "SELECT A TRADINGVIEW PNG EXPORT"
-    : `${file.name} · ${file.size.toLocaleString()} BYTES`;
+    : `${file.size.toLocaleString()} BYTES · READY FOR LOCAL RENDER`;
+  resetStandaloneResult();
+});
+qs("#renderer-watermark").addEventListener("change", (event) => {
+  state.renderWatermarkEnabled = event.target.checked;
+  qs("#renderer-watermark-state").textContent = state.renderWatermarkEnabled ? "ON" : "OFF";
   resetStandaloneResult();
 });
 qs("#render-chart").addEventListener("click", () => void runStandaloneRender());
@@ -3486,6 +3690,7 @@ qs("#workspace-pack").addEventListener("change", () => {
   clearPackPreviewView();
   state.packSourceFile = null;
   qs("#workspace-source").value = "";
+  setFilePickerName("workspace-source", null);
   qs("#workspace-file-state").textContent = "SELECT A TRADINGVIEW PNG EXPORT";
   renderPackWorkspace();
   void loadCaptureSession().catch((error) => showMessage(error.message));
@@ -3494,6 +3699,7 @@ qs("#workspace-asset").addEventListener("change", renderPackWorkspace);
 qs("#workspace-source").addEventListener("change", (event) => {
   const file = event.target.files?.[0] ?? null;
   state.packSourceFile = file;
+  setFilePickerName("workspace-source", file);
   qs("#workspace-file-state").textContent = file === null
     ? "SELECT A TRADINGVIEW PNG EXPORT"
     : `PNG SELECTED · ${file.size.toLocaleString()} BYTES`;
@@ -3502,6 +3708,9 @@ qs("#workspace-source").addEventListener("change", (event) => {
 qs("#workspace-preview-button").addEventListener("click", () => void runPackPreview());
 qs("#workspace-start-session").addEventListener("click", () => void startCaptureSession());
 qs("#workspace-scan-session").addEventListener("click", () => void scanCaptureSession());
+qs("#workspace-manual-fallback").addEventListener("click", () => {
+  setManualFallbackOpen(qs("#workspace-import").hidden);
+});
 qs("#workspace-configure-downloads").addEventListener("click", openDownloadsConfiguration);
 qs("#workspace-downloads-cancel").addEventListener("click", closeDownloadsConfiguration);
 qs("#workspace-downloads-input").addEventListener("input", updateWorkspacePreviewButton);
@@ -3540,7 +3749,6 @@ qs("#server-test-current").addEventListener("click", () => void testCurrentServe
 qs("#server-reset-routes").addEventListener("click", resetServerRouteDrafts);
 qs("#server-add-route").addEventListener("click", addServerRouteDraft);
 qs("#server-review-configuration").addEventListener("click", () => void reviewServerChange());
-qs("#server-confirmation").addEventListener("input", updateServerApplyButton);
 qs("#server-apply").addEventListener("click", () => void applyServerChange());
 qs("#operator-run-export-audit").addEventListener("click", () => void runExportAudit());
 qs("#pack-maintenance-pack").addEventListener("change", (event) => setMaintenancePack(event.target.value));
@@ -3566,6 +3774,9 @@ qs("#pack-maintenance-delete").addEventListener("click", () => void reviewPackMa
 qs("#pack-maintenance-confirmation").addEventListener("input", updatePackMaintenanceApply);
 qs("#pack-maintenance-apply").addEventListener("click", () => void applyPackMaintenance());
 qs("#archive-pack-filter").addEventListener("change", renderReleaseArchive);
+window.addEventListener("resize", () => requestAnimationFrame(positionRendererAssetResults));
+window.addEventListener("scroll", () => requestAnimationFrame(positionRendererAssetResults), true);
+
 for (const id of ["#pack-id", "#pack-display", "#pack-channel"]) {
   qs(id).addEventListener("input", () => {
     if (id === "#pack-channel") qs("#channel-status").textContent = qs(id).value ? `${qs(id).value.toUpperCase()} CONFIGURED` : "SELECT A CHANNEL";

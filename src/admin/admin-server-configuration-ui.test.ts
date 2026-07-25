@@ -21,6 +21,10 @@ describe("Administration server configuration UI", () => {
     expect(html).toContain("WEBHOOKS");
     expect(js).toContain('api("/api/v1/server-configuration/test"');
     expect(js).not.toContain('"/api/v1/server-migration/preview"');
-    expect(js).toContain("preview.confirmation");
+    expect(html).not.toContain('id="server-confirmation"');
+    expect(html).toContain('id="server-apply-guidance"');
+    expect(html).toContain("APPLY SERVER CONFIGURATION");
+    expect(js).toContain("if (!window.confirm(`Apply the reviewed server configuration?");
+    expect(js).toContain("confirmation: preview.confirmation");
   });
 });

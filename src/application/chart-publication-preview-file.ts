@@ -25,6 +25,7 @@ export interface PreviewChartPublicationFileOptions {
   readonly registryPath: string;
   readonly channelsPath: string;
   readonly packsPath: string;
+  readonly watermarkEnabled?: boolean;
 }
 
 export interface PreviewChartPublicationFileSuccess {
@@ -120,6 +121,7 @@ export async function previewChartPublicationFile(
         metadataPath,
         outputPath: options.outputPath,
         receiptPath: options.receiptPath,
+        watermarkEnabled: options.watermarkEnabled !== false,
       },
       dependencies.renderDependencies,
     );

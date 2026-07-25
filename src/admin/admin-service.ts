@@ -401,6 +401,7 @@ export interface AdminStandaloneRenderResult {
   readonly dataAsOf: string;
   readonly sourceBasename: string;
   readonly outputSha256: string;
+  readonly watermarkEnabled: boolean;
   readonly publicationUrl: string;
   readonly receiptUrl: string;
   readonly effects: {
@@ -417,6 +418,7 @@ export interface AdminPackWorkspaceAssetState {
   readonly tradingViewSymbol: string;
   readonly currency: string;
   readonly renderReady: boolean;
+  readonly reconciliationIssues: readonly MarketIdentityAuditIssue[];
   readonly captured: boolean;
   readonly artifactReady: boolean;
   readonly revisions: number;
@@ -461,6 +463,7 @@ export interface AdminPackPublicationState {
 export interface AdminPackWorkspacePackState {
   readonly id: string;
   readonly displayName: string;
+  readonly logicalChannel: string;
   readonly timeframe: ChartPublicationTimeframe;
   readonly state: "empty" | "building" | "complete";
   readonly capturedCount: number;
@@ -2622,6 +2625,7 @@ export class AdminService {
     readonly timeframe: unknown;
     readonly sourceFilename: string;
     readonly sourceBytes: Buffer;
+    readonly watermarkEnabled?: boolean;
   }): Promise<AdminStandaloneRenderResult> {
     const asset = this.#state.byAssetId.get(input.assetId);
     if (asset === undefined) {
@@ -2659,6 +2663,7 @@ export class AdminService {
       registryPath: this.#state.registryFile.canonicalPath,
       channelsPath: this.#state.channelsFile.canonicalPath,
       packsPath: this.#state.packsFile.canonicalPath,
+      watermarkEnabled: input.watermarkEnabled !== false,
     });
     if (!rendered.ok) {
       await this.standaloneRenders.discardTask(task.renderId);
@@ -2690,6 +2695,7 @@ export class AdminService {
       dataAsOf: rendered.dataAsOf,
       sourceBasename: rendered.sourceBasename,
       outputSha256: rendered.outputSha256,
+      watermarkEnabled: rendered.receipt.branding.watermark.opacity > 0,
       publicationUrl: `/api/v1/standalone-renders/${task.renderId}/publication.png`,
       receiptUrl: `/api/v1/standalone-renders/${task.renderId}/receipt.json`,
       effects: Object.freeze({
@@ -2780,18 +2786,22 @@ export class AdminService {
     const runtime = this.#packRuntime();
     await this.packRevisions.reconcile(runtime.workspace, await this.packRenders.listAcceptedPreviews());
     const { bindings } = await this.#readThreadBindings();
+    const auditByAssetId = new Map(this.#state.audit.assets.map((entry) => [entry.assetId, entry] as const));
     const packs = await Promise.all(this.#state.packs.map(async (pack) => {
       const assets = await Promise.all(pack.assets.map(async (assetId) => {
         const asset = this.#state.byAssetId.get(assetId);
         if (asset === undefined) throw new AdminError("invalid_registry", `Pack ${pack.id} references an unknown Asset.`);
+        const audit = auditByAssetId.get(asset.id);
+        if (audit === undefined) throw new AdminError("internal_error", `Asset ${asset.id} is missing from the market-identity audit.`, 500);
         const capture = runtime.workspace.captureOf(asset.id);
         const revisionHistory = await this.packRevisions.list(pack.id, asset.id);
         return Object.freeze({
           id: asset.id,
           displayName: asset.display,
           tradingViewSymbol: asset.tradingView,
-          currency: asset.currency ?? "",
-          renderReady: asset.currency !== undefined && asset.tradingView.indexOf(":") > 0,
+          currency: audit.currency ?? "",
+          renderReady: audit.marketIdentityStatus === "complete" && audit.currencyStatus === "valid",
+          reconciliationIssues: Object.freeze([...audit.issues]),
           captured: capture !== null,
           artifactReady: runtime.staging.has(asset.id),
           revisions: capture?.revisions ?? 0,
@@ -2815,6 +2825,7 @@ export class AdminService {
       return Object.freeze({
         id: pack.id,
         displayName: pack.display,
+        logicalChannel: pack.channel,
         timeframe: defaultChartPublicationTimeframeForPack(pack),
         state: runtime.workspace.packState(pack.id),
         capturedCount: pack.assets.length - remainingRequiredAssetIds.length,

@@ -180,6 +180,26 @@ describe("renderChartPublication", () => {
     );
   });
 
+  it("omits the centre V watermark only when explicitly disabled", async () => {
+    const source = await makeSupportedSource();
+    const enabled = await renderChartPublication(source, METADATA);
+    const disabled = await renderChartPublication(source, METADATA, { watermarkEnabled: false });
+    expect(enabled.ok).toBe(true);
+    expect(disabled.ok).toBe(true);
+    if (!enabled.ok || !disabled.ok) return;
+    expect(enabled.receipt.branding.watermark.opacity).toBe(CHART_PUBLICATION_BRANDING.watermarkOpacity);
+    expect(disabled.receipt.branding.watermark.opacity).toBe(0);
+    expect(disabled.receipt.branding.watermark).toMatchObject({
+      assetSha256: enabled.receipt.branding.watermark.assetSha256,
+      left: enabled.receipt.branding.watermark.left,
+      top: enabled.receipt.branding.watermark.top,
+      width: enabled.receipt.branding.watermark.width,
+      height: enabled.receipt.branding.watermark.height,
+    });
+    expect(disabled.outputPng.equals(enabled.outputPng)).toBe(false);
+    expect(disabled.receipt.output.sha256).not.toBe(enabled.receipt.output.sha256);
+  });
+
   it("renders the chart near full width with slim symmetric gutters and preserved aspect ratio", async () => {
     const source = await makeSupportedSource();
     const result = await renderChartPublication(source, METADATA);

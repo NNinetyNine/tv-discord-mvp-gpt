@@ -55,7 +55,8 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(html).toContain("STANDALONE RENDERER");
     expect(html).toContain("This does not change a Pack, stage a publication, create a Release, or contact Discord.");
     expect(js).toContain('api(`/api/v1/standalone-renders?${query.toString()}`');
-    expect(js).toContain('file.name.replace(/\\.png$/iu, "")}-VSX`');
+    expect(js).toContain('watermark: state.renderWatermarkEnabled ? "enabled" : "disabled"');
+    expect(js).toContain('"-NO-WATERMARK"');
     expect(js).not.toContain("publishPack(");
     expect(js).not.toContain("capturePackChartFromFile(");
   });
@@ -90,8 +91,10 @@ describe("Administration Pack review/application UI boundary", () => {
     expect(html).toContain("SYNC DOWNLOADS &amp; UPDATE PACK");
     expect(html).toContain('id="workspace-configure-downloads"');
     expect(html).toContain('id="workspace-downloads-input"');
-    expect(html).toMatch(/<details class="workspace-import">/u);
-    expect(html).not.toMatch(/<details class="workspace-import" open>/u);
+    expect(html).toMatch(/id="workspace-start-session"[\s\S]*id="workspace-scan-session"[\s\S]*id="workspace-manual-fallback"/u);
+    expect(html).toContain('id="workspace-import"');
+    expect(html).not.toContain('<details class="workspace-import">');
+    expect(js).toContain("setManualFallbackOpen");
     expect(html).toContain("IMPORT &amp; REVIEW ONE PNG");
     expect(js).toContain('api("/api/v1/pack-workspace/capture-session/downloads-folder"');
     expect(js).toContain('method: "PUT"');

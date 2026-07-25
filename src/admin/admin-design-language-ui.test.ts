@@ -34,7 +34,11 @@ describe("VisionX Administration design language", () => {
     const css = await readFile(resolve("src/admin-ui/styles.css"), "utf8");
 
     expect(css.match(/--primary-action-ink: #28251f;/gu)).toHaveLength(2);
-    expect(css.match(/color: var\(--primary-action-ink\);/gu)).toHaveLength(2);
+    expect(css.match(/color: var\(--primary-action-ink\);/gu)?.length ?? 0)
+      .toBeGreaterThanOrEqual(2);
+    expect(css).toMatch(
+      /#workspace-manual-fallback\[aria-expanded="true"\]\s*\{[^}]*color: var\(--primary-action-ink\);/u,
+    );
     expect(css).toContain("linear-gradient(135deg, #f3d573 0%, #d7aa3b 54%, #b98220 100%)");
 
     const luminance = (hex: string): number => {

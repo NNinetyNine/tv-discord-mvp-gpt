@@ -24,7 +24,8 @@ describe("Step 547 Administration workflow refinements", () => {
       readFile(resolve("src/admin-ui/index.html"), "utf8"),
       readFile(resolve("src/admin-ui/app.js"), "utf8"),
     ]);
-    expect(html).toMatch(/AUTOMATED PACK CAPTURE[\s\S]*<details class="workspace-import">[\s\S]*IMPORT &amp; REVIEW ONE PNG/u);
+    expect(html).toMatch(/AUTOMATED PACK CAPTURE[\s\S]*id="workspace-start-session"[\s\S]*id="workspace-scan-session"[\s\S]*id="workspace-manual-fallback"[\s\S]*id="workspace-import"[\s\S]*IMPORT &amp; REVIEW ONE PNG/u);
+    expect(html).not.toContain('<details class="workspace-import">');
     expect(html).not.toContain('id="publication-select-ready"');
     expect(html).not.toContain('id="publication-clear"');
     expect(html).not.toContain('<th scope="col">CAPTURED</th>');
@@ -54,7 +55,7 @@ describe("Step 547 Administration workflow refinements", () => {
     expect(js).toContain("routeRemovalBlocker");
     expect(html).toContain("No archived Releases are available.");
     expect(js).toContain('qs("#archive-table-wrap").hidden = empty');
-    expect(html.match(/class="[^"]*renderer-control[^"]*"/gu)?.length).toBe(3);
+    expect(html.match(/class="[^"]*renderer-control[^"]*"/gu)?.length).toBe(4);
     expect(css).toContain(".renderer-control input");
   });
 

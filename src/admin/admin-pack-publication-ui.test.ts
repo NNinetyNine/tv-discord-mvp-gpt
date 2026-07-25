@@ -8,6 +8,8 @@ describe("Multi-Pack publication UI", () => {
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
     for (const id of [
       "publication-pack-pills",
+      "publication-diagnostics",
+      "publication-diagnostics-content",
       "publication-review",
       "publication-preview",
       "publication-preview-packs",
@@ -42,9 +44,15 @@ describe("Multi-Pack publication UI", () => {
 
   it("keeps publication disabled when Discord is unavailable without hiding local readiness evidence", async () => {
     const js = await readFile(resolve("src/admin-ui/app.js"), "utf8");
-    expect(js).toContain('"DISCORD DISABLED"');
+    expect(js).toContain('"DISCORD BOT TOKEN MISSING"');
     expect(js).toContain('case "discord_unavailable"');
-    expect(js).toContain("START ADMINISTRATION WITH A DISCORD BOT TOKEN TO ENABLE PUBLISHING");
+    expect(js).toContain("DISCORD BOT TOKEN IS MISSING · REVIEW THE PUBLICATION GATES BELOW FOR EVERY OTHER CONDITION");
+    expect(js).toContain("publicationBlockerExplanation");
+    expect(js).toContain('case "pack_incomplete"');
+    expect(js).toContain('case "missing_staged_images"');
+    expect(js).toContain('case "channel_unresolved"');
+    expect(js).toContain('case "asset_threads_unresolved"');
+    expect(js).toContain("LIVE DISCORD PREFLIGHT");
     expect(js).toContain("publication.capturedCount");
     expect(js).toContain("publication.stagedCount");
     expect(js).toContain("publication.resolvedThreadCount");

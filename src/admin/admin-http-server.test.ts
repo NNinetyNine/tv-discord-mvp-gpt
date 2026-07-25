@@ -279,6 +279,7 @@ describe("Admin HTTP server", () => {
       assetId: "btc",
       timeframe: "6H",
       filename: "BTCUSD_2026-07-22_18-58-01.png",
+      watermark: "disabled",
     });
     const response = await fetch(`${server.url}/api/v1/standalone-renders?${query.toString()}`, {
       method: "POST",
@@ -291,6 +292,7 @@ describe("Admin HTTP server", () => {
       asset: { id: "btc" },
       timeframe: "6H",
       dataAsOf: "2026-07-22",
+      watermarkEnabled: false,
       effects: { packWorkspaceChanged: false, staged: false, released: false, discordContacted: false },
     });
 
@@ -301,7 +303,9 @@ describe("Admin HTTP server", () => {
     expect(createHash("sha256").update(publicationBytes).digest("hex")).toBe(body.data.outputSha256);
     const receipt = await fetch(`${server.url}${body.data.receiptUrl}`);
     expect(receipt.headers.get("content-type")).toContain("application/json");
-    expect((await receipt.json() as any).metadata.timeframe).toBe("6H");
+    const receiptBody = await receipt.json() as any;
+    expect(receiptBody.metadata.timeframe).toBe("6H");
+    expect(receiptBody.branding.watermark.opacity).toBe(0);
 
     const after = await Promise.all(canonicalPaths.map(async (path) => createHash("sha256").update(await readFile(path)).digest("hex")));
     expect(after).toEqual(before);
@@ -322,6 +326,20 @@ describe("Admin HTTP server", () => {
     });
     expect(invalid.status).toBe(400);
     expect((await invalid.json() as any).error.code).toBe("invalid_standalone_render");
+
+    const invalidWatermark = new URLSearchParams({
+      assetId: "btc",
+      timeframe: "1D",
+      filename: "BTCUSD_2026-07-22_18-58-01.png",
+      watermark: "sometimes",
+    });
+    const invalidWatermarkResponse = await fetch(`${server.url}/api/v1/standalone-renders?${invalidWatermark.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "image/png" },
+      body: await framedPng(),
+    });
+    expect(invalidWatermarkResponse.status).toBe(400);
+    expect((await invalidWatermarkResponse.json() as any).error.code).toBe("invalid_standalone_render");
 
     const unreconciledAsset = new URLSearchParams({
       assetId: "msft",
@@ -368,10 +386,11 @@ describe("Admin HTTP server", () => {
     const crypto = initial.body.data.packs.find((pack: any) => pack.id === "crypto");
     const etfs = initial.body.data.packs.find((pack: any) => pack.id === "etfs");
     expect(initial.body.data.publishAvailable).toBe(false);
-    expect(crypto).toMatchObject({ timeframe: "1D", state: "empty", capturedCount: 0, totalCount: 16 });
+    expect(crypto).toMatchObject({ logicalChannel: "crypto", timeframe: "1D", state: "empty", capturedCount: 0, totalCount: 16 });
     expect(etfs.timeframe).toBe("4D");
     expect(crypto.assets.find((asset: any) => asset.id === "btc")).toMatchObject({
       renderReady: true,
+      reconciliationIssues: [],
       captured: false,
       revisions: 0,
     });

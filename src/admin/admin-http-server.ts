@@ -687,13 +687,26 @@ async function routeApi(
   }
   if (pathname === "/api/v1/standalone-renders") {
     if (method !== "POST") throw new AdminError("method_not_allowed", "Method is not allowed for this route.", 405);
-    exactSearchParameters(url, ["assetId", "timeframe", "filename"], "Standalone render request");
+    optionalSearchParameters(url, ["assetId", "timeframe", "filename", "watermark"], "Standalone render request");
+    for (const parameter of ["assetId", "timeframe", "filename"] as const) {
+      if (!url.searchParams.has(parameter)) {
+        throw new AdminError(
+          "invalid_request",
+          `Standalone render request requires parameter: ${parameter}.`,
+        );
+      }
+    }
+    const watermark = url.searchParams.get("watermark");
+    if (watermark !== null && watermark !== "enabled" && watermark !== "disabled") {
+      throw new AdminError("invalid_standalone_render", "watermark must be enabled or disabled");
+    }
     const bytes = await readChartRenderBody(request, "Standalone");
     return ok(response, await service.renderStandaloneChart({
       assetId: url.searchParams.get("assetId") ?? "",
       timeframe: url.searchParams.get("timeframe"),
       sourceFilename: url.searchParams.get("filename") ?? "",
       sourceBytes: bytes,
+      watermarkEnabled: watermark !== "disabled",
     }), 201);
   }
   const standaloneArtifact = /^\/api\/v1\/standalone-renders\/([a-f0-9]{32})\/(publication\.png|receipt\.json)$/u.exec(pathname);
